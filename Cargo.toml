@@ -1,9 +1,26 @@
 [package]
 name = "checksmix"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+authors = ["John Cairns <john@2ad.com>"]
+description = "A simplified MIX simulator - Donald Knuth's hypothetical computer for teaching and learning assembly language programming."
+license = "BSD-3-Clause"
+repository = "https://github.com/jac18281828/checksmix"
+keywords = ["mmix", "simulator", "knuth", "assembly", "educational"]
+categories = ["simulation", "emulators"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "checksmix"
+path = "src/bin/checksmix.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
 
 [dependencies]
 lyn = "0.1.0"

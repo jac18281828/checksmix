@@ -1,5 +1,7 @@
 use lyn::Scanner;
+use std::fmt;
 
+#[derive(Debug)]
 enum Comparison {
     LessThan = -1,
     EqualTo = 0,
@@ -14,6 +16,12 @@ pub struct MMix {
     overflow: bool,
     cmp: Comparison,
     memory: Vec<i64>,
+}
+
+impl Default for MMix {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MMix {
@@ -33,6 +41,11 @@ impl MMix {
         let mut pc = 0;
         while pc < program.instructions.len() {
             let instruction = &program.instructions[pc];
+            println!("[PC={}] Executing: {:?}", pc, instruction);
+            println!(
+                "  Before: A={} X={} I1={} Overflow={}",
+                self.a, self.x, self.i[1], self.overflow
+            );
             match instruction {
                 Instruction::ADD(addr) => {
                     let value = self.memory[*addr as usize];
@@ -97,9 +110,171 @@ impl MMix {
                 Instruction::LDIN(n, addr) => {
                     self.i[*n as usize] = -self.memory[*addr as usize];
                 }
+                Instruction::MUL(addr) => {
+                    let value = self.memory[*addr as usize];
+                    let (result, overflow) = self.a.overflowing_mul(value);
+                    self.a = result;
+                    self.overflow = overflow;
+                }
+                Instruction::DIV(addr) => {
+                    let value = self.memory[*addr as usize];
+                    if value == 0 {
+                        self.overflow = true;
+                    } else {
+                        let (result, overflow) = self.a.overflowing_div(value);
+                        self.a = result;
+                        self.overflow = overflow;
+                    }
+                }
+                Instruction::INCA(value) => {
+                    let (result, overflow) = self.a.overflowing_add(*value);
+                    self.a = result;
+                    self.overflow = overflow;
+                }
+                Instruction::INCX(value) => {
+                    let (result, overflow) = self.x.overflowing_add(*value);
+                    self.x = result;
+                    self.overflow = overflow;
+                }
+                Instruction::INCI(n, value) => {
+                    let (result, overflow) = self.i[*n as usize].overflowing_add(*value);
+                    self.i[*n as usize] = result;
+                    self.overflow = overflow;
+                }
+                Instruction::DECA(value) => {
+                    let (result, overflow) = self.a.overflowing_sub(*value);
+                    self.a = result;
+                    self.overflow = overflow;
+                }
+                Instruction::DECX(value) => {
+                    let (result, overflow) = self.x.overflowing_sub(*value);
+                    self.x = result;
+                    self.overflow = overflow;
+                }
+                Instruction::DECI(n, value) => {
+                    let (result, overflow) = self.i[*n as usize].overflowing_sub(*value);
+                    self.i[*n as usize] = result;
+                    self.overflow = overflow;
+                }
+                Instruction::CMPA(addr) => {
+                    let value = self.memory[*addr as usize];
+                    self.cmp = if self.a < value {
+                        Comparison::LessThan
+                    } else if self.a > value {
+                        Comparison::GreaterThan
+                    } else {
+                        Comparison::EqualTo
+                    };
+                }
+                Instruction::CMPX(addr) => {
+                    let value = self.memory[*addr as usize];
+                    self.cmp = if self.x < value {
+                        Comparison::LessThan
+                    } else if self.x > value {
+                        Comparison::GreaterThan
+                    } else {
+                        Comparison::EqualTo
+                    };
+                }
+                Instruction::CMPI(n, addr) => {
+                    let value = self.memory[*addr as usize];
+                    let reg_value = self.i[*n as usize];
+                    self.cmp = if reg_value < value {
+                        Comparison::LessThan
+                    } else if reg_value > value {
+                        Comparison::GreaterThan
+                    } else {
+                        Comparison::EqualTo
+                    };
+                }
+                Instruction::JMP(addr) => {
+                    pc = *addr as usize;
+                    continue;
+                }
+                Instruction::JE(addr) => {
+                    if matches!(self.cmp, Comparison::EqualTo) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::JNE(addr) => {
+                    if !matches!(self.cmp, Comparison::EqualTo) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::JG(addr) => {
+                    if matches!(self.cmp, Comparison::GreaterThan) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::JGE(addr) => {
+                    if !matches!(self.cmp, Comparison::LessThan) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::JL(addr) => {
+                    if matches!(self.cmp, Comparison::LessThan) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::JLE(addr) => {
+                    if !matches!(self.cmp, Comparison::GreaterThan) {
+                        pc = *addr as usize;
+                        continue;
+                    }
+                }
+                Instruction::HLT => {
+                    println!("Program halted");
+                    break;
+                }
             }
+            println!(
+                "  After:  A={} X={} I1={} Overflow={}",
+                self.a, self.x, self.i[1], self.overflow
+            );
+            println!();
             pc += 1;
         }
+    }
+}
+
+impl fmt::Display for MMix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Registers:")?;
+        writeln!(f, "  A  = {}", self.a)?;
+        writeln!(f, "  X  = {}", self.x)?;
+        writeln!(
+            f,
+            "  I1 = {}  I2 = {}  I3 = {}  I4 = {}  I5 = {}",
+            self.i[1], self.i[2], self.i[3], self.i[4], self.i[5]
+        )?;
+        writeln!(
+            f,
+            "  I6 = {}  I7 = {}  I8 = {}  I9 = {}",
+            self.i[6], self.i[7], self.i[8], self.i[9]
+        )?;
+        writeln!(f, "  J  = {}", self.j)?;
+        writeln!(f, "  Overflow = {}", self.overflow)?;
+        writeln!(f, "  Comparison = {:?}", self.cmp)?;
+
+        // Show non-zero memory locations
+        writeln!(f, "\nMemory (non-zero locations):")?;
+        let mut has_nonzero = false;
+        for (i, &value) in self.memory.iter().enumerate() {
+            if value != 0 {
+                writeln!(f, "  [{}] = {}", i, value)?;
+                has_nonzero = true;
+            }
+        }
+        if !has_nonzero {
+            writeln!(f, "  (all zero)")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -124,6 +299,25 @@ pub enum Instruction {
     ENNI(u8, i64),
     ADD(u64),
     SUB(u64),
+    MUL(u64),
+    DIV(u64),
+    INCA(i64),
+    INCX(i64),
+    INCI(u8, i64),
+    DECA(i64),
+    DECX(i64),
+    DECI(u8, i64),
+    CMPA(u64),
+    CMPX(u64),
+    CMPI(u8, u64),
+    JMP(u64),
+    JE(u64),
+    JNE(u64),
+    JG(u64),
+    JGE(u64),
+    JL(u64),
+    JLE(u64),
+    HLT,
 }
 
 const MAX_INSTRUCTION_LENGTH: usize = 4;
@@ -132,6 +326,12 @@ pub struct Program {
     scanner: Scanner,
     instructions: Vec<Instruction>,
     line: usize,
+}
+
+impl Program {
+    pub fn instruction_count(&self) -> usize {
+        self.instructions.len()
+    }
 }
 
 impl Program {
@@ -286,6 +486,138 @@ impl Program {
                         panic!("Invalid instruction at line {}", self.line)
                     }
                 }
+                "MUL" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::MUL(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "DIV" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::DIV(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "INCA" => {
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::INCA(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "INCX" => {
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::INCX(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "INC1" | "INC2" | "INC3" | "INC4" | "INC5" | "INC6" | "INC7" | "INC8" | "INC9" => {
+                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::INCI(n, value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "DECA" => {
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::DECA(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "DECX" => {
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::DECX(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "DEC1" | "DEC2" | "DEC3" | "DEC4" | "DEC5" | "DEC6" | "DEC7" | "DEC8" | "DEC9" => {
+                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+                    if let Some(value) = self.parse_value() {
+                        self.instructions.push(Instruction::DECI(n, value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "CMPA" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::CMPA(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "CMPX" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::CMPX(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "CMP1" | "CMP2" | "CMP3" | "CMP4" | "CMP5" | "CMP6" | "CMP7" | "CMP8" | "CMP9" => {
+                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::CMPI(n, value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JMP" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JMP(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JE" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JE(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JNE" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JNE(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JG" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JG(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JGE" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JGE(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JL" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JL(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "JLE" => {
+                    if let Some(value) = self.parse_address() {
+                        self.instructions.push(Instruction::JLE(value));
+                    } else {
+                        panic!("Invalid instruction at line {}", self.line)
+                    }
+                }
+                "HLT" => {
+                    self.instructions.push(Instruction::HLT);
+                }
                 _ => panic!("Unknown instruction at line {}", self.line),
             }
         }
@@ -335,10 +667,7 @@ impl Program {
 
     fn parse_value(&mut self) -> Option<i64> {
         let ch = self.scanner.peek();
-        if ch.is_none() {
-            return None;
-        }
-        let c = ch.unwrap();
+        let c = ch?;
         let mut sign = 1;
         if *c == '-' {
             self.scanner.pop();
@@ -799,5 +1128,212 @@ mod tests {
         mmix.execute(&program);
         assert_eq!(mmix.a, i64::MIN + 100);
         assert_eq!(mmix.overflow, true);
+    }
+
+    #[test]
+    fn test_program_mul() {
+        let mut program = Program::new("MUL 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 10;
+        mmix.memory[100] = 20;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 200);
+        assert_eq!(mmix.overflow, false);
+    }
+
+    #[test]
+    fn test_program_mul_overflow() {
+        let mut program = Program::new("MUL 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = i64::MAX;
+        mmix.memory[100] = 2;
+        mmix.execute(&program);
+        assert_eq!(mmix.overflow, true);
+    }
+
+    #[test]
+    fn test_program_div() {
+        let mut program = Program::new("DIV 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 100;
+        mmix.memory[100] = 5;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 20);
+        assert_eq!(mmix.overflow, false);
+    }
+
+    #[test]
+    fn test_program_div_by_zero() {
+        let mut program = Program::new("DIV 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 100;
+        mmix.memory[100] = 0;
+        mmix.execute(&program);
+        assert_eq!(mmix.overflow, true);
+    }
+
+    #[test]
+    fn test_program_inca() {
+        let mut program = Program::new("INCA 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 150);
+    }
+
+    #[test]
+    fn test_program_incx() {
+        let mut program = Program::new("INCX 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.x = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.x, 150);
+    }
+
+    #[test]
+    fn test_program_inci() {
+        let mut program = Program::new("INC1 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.i[1] = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.i[1], 150);
+    }
+
+    #[test]
+    fn test_program_deca() {
+        let mut program = Program::new("DECA 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 50);
+    }
+
+    #[test]
+    fn test_program_decx() {
+        let mut program = Program::new("DECX 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.x = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.x, 50);
+    }
+
+    #[test]
+    fn test_program_deci() {
+        let mut program = Program::new("DEC1 50\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.i[1] = 100;
+        mmix.execute(&program);
+        assert_eq!(mmix.i[1], 50);
+    }
+
+    #[test]
+    fn test_program_cmpa_equal() {
+        let mut program = Program::new("CMPA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 50;
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert!(matches!(mmix.cmp, Comparison::EqualTo));
+    }
+
+    #[test]
+    fn test_program_cmpa_less() {
+        let mut program = Program::new("CMPA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 30;
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert!(matches!(mmix.cmp, Comparison::LessThan));
+    }
+
+    #[test]
+    fn test_program_cmpa_greater() {
+        let mut program = Program::new("CMPA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.a = 70;
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert!(matches!(mmix.cmp, Comparison::GreaterThan));
+    }
+
+    #[test]
+    fn test_program_jmp() {
+        let mut program = Program::new("ENTA 10\nJMP 3\nENTA 20\nENTA 30\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 30);
+    }
+
+    #[test]
+    fn test_program_je_taken() {
+        let mut program = Program::new("ENTA 50\nCMPA 100\nJE 4\nENTA 99\nENTA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 100);
+    }
+
+    #[test]
+    fn test_program_je_not_taken() {
+        let mut program = Program::new("ENTA 30\nCMPA 100\nJE 4\nENTA 99\nENTA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 100);
+    }
+
+    #[test]
+    fn test_program_jne_taken() {
+        let mut program = Program::new("ENTA 30\nCMPA 100\nJNE 4\nENTA 99\nENTA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 100);
+    }
+
+    #[test]
+    fn test_program_jg_taken() {
+        let mut program = Program::new("ENTA 70\nCMPA 100\nJG 4\nENTA 99\nENTA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 100);
+    }
+
+    #[test]
+    fn test_program_jl_taken() {
+        let mut program = Program::new("ENTA 30\nCMPA 100\nJL 4\nENTA 99\nENTA 100\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.memory[100] = 50;
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 100);
+    }
+
+    #[test]
+    fn test_program_hlt() {
+        let mut program = Program::new("ENTA 10\nHLT\nENTA 20\n");
+        program.parse();
+        let mut mmix = MMix::new();
+        mmix.execute(&program);
+        assert_eq!(mmix.a, 10);
     }
 }
