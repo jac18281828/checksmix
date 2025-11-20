@@ -84,7 +84,7 @@ Donald Knuth has been one of the most formative influences in my long career. Ea
 
 Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software. His writing is equal parts instruction manual and conversation, full of wit and quiet joy.
 
-Some time later, I worked up the courage to submit what I believed might be a genuine “bug” in The Art of Computer Programming—a chance, if I were right, to earn the legendary Knuth “hexadecimal dollar.” His reply was short and perfect:
+Some time later, I worked up the courage to submit what I believed might be a genuine “bug” in The Art of Computer Programming—a chance, if I were right, to earn the Knuth “hexadecimal dollar.” His reply was short and perfect:
 
 “e is as real as any other number.”
 
