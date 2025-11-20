@@ -1115,7 +1115,7 @@ mod tests {
         mmix.a = 100;
         mmix.memory[100] = i64::MAX;
         mmix.execute(&program);
-        assert_eq!(mmix.overflow, true);
+        assert!(mmix.overflow);
     }
 
     #[test]
@@ -1127,7 +1127,7 @@ mod tests {
         mmix.memory[100] = i64::MIN;
         mmix.execute(&program);
         assert_eq!(mmix.a, i64::MIN + 100);
-        assert_eq!(mmix.overflow, true);
+        assert!(mmix.overflow);
     }
 
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
         mmix.memory[100] = 20;
         mmix.execute(&program);
         assert_eq!(mmix.a, 200);
-        assert_eq!(mmix.overflow, false);
+        assert!(!mmix.overflow);
     }
 
     #[test]
@@ -1150,7 +1150,7 @@ mod tests {
         mmix.a = i64::MAX;
         mmix.memory[100] = 2;
         mmix.execute(&program);
-        assert_eq!(mmix.overflow, true);
+        assert!(mmix.overflow);
     }
 
     #[test]
@@ -1162,7 +1162,7 @@ mod tests {
         mmix.memory[100] = 5;
         mmix.execute(&program);
         assert_eq!(mmix.a, 20);
-        assert_eq!(mmix.overflow, false);
+        assert!(!mmix.overflow);
     }
 
     #[test]
@@ -1173,7 +1173,7 @@ mod tests {
         mmix.a = 100;
         mmix.memory[100] = 0;
         mmix.execute(&program);
-        assert_eq!(mmix.overflow, true);
+        assert!(mmix.overflow);
     }
 
     #[test]
