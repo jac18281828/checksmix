@@ -1,4 +1,4 @@
-use lyn::Scanner;
+use lyn::Scanner; // Still used by MIX parser
 use std::fmt;
 
 mod mix;

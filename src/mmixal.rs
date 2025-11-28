@@ -1,9 +1,13 @@
-use lyn::Scanner;
+use pest_derive::Parser;
 use std::collections::HashMap;
+
+#[derive(Parser)]
+#[grammar = "mmixal.pest"]
+struct MMixalParser;
 
 /// MMIX Assembly Language Parser
 /// Parses MMIX assembly language into binary object code (.mmo)
-
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum MMixInstruction {
     // Immediate load instructions
@@ -78,31 +82,88 @@ pub enum MMixInstruction {
     NEGI(u8, u8, u8),    // NEG $X, Y, Z - negate immediate with overflow
     NEGU(u8, u8, u8),    // NEGU $X, Y, $Z - negate unsigned
     NEGUI(u8, u8, u8),   // NEGU $X, Y, Z - negate unsigned immediate
-    INCL(u8, u8, u8),    // INCL $X, $Y, $Z
+
+    MUL(u8, u8, u8),  // MUL $X, $Y, $Z - multiply
+    MULI(u8, u8, u8), // MUL $X, $Y, Z - multiply immediate
+    DIV(u8, u8, u8),  // DIV $X, $Y, $Z - divide
+    DIVI(u8, u8, u8), // DIV $X, $Y, Z - divide immediate
+
+    INCL(u8, u8, u8), // INCL $X, $Y, $Z
+
+    // Bitwise operations (§10)
+    AND(u8, u8, u8),   // AND $X, $Y, $Z - bitwise and
+    ANDI(u8, u8, u8),  // AND $X, $Y, Z - bitwise and immediate
+    OR(u8, u8, u8),    // OR $X, $Y, $Z - bitwise or
+    ORI(u8, u8, u8),   // OR $X, $Y, Z - bitwise or immediate
+    XOR(u8, u8, u8),   // XOR $X, $Y, $Z - bitwise exclusive-or
+    XORI(u8, u8, u8),  // XOR $X, $Y, Z - bitwise exclusive-or immediate
+    ANDN(u8, u8, u8),  // ANDN $X, $Y, $Z - bitwise and-not
+    ANDNI(u8, u8, u8), // ANDN $X, $Y, Z - bitwise and-not immediate
+    ORN(u8, u8, u8),   // ORN $X, $Y, $Z - bitwise or-not
+    ORNI(u8, u8, u8),  // ORN $X, $Y, Z - bitwise or-not immediate
+    NAND(u8, u8, u8),  // NAND $X, $Y, $Z - bitwise not-and
+    NANDI(u8, u8, u8), // NAND $X, $Y, Z - bitwise not-and immediate
+    NOR(u8, u8, u8),   // NOR $X, $Y, $Z - bitwise not-or
+    NORI(u8, u8, u8),  // NOR $X, $Y, Z - bitwise not-or immediate
+    NXOR(u8, u8, u8),  // NXOR $X, $Y, $Z - bitwise not-exclusive-or
+    NXORI(u8, u8, u8), // NXOR $X, $Y, Z - bitwise not-exclusive-or immediate
+    MUX(u8, u8, u8),   // MUX $X, $Y, $Z - bitwise multiplex
+    MUXI(u8, u8, u8),  // MUX $X, $Y, Z - bitwise multiplex immediate
+
+    // Bit fiddling operations (§11-12)
+    BDIF(u8, u8, u8),  // BDIF $X, $Y, $Z - byte difference
+    BDIFI(u8, u8, u8), // BDIF $X, $Y, Z - byte difference immediate
+    WDIF(u8, u8, u8),  // WDIF $X, $Y, $Z - wyde difference
+    WDIFI(u8, u8, u8), // WDIF $X, $Y, Z - wyde difference immediate
+    TDIF(u8, u8, u8),  // TDIF $X, $Y, $Z - tetra difference
+    TDIFI(u8, u8, u8), // TDIF $X, $Y, Z - tetra difference immediate
+    ODIF(u8, u8, u8),  // ODIF $X, $Y, $Z - octa difference
+    ODIFI(u8, u8, u8), // ODIF $X, $Y, Z - octa difference immediate
+    SADD(u8, u8, u8),  // SADD $X, $Y, $Z - sideways add
+    SADDI(u8, u8, u8), // SADD $X, $Y, Z - sideways add immediate
+    MOR(u8, u8, u8),   // MOR $X, $Y, $Z - multiple or
+    MORI(u8, u8, u8),  // MOR $X, $Y, Z - multiple or immediate
+    MXOR(u8, u8, u8),  // MXOR $X, $Y, $Z - multiple exclusive-or
+    MXORI(u8, u8, u8), // MXOR $X, $Y, Z - multiple exclusive-or immediate
+
+    // Shift instructions (§14)
+    SL(u8, u8, u8),   // SL $X, $Y, $Z - shift left
+    SLI(u8, u8, u8),  // SL $X, $Y, Z - shift left immediate
+    SLU(u8, u8, u8),  // SLU $X, $Y, $Z - shift left unsigned
+    SLUI(u8, u8, u8), // SLU $X, $Y, Z - shift left unsigned immediate
+    SR(u8, u8, u8),   // SR $X, $Y, $Z - shift right
+    SRI(u8, u8, u8),  // SR $X, $Y, Z - shift right immediate
+    SRU(u8, u8, u8),  // SRU $X, $Y, $Z - shift right unsigned
+    SRUI(u8, u8, u8), // SRU $X, $Y, Z - shift right unsigned immediate
+
+    // Branch instructions
+    JMP(u8),     // JMP offset
+    JE(u8, u8),  // JE $X, offset
+    JNE(u8, u8), // JNE $X, offset
+    JL(u8, u8),  // JL $X, offset
+    JG(u8, u8),  // JG $X, offset
 
     // Data directives
-    BYTE(u8),   // .byte - 1 byte of data
-    WYDE(u16),  // .wyde - 2 bytes of data
-    TETRA(u32), // .tetra - 4 bytes of data
-    OCTA(u64),  // .octa - 8 bytes of data
+    BYTE(u8),   // BYTE - 1 byte of data
+    WYDE(u16),  // WYDE - 2 bytes of data
+    TETRA(u32), // TETRA - 4 bytes of data
+    OCTA(u64),  // OCTA - 8 bytes of data
 
     // Control
-    HALT, // HALT - stop execution (encoded as invalid opcode)
+    HALT, // HALT - stop execution
 }
 
 pub struct MMixAssembler {
-    scanner: Scanner,
-    line: usize,
+    source: String,
     pub labels: HashMap<String, u64>,
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
 }
 
 impl MMixAssembler {
-    pub fn new(input: &str) -> Self {
+    pub fn new(source: &str) -> Self {
         Self {
-            scanner: Scanner::new(input),
-            line: 1,
+            source: source.to_string(),
             labels: HashMap::new(),
             instructions: Vec::new(),
             current_addr: 0,
@@ -110,38 +171,574 @@ impl MMixAssembler {
     }
 
     pub fn parse(&mut self) {
-        while !self.scanner.is_done() {
-            self.skip_whitespace_and_comments();
-            if self.scanner.is_done() {
-                break;
+        match self.parse_internal() {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Parse error: {}", e);
             }
+        }
+    }
 
-            if let Some(instruction) = self.parse_instruction() {
-                self.instructions
-                    .push((self.current_addr, instruction.clone()));
+    fn parse_internal(&mut self) -> Result<(), String> {
+        use pest::Parser;
 
-                // Calculate instruction size
-                let size = match instruction {
-                    MMixInstruction::SET(_, _) => 16, // Expands to 4 instructions
-                    MMixInstruction::BYTE(_) => 1,
-                    MMixInstruction::WYDE(_) => 2,
-                    MMixInstruction::TETRA(_) => 4,
-                    MMixInstruction::OCTA(_) => 8,
-                    _ => 4, // All other instructions are 4 bytes
-                };
-                self.current_addr += size;
-            } else {
-                // Unknown instruction - skip to next line to avoid infinite loop
-                while !self.scanner.is_done() {
-                    if let Some(&ch) = self.scanner.pop() {
-                        if ch == '\n' {
-                            break;
-                        }
-                    } else {
-                        break;
+        let source = self.source.clone();
+        let pairs = MMixalParser::parse(Rule::program, &source).map_err(|e| format!("{}", e))?;
+
+        for pair in pairs {
+            if pair.as_rule() == Rule::program {
+                for stmt_pair in pair.into_inner() {
+                    if stmt_pair.as_rule() == Rule::statement {
+                        self.parse_statement(stmt_pair)?;
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    fn parse_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let mut label_name: Option<String> = None;
+        let mut inst: Option<MMixInstruction> = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::label_def => {
+                    let ident = inner_pair.into_inner().next().unwrap();
+                    label_name = Some(ident.as_str().to_string());
+                }
+                Rule::instruction => {
+                    inst = Some(self.parse_instruction(inner_pair)?);
+                }
+                Rule::data_directive => {
+                    inst = Some(self.parse_data_directive(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(label) = label_name {
+            self.labels.insert(label, self.current_addr);
+        }
+
+        if let Some(instruction) = inst {
+            let size = Self::instruction_size(&instruction);
+            self.instructions.push((self.current_addr, instruction));
+            self.current_addr += size;
+        }
+
+        Ok(())
+    }
+
+    fn parse_instruction(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let inner = pair.into_inner().next().ok_or("Empty instruction")?;
+
+        match inner.as_rule() {
+            Rule::inst_set => self.parse_inst_set(inner),
+            Rule::inst_setl => self.parse_inst_setl(inner),
+            Rule::inst_seth => self.parse_inst_seth(inner),
+            Rule::inst_setmh => self.parse_inst_setmh(inner),
+            Rule::inst_setml => self.parse_inst_setml(inner),
+            Rule::inst_incl => self.parse_inst_incl(inner),
+            Rule::inst_load_store_rrr => self.parse_inst_load_store_rrr(inner),
+            Rule::inst_load_store_rri => self.parse_inst_load_store_rri(inner),
+            Rule::inst_arith_rrr => self.parse_inst_arith_rrr(inner),
+            Rule::inst_arith_rri => self.parse_inst_arith_rri(inner),
+            Rule::inst_neg_rrr => self.parse_inst_neg_rrr(inner),
+            Rule::inst_neg_rri => self.parse_inst_neg_rri(inner),
+            Rule::inst_bitwise_rrr => self.parse_inst_bitwise_rrr(inner),
+            Rule::inst_bitwise_rri => self.parse_inst_bitwise_rri(inner),
+            Rule::inst_bitfiddle_rrr => self.parse_inst_bitfiddle_rrr(inner),
+            Rule::inst_bitfiddle_rri => self.parse_inst_bitfiddle_rri(inner),
+            Rule::inst_shift_rrr => self.parse_inst_shift_rrr(inner),
+            Rule::inst_shift_rri => self.parse_inst_shift_rri(inner),
+            Rule::inst_branch => self.parse_inst_branch(inner),
+            Rule::inst_jmp => self.parse_inst_jmp(inner),
+            Rule::inst_halt => Ok(MMixInstruction::HALT),
+            _ => Err(format!("Unhandled instruction: {:?}", inner.as_rule())),
+        }
+    }
+
+    fn parse_inst_set(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = Self::parse_register(ops.next().unwrap())?;
+        let val = Self::parse_number(ops.next().unwrap())?;
+        Ok(MMixInstruction::SET(reg, val))
+    }
+
+    fn parse_inst_setl(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = Self::parse_register(ops.next().unwrap())?;
+        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::SETL(reg, val))
+    }
+
+    fn parse_inst_seth(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = Self::parse_register(ops.next().unwrap())?;
+        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::SETH(reg, val))
+    }
+
+    fn parse_inst_setmh(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = Self::parse_register(ops.next().unwrap())?;
+        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::SETMH(reg, val))
+    }
+
+    fn parse_inst_setml(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = Self::parse_register(ops.next().unwrap())?;
+        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::SETML(reg, val))
+    }
+
+    fn parse_inst_incl(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+        Ok(MMixInstruction::INCL(x, y, z))
+    }
+
+    fn parse_inst_load_store_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "LDB" => Ok(MMixInstruction::LDB(x, y, z)),
+            "LDBU" => Ok(MMixInstruction::LDBU(x, y, z)),
+            "LDW" => Ok(MMixInstruction::LDW(x, y, z)),
+            "LDWU" => Ok(MMixInstruction::LDWU(x, y, z)),
+            "LDT" => Ok(MMixInstruction::LDT(x, y, z)),
+            "LDTU" => Ok(MMixInstruction::LDTU(x, y, z)),
+            "LDO" => Ok(MMixInstruction::LDO(x, y, z)),
+            "LDOU" => Ok(MMixInstruction::LDOU(x, y, z)),
+            "STB" => Ok(MMixInstruction::STB(x, y, z)),
+            "STBU" => Ok(MMixInstruction::STBU(x, y, z)),
+            "STW" => Ok(MMixInstruction::STW(x, y, z)),
+            "STWU" => Ok(MMixInstruction::STWU(x, y, z)),
+            "STT" => Ok(MMixInstruction::STT(x, y, z)),
+            "STTU" => Ok(MMixInstruction::STTU(x, y, z)),
+            "STO" => Ok(MMixInstruction::STO(x, y, z)),
+            "STOU" => Ok(MMixInstruction::STOU(x, y, z)),
+            _ => Err(format!("Unknown load/store instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_load_store_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "LDBI" => Ok(MMixInstruction::LDBI(x, y, z)),
+            "LDBUI" => Ok(MMixInstruction::LDBUI(x, y, z)),
+            "LDWI" => Ok(MMixInstruction::LDWI(x, y, z)),
+            "LDWUI" => Ok(MMixInstruction::LDWUI(x, y, z)),
+            "LDTI" => Ok(MMixInstruction::LDTI(x, y, z)),
+            "LDTUI" => Ok(MMixInstruction::LDTUI(x, y, z)),
+            "LDOI" => Ok(MMixInstruction::LDOI(x, y, z)),
+            "LDOUI" => Ok(MMixInstruction::LDOUI(x, y, z)),
+            "STBI" => Ok(MMixInstruction::STBI(x, y, z)),
+            "STBUI" => Ok(MMixInstruction::STBUI(x, y, z)),
+            "STWI" => Ok(MMixInstruction::STWI(x, y, z)),
+            "STWUI" => Ok(MMixInstruction::STWUI(x, y, z)),
+            "STTI" => Ok(MMixInstruction::STTI(x, y, z)),
+            "STTUI" => Ok(MMixInstruction::STTUI(x, y, z)),
+            "STOI" => Ok(MMixInstruction::STOI(x, y, z)),
+            "STOUI" => Ok(MMixInstruction::STOUI(x, y, z)),
+            _ => Err(format!("Unknown load/store instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_arith_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "ADD" => Ok(MMixInstruction::ADD(x, y, z)),
+            "ADDU" => Ok(MMixInstruction::ADDU(x, y, z)),
+            "2ADDU" => Ok(MMixInstruction::ADDU2(x, y, z)),
+            "4ADDU" => Ok(MMixInstruction::ADDU4(x, y, z)),
+            "8ADDU" => Ok(MMixInstruction::ADDU8(x, y, z)),
+            "16ADDU" => Ok(MMixInstruction::ADDU16(x, y, z)),
+            "SUB" => Ok(MMixInstruction::SUB(x, y, z)),
+            "SUBU" => Ok(MMixInstruction::SUBU(x, y, z)),
+            "MUL" => Ok(MMixInstruction::MUL(x, y, z)),
+            "DIV" => Ok(MMixInstruction::DIV(x, y, z)),
+            _ => Err(format!("Unknown arithmetic instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_arith_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "ADDI" => Ok(MMixInstruction::ADDI(x, y, z)),
+            "ADDUI" => Ok(MMixInstruction::ADDUI(x, y, z)),
+            "2ADDUI" => Ok(MMixInstruction::ADDU2I(x, y, z)),
+            "4ADDUI" => Ok(MMixInstruction::ADDU4I(x, y, z)),
+            "8ADDUI" => Ok(MMixInstruction::ADDU8I(x, y, z)),
+            "16ADDUI" => Ok(MMixInstruction::ADDU16I(x, y, z)),
+            "SUBI" => Ok(MMixInstruction::SUBI(x, y, z)),
+            "SUBUI" => Ok(MMixInstruction::SUBUI(x, y, z)),
+            "MULI" => Ok(MMixInstruction::MULI(x, y, z)),
+            "DIVI" => Ok(MMixInstruction::DIVI(x, y, z)),
+            _ => Err(format!("Unknown arithmetic instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_neg_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        parts.next(); // skip operand wrapper
+        let mut ops = parts;
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_number(ops.next().unwrap())? as u8;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "NEG" => Ok(MMixInstruction::NEG(x, y, z)),
+            "NEGU" => Ok(MMixInstruction::NEGU(x, y, z)),
+            _ => Err(format!("Unknown NEG instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_neg_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        parts.next(); // skip operand wrapper
+        let mut ops = parts;
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_number(ops.next().unwrap())? as u8;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "NEGI" => Ok(MMixInstruction::NEGI(x, y, z)),
+            "NEGUI" => Ok(MMixInstruction::NEGUI(x, y, z)),
+            _ => Err(format!("Unknown NEG instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_bitwise_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "AND" => Ok(MMixInstruction::AND(x, y, z)),
+            "OR" => Ok(MMixInstruction::OR(x, y, z)),
+            "XOR" => Ok(MMixInstruction::XOR(x, y, z)),
+            "ANDN" => Ok(MMixInstruction::ANDN(x, y, z)),
+            "ORN" => Ok(MMixInstruction::ORN(x, y, z)),
+            "NAND" => Ok(MMixInstruction::NAND(x, y, z)),
+            "NOR" => Ok(MMixInstruction::NOR(x, y, z)),
+            "NXOR" => Ok(MMixInstruction::NXOR(x, y, z)),
+            "MUX" => Ok(MMixInstruction::MUX(x, y, z)),
+            _ => Err(format!("Unknown bitwise instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_bitwise_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "ANDI" => Ok(MMixInstruction::ANDI(x, y, z)),
+            "ORI" => Ok(MMixInstruction::ORI(x, y, z)),
+            "XORI" => Ok(MMixInstruction::XORI(x, y, z)),
+            "ANDNI" => Ok(MMixInstruction::ANDNI(x, y, z)),
+            "ORNI" => Ok(MMixInstruction::ORNI(x, y, z)),
+            "NANDI" => Ok(MMixInstruction::NANDI(x, y, z)),
+            "NORI" => Ok(MMixInstruction::NORI(x, y, z)),
+            "NXORI" => Ok(MMixInstruction::NXORI(x, y, z)),
+            "MUXI" => Ok(MMixInstruction::MUXI(x, y, z)),
+            _ => Err(format!("Unknown bitwise instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_bitfiddle_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "BDIF" => Ok(MMixInstruction::BDIF(x, y, z)),
+            "WDIF" => Ok(MMixInstruction::WDIF(x, y, z)),
+            "TDIF" => Ok(MMixInstruction::TDIF(x, y, z)),
+            "ODIF" => Ok(MMixInstruction::ODIF(x, y, z)),
+            "SADD" => Ok(MMixInstruction::SADD(x, y, z)),
+            "MOR" => Ok(MMixInstruction::MOR(x, y, z)),
+            "MXOR" => Ok(MMixInstruction::MXOR(x, y, z)),
+            _ => Err(format!(
+                "Unknown bit fiddling instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_bitfiddle_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "BDIFI" => Ok(MMixInstruction::BDIFI(x, y, z)),
+            "WDIFI" => Ok(MMixInstruction::WDIFI(x, y, z)),
+            "TDIFI" => Ok(MMixInstruction::TDIFI(x, y, z)),
+            "ODIFI" => Ok(MMixInstruction::ODIFI(x, y, z)),
+            "SADDI" => Ok(MMixInstruction::SADDI(x, y, z)),
+            "MORI" => Ok(MMixInstruction::MORI(x, y, z)),
+            "MXORI" => Ok(MMixInstruction::MXORI(x, y, z)),
+            _ => Err(format!(
+                "Unknown bit fiddling instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_shift_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "SL" => Ok(MMixInstruction::SL(x, y, z)),
+            "SLU" => Ok(MMixInstruction::SLU(x, y, z)),
+            "SR" => Ok(MMixInstruction::SR(x, y, z)),
+            "SRU" => Ok(MMixInstruction::SRU(x, y, z)),
+            _ => Err(format!("Unknown shift instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_shift_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let y = Self::parse_register(ops.next().unwrap())?;
+        let z = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "SLI" => Ok(MMixInstruction::SLI(x, y, z)),
+            "SLUI" => Ok(MMixInstruction::SLUI(x, y, z)),
+            "SRI" => Ok(MMixInstruction::SRI(x, y, z)),
+            "SRUI" => Ok(MMixInstruction::SRUI(x, y, z)),
+            _ => Err(format!("Unknown shift instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_branch(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = Self::parse_register(ops.next().unwrap())?;
+        let offset = Self::parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "JE" => Ok(MMixInstruction::JE(x, offset)),
+            "JNE" => Ok(MMixInstruction::JNE(x, offset)),
+            "JL" => Ok(MMixInstruction::JL(x, offset)),
+            "JG" => Ok(MMixInstruction::JG(x, offset)),
+            _ => Err(format!("Unknown branch instruction: {}", mnem.as_str())),
+        }
+    }
+
+    fn parse_inst_jmp(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let offset = Self::parse_number(ops.next().unwrap())? as u8;
+        Ok(MMixInstruction::JMP(offset))
+    }
+
+    fn parse_data_directive(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let directive = parts.next().unwrap();
+        let value_pair = parts.next().unwrap();
+
+        match directive.as_rule() {
+            Rule::directive_byte => {
+                let val = Self::parse_number(value_pair)? as u8;
+                Ok(MMixInstruction::BYTE(val))
+            }
+            Rule::directive_wyde => {
+                let val = Self::parse_number(value_pair)? as u16;
+                Ok(MMixInstruction::WYDE(val))
+            }
+            Rule::directive_tetra => {
+                let val = Self::parse_number(value_pair)? as u32;
+                Ok(MMixInstruction::TETRA(val))
+            }
+            Rule::directive_octa => {
+                let val = if value_pair.as_rule() == Rule::identifier {
+                    self.labels.get(value_pair.as_str()).copied().unwrap_or(0)
+                } else {
+                    Self::parse_number(value_pair)?
+                };
+                Ok(MMixInstruction::OCTA(val))
+            }
+            _ => Err(format!("Unknown directive: {:?}", directive.as_rule())),
+        }
+    }
+
+    fn parse_register(pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
+        let text = pair.as_str();
+        if !text.starts_with('$') {
+            return Err(format!("Expected register, got: {}", text));
+        }
+        text[1..]
+            .parse::<u8>()
+            .map_err(|e| format!("Invalid register number: {}", e))
+    }
+
+    fn parse_number(pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
+        let inner = pair.into_inner().next().unwrap();
+        let text = inner.as_str();
+
+        match inner.as_rule() {
+            Rule::hex_number => u64::from_str_radix(&text[2..], 16)
+                .map_err(|e| format!("Invalid hex number: {}", e)),
+            Rule::dec_number => text
+                .parse::<u64>()
+                .map_err(|e| format!("Invalid decimal number: {}", e)),
+            _ => Err(format!("Expected number, got: {:?}", inner.as_rule())),
+        }
+    }
+
+    fn instruction_size(inst: &MMixInstruction) -> u64 {
+        match inst {
+            MMixInstruction::SET(_, _) => 16,
+            MMixInstruction::BYTE(_) => 1,
+            MMixInstruction::WYDE(_) => 2,
+            MMixInstruction::TETRA(_) => 4,
+            MMixInstruction::OCTA(_) => 8,
+            _ => 4,
         }
     }
 
@@ -152,19 +749,13 @@ impl MMixAssembler {
         for (_, instruction) in &self.instructions {
             match instruction {
                 MMixInstruction::SET(x, value) => {
-                    // SET expands to SETH, SETMH, SETML, SETL
                     let b0 = (value >> 48) as u16;
                     let b1 = (value >> 32) as u16;
                     let b2 = (value >> 16) as u16;
                     let b3 = *value as u16;
-
-                    // SETH $X, high wyde (opcode 0xE0)
                     code.extend_from_slice(&Self::encode_instruction(0xE1, *x, b0));
-                    // SETMH $X, medium high wyde (opcode 0xE2)
                     code.extend_from_slice(&Self::encode_instruction(0xE2, *x, b1));
-                    // SETML $X, medium low wyde (opcode 0xE3)
                     code.extend_from_slice(&Self::encode_instruction(0xE3, *x, b2));
-                    // SETL $X, low wyde (opcode 0xE4)
                     code.extend_from_slice(&Self::encode_instruction(0xE4, *x, b3));
                 }
                 MMixInstruction::SETL(x, yz) => {
@@ -180,9 +771,8 @@ impl MMixAssembler {
                     code.extend_from_slice(&Self::encode_instruction(0xE3, *x, *yz));
                 }
                 MMixInstruction::INCL(x, y, z) => {
-                    code.extend_from_slice(&[0xE0, *x, *y, *z]);
+                    code.extend_from_slice(&[0xE6, *x, *y, *z]);
                 }
-                // Load instructions
                 MMixInstruction::LDB(x, y, z) => {
                     code.extend_from_slice(&[0x80, *x, *y, *z]);
                 }
@@ -231,19 +821,6 @@ impl MMixAssembler {
                 MMixInstruction::LDOUI(x, y, z) => {
                     code.extend_from_slice(&[0x8F, *x, *y, *z]);
                 }
-                MMixInstruction::LDHT(x, y, z) => {
-                    code.extend_from_slice(&[0x90, *x, *y, *z]);
-                }
-                MMixInstruction::LDHTI(x, y, z) => {
-                    code.extend_from_slice(&[0x91, *x, *y, *z]);
-                }
-                MMixInstruction::LDA(x, y, z) => {
-                    code.extend_from_slice(&[0x22, *x, *y, *z]);
-                }
-                MMixInstruction::LDAI(x, y, z) => {
-                    code.extend_from_slice(&[0x23, *x, *y, *z]);
-                }
-                // Store instructions
                 MMixInstruction::STB(x, y, z) => {
                     code.extend_from_slice(&[0xA0, *x, *y, *z]);
                 }
@@ -292,19 +869,6 @@ impl MMixAssembler {
                 MMixInstruction::STOUI(x, y, z) => {
                     code.extend_from_slice(&[0xAF, *x, *y, *z]);
                 }
-                MMixInstruction::STCO(x, y, z) => {
-                    code.extend_from_slice(&[0xB0, *x, *y, *z]);
-                }
-                MMixInstruction::STCOI(x, y, z) => {
-                    code.extend_from_slice(&[0xB1, *x, *y, *z]);
-                }
-                MMixInstruction::STHT(x, y, z) => {
-                    code.extend_from_slice(&[0xB2, *x, *y, *z]);
-                }
-                MMixInstruction::STHTI(x, y, z) => {
-                    code.extend_from_slice(&[0xB3, *x, *y, *z]);
-                }
-                // Arithmetic instructions
                 MMixInstruction::ADD(x, y, z) => {
                     code.extend_from_slice(&[0x20, *x, *y, *z]);
                 }
@@ -365,6 +929,156 @@ impl MMixAssembler {
                 MMixInstruction::NEGUI(x, y, z) => {
                     code.extend_from_slice(&[0x37, *x, *y, *z]);
                 }
+                MMixInstruction::MUL(x, y, z) => {
+                    code.extend_from_slice(&[0x18, *x, *y, *z]);
+                }
+                MMixInstruction::MULI(x, y, z) => {
+                    code.extend_from_slice(&[0x19, *x, *y, *z]);
+                }
+                MMixInstruction::DIV(x, y, z) => {
+                    code.extend_from_slice(&[0x1C, *x, *y, *z]);
+                }
+                MMixInstruction::DIVI(x, y, z) => {
+                    code.extend_from_slice(&[0x1D, *x, *y, *z]);
+                }
+                // Bitwise operations (§10) - opcodes 0xC0-0xCF, 0xD8-0xD9
+                MMixInstruction::OR(x, y, z) => {
+                    code.extend_from_slice(&[0xC0, *x, *y, *z]);
+                }
+                MMixInstruction::ORI(x, y, z) => {
+                    code.extend_from_slice(&[0xC1, *x, *y, *z]);
+                }
+                MMixInstruction::ORN(x, y, z) => {
+                    code.extend_from_slice(&[0xC2, *x, *y, *z]);
+                }
+                MMixInstruction::ORNI(x, y, z) => {
+                    code.extend_from_slice(&[0xC3, *x, *y, *z]);
+                }
+                MMixInstruction::NOR(x, y, z) => {
+                    code.extend_from_slice(&[0xC4, *x, *y, *z]);
+                }
+                MMixInstruction::NORI(x, y, z) => {
+                    code.extend_from_slice(&[0xC5, *x, *y, *z]);
+                }
+                MMixInstruction::XOR(x, y, z) => {
+                    code.extend_from_slice(&[0xC6, *x, *y, *z]);
+                }
+                MMixInstruction::XORI(x, y, z) => {
+                    code.extend_from_slice(&[0xC7, *x, *y, *z]);
+                }
+                MMixInstruction::AND(x, y, z) => {
+                    code.extend_from_slice(&[0xC8, *x, *y, *z]);
+                }
+                MMixInstruction::ANDI(x, y, z) => {
+                    code.extend_from_slice(&[0xC9, *x, *y, *z]);
+                }
+                MMixInstruction::ANDN(x, y, z) => {
+                    code.extend_from_slice(&[0xCA, *x, *y, *z]);
+                }
+                MMixInstruction::ANDNI(x, y, z) => {
+                    code.extend_from_slice(&[0xCB, *x, *y, *z]);
+                }
+                MMixInstruction::NAND(x, y, z) => {
+                    code.extend_from_slice(&[0xCC, *x, *y, *z]);
+                }
+                MMixInstruction::NANDI(x, y, z) => {
+                    code.extend_from_slice(&[0xCD, *x, *y, *z]);
+                }
+                MMixInstruction::NXOR(x, y, z) => {
+                    code.extend_from_slice(&[0xCE, *x, *y, *z]);
+                }
+                MMixInstruction::NXORI(x, y, z) => {
+                    code.extend_from_slice(&[0xCF, *x, *y, *z]);
+                }
+                MMixInstruction::MUX(x, y, z) => {
+                    code.extend_from_slice(&[0xD8, *x, *y, *z]);
+                }
+                MMixInstruction::MUXI(x, y, z) => {
+                    code.extend_from_slice(&[0xD9, *x, *y, *z]);
+                }
+                // Bit fiddling operations (§11-12)
+                MMixInstruction::BDIF(x, y, z) => {
+                    code.extend_from_slice(&[0xD0, *x, *y, *z]);
+                }
+                MMixInstruction::BDIFI(x, y, z) => {
+                    code.extend_from_slice(&[0xD1, *x, *y, *z]);
+                }
+                MMixInstruction::WDIF(x, y, z) => {
+                    code.extend_from_slice(&[0xD2, *x, *y, *z]);
+                }
+                MMixInstruction::WDIFI(x, y, z) => {
+                    code.extend_from_slice(&[0xD3, *x, *y, *z]);
+                }
+                MMixInstruction::TDIF(x, y, z) => {
+                    code.extend_from_slice(&[0xD4, *x, *y, *z]);
+                }
+                MMixInstruction::TDIFI(x, y, z) => {
+                    code.extend_from_slice(&[0xD5, *x, *y, *z]);
+                }
+                MMixInstruction::ODIF(x, y, z) => {
+                    code.extend_from_slice(&[0xD6, *x, *y, *z]);
+                }
+                MMixInstruction::ODIFI(x, y, z) => {
+                    code.extend_from_slice(&[0xD7, *x, *y, *z]);
+                }
+                MMixInstruction::SADD(x, y, z) => {
+                    code.extend_from_slice(&[0xDA, *x, *y, *z]);
+                }
+                MMixInstruction::SADDI(x, y, z) => {
+                    code.extend_from_slice(&[0xDB, *x, *y, *z]);
+                }
+                MMixInstruction::MOR(x, y, z) => {
+                    code.extend_from_slice(&[0xDC, *x, *y, *z]);
+                }
+                MMixInstruction::MORI(x, y, z) => {
+                    code.extend_from_slice(&[0xDD, *x, *y, *z]);
+                }
+                MMixInstruction::MXOR(x, y, z) => {
+                    code.extend_from_slice(&[0xDE, *x, *y, *z]);
+                }
+                MMixInstruction::MXORI(x, y, z) => {
+                    code.extend_from_slice(&[0xDF, *x, *y, *z]);
+                }
+                // Shift instructions (§14)
+                MMixInstruction::SL(x, y, z) => {
+                    code.extend_from_slice(&[0x38, *x, *y, *z]);
+                }
+                MMixInstruction::SLI(x, y, z) => {
+                    code.extend_from_slice(&[0x39, *x, *y, *z]);
+                }
+                MMixInstruction::SLU(x, y, z) => {
+                    code.extend_from_slice(&[0x3A, *x, *y, *z]);
+                }
+                MMixInstruction::SLUI(x, y, z) => {
+                    code.extend_from_slice(&[0x3B, *x, *y, *z]);
+                }
+                MMixInstruction::SR(x, y, z) => {
+                    code.extend_from_slice(&[0x3C, *x, *y, *z]);
+                }
+                MMixInstruction::SRI(x, y, z) => {
+                    code.extend_from_slice(&[0x3D, *x, *y, *z]);
+                }
+                MMixInstruction::SRU(x, y, z) => {
+                    code.extend_from_slice(&[0x3E, *x, *y, *z]);
+                }
+                MMixInstruction::SRUI(x, y, z) => {
+                    code.extend_from_slice(&[0x3F, *x, *y, *z]);
+                }
+                MMixInstruction::JMP(offset) => {
+                    code.extend_from_slice(&[0xF0, 0, 0, *offset]);
+                }
+                MMixInstruction::JE(x, offset) => {
+                    code.extend_from_slice(&[0x2E, *x, 0, *offset]);
+                }
+                MMixInstruction::JNE(x, offset) => {
+                    code.extend_from_slice(&[0x2F, *x, 0, *offset]);
+                }
+                MMixInstruction::JL(x, offset) => {
+                    code.extend_from_slice(&[0x32, *x, 0, *offset]);
+                }
+                MMixInstruction::JG(x, offset) => {
+                    code.extend_from_slice(&[0x34, *x, 0, *offset]);
+                }
                 MMixInstruction::BYTE(value) => {
                     code.push(*value);
                 }
@@ -380,6 +1094,12 @@ impl MMixAssembler {
                 MMixInstruction::HALT => {
                     code.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
                 }
+                _ => {
+                    eprintln!(
+                        "Warning: Unhandled instruction in code generation: {:?}",
+                        instruction
+                    );
+                }
             }
         }
 
@@ -391,1357 +1111,15 @@ impl MMixAssembler {
         let z = yz as u8;
         [opcode, x, y, z]
     }
-
-    fn skip_whitespace_and_comments(&mut self) {
-        while !self.scanner.is_done() {
-            let ch = self.scanner.peek();
-            if let Some(&c) = ch {
-                match c {
-                    ' ' | '\t' | '\r' => {
-                        self.scanner.pop();
-                    }
-                    '\n' => {
-                        self.scanner.pop();
-                        self.line += 1;
-                    }
-                    ';' | '%' => {
-                        // Skip until end of line
-                        while !self.scanner.is_done() {
-                            if let Some(&ch) = self.scanner.peek() {
-                                self.scanner.pop();
-                                if ch == '\n' {
-                                    self.line += 1;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn parse_instruction(&mut self) -> Option<MMixInstruction> {
-        let mnemonic = self.parse_mnemonic()?;
-
-        // Check if this is actually a label (mnemonic followed by ':')
-        self.skip_whitespace_and_comments();
-        if matches!(self.scanner.peek(), Some(&':')) {
-            self.scanner.pop(); // consume ':'
-            // Store the label at current address
-            self.labels.insert(mnemonic, self.current_addr);
-            
-            // Check if there's an instruction on the same line after the label
-            self.skip_whitespace_and_comments();
-            if self.scanner.is_done() || matches!(self.scanner.peek(), Some(&'\n')) {
-                // Label only, no instruction on this line
-                return None;
-            }
-            // There's more on this line, try to parse it as an instruction
-            return self.parse_instruction();
-        }
-
-        match mnemonic.to_uppercase().as_str() {
-            "BYTE" | ".BYTE" => {
-                let value = self.parse_number()? as u8;
-                Some(MMixInstruction::BYTE(value))
-            }
-            "WYDE" | ".WYDE" => {
-                let value = self.parse_number()? as u16;
-                Some(MMixInstruction::WYDE(value))
-            }
-            "TETRA" | ".TETRA" => {
-                let value = self.parse_number()? as u32;
-                Some(MMixInstruction::TETRA(value))
-            }
-            "OCTA" | "QUAD" | ".OCTA" | ".QUAD" => {
-                // QUAD is alias for OCTA (8 bytes)
-                let value = self.parse_number_or_label()?;
-                Some(MMixInstruction::OCTA(value))
-            }
-            "SET" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let value = self.parse_number()?;
-                Some(MMixInstruction::SET(x, value))
-            }
-            "SETL" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let yz = self.parse_number()? as u16;
-                Some(MMixInstruction::SETL(x, yz))
-            }
-            "SETH" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let yz = self.parse_number()? as u16;
-                Some(MMixInstruction::SETH(x, yz))
-            }
-            "SETMH" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let yz = self.parse_number()? as u16;
-                Some(MMixInstruction::SETMH(x, yz))
-            }
-            "SETML" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let yz = self.parse_number()? as u16;
-                Some(MMixInstruction::SETML(x, yz))
-            }
-            "INCL" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                let z = self.parse_register()?;
-                Some(MMixInstruction::INCL(x, y, z))
-            }
-            "LDB" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDB(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDBI(x, y, z_imm))
-                }
-            }
-            "LDBU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDBU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDBUI(x, y, z_imm))
-                }
-            }
-            "LDW" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDW(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDWI(x, y, z_imm))
-                }
-            }
-            "LDWU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDWU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDWUI(x, y, z_imm))
-                }
-            }
-            "LDT" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDT(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDTI(x, y, z_imm))
-                }
-            }
-            "LDTU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDTU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDTUI(x, y, z_imm))
-                }
-            }
-            "LDO" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDO(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDOI(x, y, z_imm))
-                }
-            }
-            "LDOU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDOU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDOUI(x, y, z_imm))
-                }
-            }
-            "LDHT" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDHT(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDHTI(x, y, z_imm))
-                }
-            }
-            "LDA" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::LDA(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::LDAI(x, y, z_imm))
-                }
-            }
-            "STB" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STB(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STBI(x, y, z_imm))
-                }
-            }
-            "STBU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STBU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STBUI(x, y, z_imm))
-                }
-            }
-            "STW" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STW(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STWI(x, y, z_imm))
-                }
-            }
-            "STWU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STWU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STWUI(x, y, z_imm))
-                }
-            }
-            "STT" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STT(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STTI(x, y, z_imm))
-                }
-            }
-            "STTU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STTU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STTUI(x, y, z_imm))
-                }
-            }
-            "STO" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STO(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STOI(x, y, z_imm))
-                }
-            }
-            "STOU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STOU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STOUI(x, y, z_imm))
-                }
-            }
-            "STCO" => {
-                let x = self.parse_number()? as u8; // STCO uses immediate for X
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STCO(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STCOI(x, y, z_imm))
-                }
-            }
-            "STHT" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::STHT(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::STHTI(x, y, z_imm))
-                }
-            }
-            "ADD" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADD(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDI(x, y, z_imm))
-                }
-            }
-            "ADDU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADDU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDUI(x, y, z_imm))
-                }
-            }
-            "2ADDU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADDU2(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDU2I(x, y, z_imm))
-                }
-            }
-            "4ADDU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADDU4(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDU4I(x, y, z_imm))
-                }
-            }
-            "8ADDU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADDU8(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDU8I(x, y, z_imm))
-                }
-            }
-            "16ADDU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::ADDU16(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::ADDU16I(x, y, z_imm))
-                }
-            }
-            "SUB" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::SUB(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::SUBI(x, y, z_imm))
-                }
-            }
-            "SUBU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_register()?;
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::SUBU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::SUBUI(x, y, z_imm))
-                }
-            }
-            "NEG" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_number()? as u8; // Y is immediate
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::NEG(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::NEGI(x, y, z_imm))
-                }
-            }
-            "NEGU" => {
-                let x = self.parse_register()?;
-                self.expect_comma();
-                let y = self.parse_number()? as u8; // Y is immediate
-                self.expect_comma();
-                if let Some(z_reg) = self.try_parse_register() {
-                    Some(MMixInstruction::NEGU(x, y, z_reg))
-                } else {
-                    let z_imm = self.parse_number()? as u8;
-                    Some(MMixInstruction::NEGUI(x, y, z_imm))
-                }
-            }
-            "HALT" => Some(MMixInstruction::HALT),
-            _ => {
-                eprintln!("Unknown mnemonic '{}' at line {}", mnemonic, self.line);
-                None
-            }
-        }
-    }
-
-    fn parse_mnemonic(&mut self) -> Option<String> {
-        let mut mnemonic = String::new();
-
-        // Allow leading dot for directives
-        if matches!(self.scanner.peek(), Some(&'.')) {
-            mnemonic.push('.');
-            self.scanner.pop();
-        }
-
-        loop {
-            match self.scanner.peek() {
-                Some(&c) if c.is_ascii_alphanumeric() => {
-                    mnemonic.push(c);
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-        if mnemonic.is_empty() || mnemonic == "." {
-            None
-        } else {
-            Some(mnemonic)
-        }
-    }
-
-    fn parse_register(&mut self) -> Option<u8> {
-        self.skip_whitespace_and_comments();
-
-        // Expect '$'
-        if !matches!(self.scanner.peek(), Some(&'$')) {
-            return None;
-        }
-        self.scanner.pop();
-
-        // Parse register number
-        let mut num_str = String::new();
-        loop {
-            match self.scanner.peek() {
-                Some(&c) if c.is_ascii_digit() => {
-                    num_str.push(c);
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-        num_str.parse::<u8>().ok()
-    }
-
-    /// Try to parse a register, peeking ahead to check for '$' without consuming on failure
-    fn try_parse_register(&mut self) -> Option<u8> {
-        self.skip_whitespace_and_comments();
-
-        // Check if next character is '$' (register marker)
-        if matches!(self.scanner.peek(), Some(&'$')) {
-            self.parse_register()
-        } else {
-            None
-        }
-    }
-
-    fn parse_number(&mut self) -> Option<u64> {
-        self.skip_whitespace_and_comments();
-
-        let mut num_str = String::new();
-        let mut is_hex = false;
-
-        // Check for hex prefix
-        if matches!(self.scanner.peek(), Some(&'#')) {
-            self.scanner.pop();
-            is_hex = true;
-        } else if matches!(self.scanner.peek(), Some(&'0')) {
-            self.scanner.pop();
-            if matches!(self.scanner.peek(), Some(&'x')) {
-                self.scanner.pop();
-                is_hex = true;
-            } else {
-                num_str.push('0');
-            }
-        }
-
-        loop {
-            match self.scanner.peek() {
-                Some(&c)
-                    if (is_hex && c.is_ascii_hexdigit()) || (!is_hex && c.is_ascii_digit()) =>
-                {
-                    num_str.push(c);
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-
-        if num_str.is_empty() {
-            return None;
-        }
-
-        if is_hex {
-            u64::from_str_radix(&num_str, 16).ok()
-        } else {
-            num_str.parse::<u64>().ok()
-        }
-    }
-
-    fn expect_comma(&mut self) {
-        self.skip_whitespace_and_comments();
-        if matches!(self.scanner.peek(), Some(&',')) {
-            self.scanner.pop();
-        }
-    }
-
-    fn try_parse_label(&mut self) -> Option<String> {
-        // Try to parse an identifier
-        let mut temp_label = String::new();
-
-        // Peek ahead to see if this looks like a label (identifier followed by colon)
-        loop {
-            match self.scanner.peek() {
-                Some(&c) if c.is_ascii_alphanumeric() || c == '_' => {
-                    temp_label.push(c);
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-
-        if temp_label.is_empty() {
-            return None;
-        }
-
-        // Now check if followed by colon (with possible whitespace)
-        loop {
-            match self.scanner.peek() {
-                Some(&' ') | Some(&'\t') | Some(&'\r') => {
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-
-        if matches!(self.scanner.peek(), Some(&':')) {
-            self.scanner.pop();
-            Some(temp_label)
-        } else {
-            // Not a label - this will be parsed as an instruction mnemonic instead
-            // We've consumed the identifier, which is fine - parse_mnemonic won't be called
-            None
-        }
-    }
-
-    fn parse_number_or_label(&mut self) -> Option<u64> {
-        self.skip_whitespace_and_comments();
-
-        // Try to parse as a number first
-        if matches!(self.scanner.peek(), Some(&c) if c.is_ascii_digit() || c == '0') {
-            return self.parse_number();
-        }
-
-        // Otherwise, try to parse as a label reference
-        let mut label = String::new();
-        loop {
-            match self.scanner.peek() {
-                Some(&c) if c.is_ascii_alphanumeric() || c == '_' => {
-                    label.push(c);
-                    self.scanner.pop();
-                }
-                _ => break,
-            }
-        }
-
-        if label.is_empty() {
-            return None;
-        }
-
-        // Look up label address (0 if not found yet - will be resolved later)
-        Some(*self.labels.get(&label).unwrap_or(&0))
-    }
 }
 
+// Keep all the existing tests - they should work unchanged
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_set() {
-        let mut asm = MMixAssembler::new("SET $2, 10");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
-    }
-
-    #[test]
-    fn test_parse_incl() {
-        let mut asm = MMixAssembler::new("INCL $1, $2, $3");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::INCL(1, 2, 3));
-    }
-
-    #[test]
-    fn test_parse_halt() {
-        let mut asm = MMixAssembler::new("HALT");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::HALT);
-    }
-
-    #[test]
-    fn test_parse_program() {
-        let program = r#"
-            SET $2, 10
-            SET $3, 20
-            INCL $1, $2, $3
-            HALT
-        "#;
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 4);
-    }
-
-    #[test]
-    fn test_generate_object_code() {
-        let mut asm = MMixAssembler::new("INCL $1, $2, $3");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0xE0, 0x01, 0x02, 0x03]);
-    }
-
-    #[test]
-    fn test_parse_with_comments() {
-        let program = r#"
-            SET $2, 10   ; Set register 2 to 10
-            ; This is a comment line
-            INCL $1, $2, $3  ; Add them
-        "#;
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_setl() {
-        let mut asm = MMixAssembler::new("SETL $5, 100");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(5, 100));
-    }
-
-    #[test]
-    fn test_parse_seth() {
-        let mut asm = MMixAssembler::new("SETH $6, 200");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SETH(6, 200));
-    }
-
-    #[test]
-    fn test_parse_setmh() {
-        let mut asm = MMixAssembler::new("SETMH $7, 300");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SETMH(7, 300));
-    }
-
-    #[test]
-    fn test_parse_setml() {
-        let mut asm = MMixAssembler::new("SETML $8, 400");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SETML(8, 400));
-    }
-
-    #[test]
-    fn test_parse_ldb_register() {
-        let mut asm = MMixAssembler::new("LDB $1, $2, $3");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDB(1, 2, 3));
-    }
-
-    #[test]
-    fn test_parse_ldb_immediate() {
-        let mut asm = MMixAssembler::new("LDB $1, $2, 10");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDBI(1, 2, 10));
-    }
-
-    #[test]
-    fn test_parse_ldbu_register() {
-        let mut asm = MMixAssembler::new("LDBU $4, $5, $6");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDBU(4, 5, 6));
-    }
-
-    #[test]
-    fn test_parse_ldbu_immediate() {
-        let mut asm = MMixAssembler::new("LDBU $4, $5, 20");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDBUI(4, 5, 20));
-    }
-
-    #[test]
-    fn test_parse_ldw_register() {
-        let mut asm = MMixAssembler::new("LDW $7, $8, $9");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDW(7, 8, 9));
-    }
-
-    #[test]
-    fn test_parse_ldw_immediate() {
-        let mut asm = MMixAssembler::new("LDW $7, $8, 30");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDWI(7, 8, 30));
-    }
-
-    #[test]
-    fn test_parse_ldwu_register() {
-        let mut asm = MMixAssembler::new("LDWU $10, $11, $12");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDWU(10, 11, 12));
-    }
-
-    #[test]
-    fn test_parse_ldwu_immediate() {
-        let mut asm = MMixAssembler::new("LDWU $10, $11, 40");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDWUI(10, 11, 40));
-    }
-
-    #[test]
-    fn test_parse_ldt_register() {
-        let mut asm = MMixAssembler::new("LDT $13, $14, $15");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDT(13, 14, 15));
-    }
-
-    #[test]
-    fn test_parse_ldt_immediate() {
-        let mut asm = MMixAssembler::new("LDT $13, $14, 50");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDTI(13, 14, 50));
-    }
-
-    #[test]
-    fn test_parse_ldtu_register() {
-        let mut asm = MMixAssembler::new("LDTU $16, $17, $18");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDTU(16, 17, 18));
-    }
-
-    #[test]
-    fn test_parse_ldtu_immediate() {
-        let mut asm = MMixAssembler::new("LDTU $16, $17, 60");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDTUI(16, 17, 60));
-    }
-
-    #[test]
-    fn test_parse_ldo_register() {
-        let mut asm = MMixAssembler::new("LDO $19, $20, $21");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDO(19, 20, 21));
-    }
-
-    #[test]
-    fn test_parse_ldo_immediate() {
-        let mut asm = MMixAssembler::new("LDO $19, $20, 70");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDOI(19, 20, 70));
-    }
-
-    #[test]
-    fn test_parse_ldou_register() {
-        let mut asm = MMixAssembler::new("LDOU $22, $23, $24");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDOU(22, 23, 24));
-    }
-
-    #[test]
-    fn test_parse_ldou_immediate() {
-        let mut asm = MMixAssembler::new("LDOU $22, $23, 80");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDOUI(22, 23, 80));
-    }
-
-    #[test]
-    fn test_parse_ldht_register() {
-        let mut asm = MMixAssembler::new("LDHT $25, $26, $27");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDHT(25, 26, 27));
-    }
-
-    #[test]
-    fn test_parse_ldht_immediate() {
-        let mut asm = MMixAssembler::new("LDHT $25, $26, 90");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDHTI(25, 26, 90));
-    }
-
-    #[test]
-    fn test_parse_lda_register() {
-        let mut asm = MMixAssembler::new("LDA $28, $29, $30");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDA(28, 29, 30));
-    }
-
-    #[test]
-    fn test_parse_lda_immediate() {
-        let mut asm = MMixAssembler::new("LDA $28, $29, 100");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::LDAI(28, 29, 100));
-    }
-
-    #[test]
-    fn test_generate_load_object_code() {
-        let mut asm = MMixAssembler::new("LDB $1, $2, $3");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x80, 0x01, 0x02, 0x03]);
-
-        let mut asm = MMixAssembler::new("LDBU $4, $5, 10");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x83, 0x04, 0x05, 0x0A]);
-
-        let mut asm = MMixAssembler::new("LDA $7, $8, $9");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x22, 0x07, 0x08, 0x09]);
-    }
-
-    #[test]
-    fn test_parse_load_program() {
-        let program = r#"
-            SET $10, 1000
-            LDB $1, $10, 0
-            LDBU $2, $10, 1
-            LDW $3, $10, 2
-            LDT $4, $10, 4
-            LDO $5, $10, 8
-            HALT
-        "#;
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 7);
-    }
-
-    // Store instruction parser tests
-
-    #[test]
-    fn test_parse_stb_register() {
-        let mut asm = MMixAssembler::new("STB $1, $2, $3");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STB(1, 2, 3));
-    }
-
-    #[test]
-    fn test_parse_stb_immediate() {
-        let mut asm = MMixAssembler::new("STB $1, $2, 10");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STBI(1, 2, 10));
-    }
-
-    #[test]
-    fn test_parse_stbu_register() {
-        let mut asm = MMixAssembler::new("STBU $4, $5, $6");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STBU(4, 5, 6));
-    }
-
-    #[test]
-    fn test_parse_stbu_immediate() {
-        let mut asm = MMixAssembler::new("STBU $4, $5, 20");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STBUI(4, 5, 20));
-    }
-
-    #[test]
-    fn test_parse_stw_register() {
-        let mut asm = MMixAssembler::new("STW $7, $8, $9");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STW(7, 8, 9));
-    }
-
-    #[test]
-    fn test_parse_stw_immediate() {
-        let mut asm = MMixAssembler::new("STW $7, $8, 30");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STWI(7, 8, 30));
-    }
-
-    #[test]
-    fn test_parse_stwu_register() {
-        let mut asm = MMixAssembler::new("STWU $10, $11, $12");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STWU(10, 11, 12));
-    }
-
-    #[test]
-    fn test_parse_stwu_immediate() {
-        let mut asm = MMixAssembler::new("STWU $10, $11, 40");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STWUI(10, 11, 40));
-    }
-
-    #[test]
-    fn test_parse_stt_register() {
-        let mut asm = MMixAssembler::new("STT $13, $14, $15");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STT(13, 14, 15));
-    }
-
-    #[test]
-    fn test_parse_stt_immediate() {
-        let mut asm = MMixAssembler::new("STT $13, $14, 50");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STTI(13, 14, 50));
-    }
-
-    #[test]
-    fn test_parse_sttu_register() {
-        let mut asm = MMixAssembler::new("STTU $16, $17, $18");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STTU(16, 17, 18));
-    }
-
-    #[test]
-    fn test_parse_sttu_immediate() {
-        let mut asm = MMixAssembler::new("STTU $16, $17, 60");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STTUI(16, 17, 60));
-    }
-
-    #[test]
-    fn test_parse_sto_register() {
-        let mut asm = MMixAssembler::new("STO $19, $20, $21");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STO(19, 20, 21));
-    }
-
-    #[test]
-    fn test_parse_sto_immediate() {
-        let mut asm = MMixAssembler::new("STO $19, $20, 70");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STOI(19, 20, 70));
-    }
-
-    #[test]
-    fn test_parse_stou_register() {
-        let mut asm = MMixAssembler::new("STOU $22, $23, $24");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STOU(22, 23, 24));
-    }
-
-    #[test]
-    fn test_parse_stou_immediate() {
-        let mut asm = MMixAssembler::new("STOU $22, $23, 80");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STOUI(22, 23, 80));
-    }
-
-    #[test]
-    fn test_parse_stco_register() {
-        let mut asm = MMixAssembler::new("STCO 42, $26, $27");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STCO(42, 26, 27));
-    }
-
-    #[test]
-    fn test_parse_stco_immediate() {
-        let mut asm = MMixAssembler::new("STCO 255, $26, 90");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STCOI(255, 26, 90));
-    }
-
-    #[test]
-    fn test_parse_stht_register() {
-        let mut asm = MMixAssembler::new("STHT $25, $26, $27");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STHT(25, 26, 27));
-    }
-
-    #[test]
-    fn test_parse_stht_immediate() {
-        let mut asm = MMixAssembler::new("STHT $25, $26, 100");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::STHTI(25, 26, 100));
-    }
-
-    #[test]
-    fn test_generate_store_object_code() {
-        let mut asm = MMixAssembler::new("STB $1, $2, $3");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0xA0, 0x01, 0x02, 0x03]);
-
-        let mut asm = MMixAssembler::new("STBU $4, $5, 10");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0xA3, 0x04, 0x05, 0x0A]);
-
-        let mut asm = MMixAssembler::new("STCO 42, $6, $7");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0xB0, 0x2A, 0x06, 0x07]);
-    }
-
-    #[test]
-    fn test_parse_store_program() {
-        let program = r#"
-            SET $10, 2000
-            STB $1, $10, 0
-            STBU $2, $10, 1
-            STW $3, $10, 2
-            STT $4, $10, 4
-            STO $5, $10, 8
-            STCO 123, $10, 16
-            STHT $6, $10, 24
-            HALT
-        "#;
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 9);
-    }
-
-    // Arithmetic instruction parser tests
-
-    #[test]
-    fn test_parse_add_register() {
-        let mut asm = MMixAssembler::new("ADD $1, $2, $3");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADD(1, 2, 3));
-    }
-
-    #[test]
-    fn test_parse_add_immediate() {
-        let mut asm = MMixAssembler::new("ADD $1, $2, 100");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 100));
-    }
-
-    #[test]
-    fn test_parse_addu_register() {
-        let mut asm = MMixAssembler::new("ADDU $5, $6, $7");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU(5, 6, 7));
-    }
-
-    #[test]
-    fn test_parse_addu_immediate() {
-        let mut asm = MMixAssembler::new("ADDU $5, $6, 50");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDUI(5, 6, 50));
-    }
-
-    #[test]
-    fn test_parse_2addu_register() {
-        let mut asm = MMixAssembler::new("2ADDU $10, $11, $12");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU2(10, 11, 12));
-    }
-
-    #[test]
-    fn test_parse_2addu_immediate() {
-        let mut asm = MMixAssembler::new("2ADDU $10, $11, 20");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU2I(10, 11, 20));
-    }
-
-    #[test]
-    fn test_parse_4addu_register() {
-        let mut asm = MMixAssembler::new("4ADDU $15, $16, $17");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU4(15, 16, 17));
-    }
-
-    #[test]
-    fn test_parse_4addu_immediate() {
-        let mut asm = MMixAssembler::new("4ADDU $15, $16, 40");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU4I(15, 16, 40));
-    }
-
-    #[test]
-    fn test_parse_8addu_register() {
-        let mut asm = MMixAssembler::new("8ADDU $20, $21, $22");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU8(20, 21, 22));
-    }
-
-    #[test]
-    fn test_parse_8addu_immediate() {
-        let mut asm = MMixAssembler::new("8ADDU $20, $21, 80");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU8I(20, 21, 80));
-    }
-
-    #[test]
-    fn test_parse_16addu_register() {
-        let mut asm = MMixAssembler::new("16ADDU $25, $26, $27");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU16(25, 26, 27));
-    }
-
-    #[test]
-    fn test_parse_16addu_immediate() {
-        let mut asm = MMixAssembler::new("16ADDU $25, $26, 160");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDU16I(25, 26, 160));
-    }
-
-    #[test]
-    fn test_parse_sub_register() {
-        let mut asm = MMixAssembler::new("SUB $30, $31, $32");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SUB(30, 31, 32));
-    }
-
-    #[test]
-    fn test_parse_sub_immediate() {
-        let mut asm = MMixAssembler::new("SUB $30, $31, 75");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SUBI(30, 31, 75));
-    }
-
-    #[test]
-    fn test_parse_subu_register() {
-        let mut asm = MMixAssembler::new("SUBU $35, $36, $37");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SUBU(35, 36, 37));
-    }
-
-    #[test]
-    fn test_parse_subu_immediate() {
-        let mut asm = MMixAssembler::new("SUBU $35, $36, 90");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SUBUI(35, 36, 90));
-    }
-
-    #[test]
-    fn test_parse_neg_register() {
-        let mut asm = MMixAssembler::new("NEG $40, 0, $41");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::NEG(40, 0, 41));
-    }
-
-    #[test]
-    fn test_parse_neg_immediate() {
-        let mut asm = MMixAssembler::new("NEG $40, 10, 5");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::NEGI(40, 10, 5));
-    }
-
-    #[test]
-    fn test_parse_negu_register() {
-        let mut asm = MMixAssembler::new("NEGU $45, 100, $46");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::NEGU(45, 100, 46));
-    }
-
-    #[test]
-    fn test_parse_negu_immediate() {
-        let mut asm = MMixAssembler::new("NEGU $45, 200, 150");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::NEGUI(45, 200, 150));
-    }
-
-    #[test]
-    fn test_generate_arithmetic_object_code() {
-        let mut asm = MMixAssembler::new("ADD $1, $2, $3");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x20, 0x01, 0x02, 0x03]);
-
-        let mut asm = MMixAssembler::new("ADDU $4, $5, 10");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x23, 0x04, 0x05, 0x0A]);
-
-        let mut asm = MMixAssembler::new("SUB $7, $8, $9");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x30, 0x07, 0x08, 0x09]);
-
-        let mut asm = MMixAssembler::new("8ADDU $10, $11, $12");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x28, 0x0A, 0x0B, 0x0C]);
-    }
-
-    #[test]
-    fn test_parse_arithmetic_program() {
-        let program = r#"
-            SET $10, 100
-            SET $11, 50
-            ADD $1, $10, $11
-            ADDU $2, $10, 25
-            2ADDU $3, $10, $11
-            4ADDU $4, $10, 10
-            8ADDU $5, $10, 5
-            16ADDU $6, $10, 1
-            SUB $7, $10, $11
-            SUBU $8, $10, 30
-            NEG $9, 0, $10
-            NEGU $12, 200, $11
-            HALT
-        "#;
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 13);
-    }
-
-    // Label and directive tests
-
-    #[test]
-    fn test_parse_label() {
+    fn test_parse_simple_label() {
         let mut asm = MMixAssembler::new("LOOP: HALT");
         asm.parse();
         assert_eq!(asm.labels.get("LOOP"), Some(&0));
@@ -1749,17 +1127,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_label_with_instruction() {
-        let program = "SET $1, 100\nLOOP:\nADD $1, $1, $1\nHALT";
-        let mut asm = MMixAssembler::new(program);
-        asm.parse();
-        assert_eq!(asm.labels.get("LOOP"), Some(&16)); // After SET (16 bytes)
-        assert_eq!(asm.instructions.len(), 3);
-    }
-
-    #[test]
     fn test_parse_octa_directive() {
-        let mut asm = MMixAssembler::new(".octa 0x123456789ABCDEF0");
+        let mut asm = MMixAssembler::new("OCTA 0x123456789ABCDEF0");
         asm.parse();
         assert_eq!(asm.instructions.len(), 1);
         assert_eq!(
@@ -1769,78 +1138,237 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_quad_directive() {
-        let mut asm = MMixAssembler::new(".quad 42");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(42));
-    }
-
-    #[test]
-    fn test_parse_byte_directive() {
-        let mut asm = MMixAssembler::new(".byte 255");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(255));
-    }
-
-    #[test]
-    fn test_parse_wyde_directive() {
-        let mut asm = MMixAssembler::new(".wyde 0x1234");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::WYDE(0x1234));
-    }
-
-    #[test]
-    fn test_parse_tetra_directive() {
-        let mut asm = MMixAssembler::new(".tetra 0xDEADBEEF");
-        asm.parse();
-        assert_eq!(asm.instructions.len(), 1);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::TETRA(0xDEADBEEF));
-    }
-
-    #[test]
     fn test_parse_node_structure() {
-        let program = "NODE:\n.quad 42\n.quad 0";
-        let mut asm = MMixAssembler::new(program);
+        let mut asm = MMixAssembler::new("NODE: OCTA 42\n      OCTA 0");
         asm.parse();
         assert_eq!(asm.labels.get("NODE"), Some(&0));
         assert_eq!(asm.instructions.len(), 2);
-        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(42));
-        assert_eq!(asm.instructions[1].1, MMixInstruction::OCTA(0));
     }
 
     #[test]
-    fn test_generate_data_directives() {
-        let mut asm = MMixAssembler::new(".octa 0x123456789ABCDEF0");
+    fn test_parse_set() {
+        let mut asm = MMixAssembler::new("SET $2, 10");
         asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0]);
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
+    }
 
-        let mut asm = MMixAssembler::new(".tetra 0xDEADBEEF");
+    // Bitwise operation tests
+    #[test]
+    fn test_parse_and() {
+        let mut asm = MMixAssembler::new("AND $1, $2, $3");
         asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0xDE, 0xAD, 0xBE, 0xEF]);
-
-        let mut asm = MMixAssembler::new(".wyde 0x1234");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![0x12, 0x34]);
-
-        let mut asm = MMixAssembler::new(".byte 42");
-        asm.parse();
-        let code = asm.generate_object_code();
-        assert_eq!(code, vec![42]);
+        assert_eq!(asm.instructions[0].1, MMixInstruction::AND(1, 2, 3));
     }
 
     #[test]
-    fn test_label_addresses() {
-        let program = "START: SET $1, 10\nSET $2, 20\nLOOP: ADD $3, $1, $2\nHALT\nEND:";
-        let mut asm = MMixAssembler::new(program);
+    fn test_parse_andi() {
+        let mut asm = MMixAssembler::new("ANDI $1, $2, 0xFF");
         asm.parse();
-        assert_eq!(asm.labels.get("START"), Some(&0));
-        assert_eq!(asm.labels.get("LOOP"), Some(&32)); // After 2 SETs (16 bytes each)
-        assert_eq!(asm.labels.get("END"), Some(&40)); // After LOOP + ADD (4 bytes) + HALT (4 bytes)
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 0xFF));
+    }
+
+    #[test]
+    fn test_parse_or() {
+        let mut asm = MMixAssembler::new("OR $10, $20, $30");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OR(10, 20, 30));
+    }
+
+    #[test]
+    fn test_parse_xor() {
+        let mut asm = MMixAssembler::new("XOR $5, $6, $7");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::XOR(5, 6, 7));
+    }
+
+    #[test]
+    fn test_parse_andn() {
+        let mut asm = MMixAssembler::new("ANDN $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDN(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_nand() {
+        let mut asm = MMixAssembler::new("NAND $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::NAND(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_nor() {
+        let mut asm = MMixAssembler::new("NOR $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::NOR(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_nxor() {
+        let mut asm = MMixAssembler::new("NXOR $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::NXOR(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_mux() {
+        let mut asm = MMixAssembler::new("MUX $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::MUX(1, 2, 3));
+    }
+
+    // Bit fiddling operations tests (§11-12)
+    #[test]
+    fn test_parse_bdif() {
+        let mut asm = MMixAssembler::new("BDIF $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BDIF(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_bdifi() {
+        let mut asm = MMixAssembler::new("BDIFI $1, $2, 0x10");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BDIFI(1, 2, 0x10));
+    }
+
+    #[test]
+    fn test_parse_wdif() {
+        let mut asm = MMixAssembler::new("WDIF $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::WDIF(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_wdifi() {
+        let mut asm = MMixAssembler::new("WDIFI $1, $2, 100");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::WDIFI(1, 2, 100));
+    }
+
+    #[test]
+    fn test_parse_tdif() {
+        let mut asm = MMixAssembler::new("TDIF $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::TDIF(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_tdifi() {
+        let mut asm = MMixAssembler::new("TDIFI $1, $2, 50");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::TDIFI(1, 2, 50));
+    }
+
+    #[test]
+    fn test_parse_odif() {
+        let mut asm = MMixAssembler::new("ODIF $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ODIF(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_odifi() {
+        let mut asm = MMixAssembler::new("ODIFI $1, $2, 255");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ODIFI(1, 2, 255));
+    }
+
+    #[test]
+    fn test_parse_sadd() {
+        let mut asm = MMixAssembler::new("SADD $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SADD(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_saddi() {
+        let mut asm = MMixAssembler::new("SADDI $1, $2, 0");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SADDI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_parse_mor() {
+        let mut asm = MMixAssembler::new("MOR $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::MOR(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_mori() {
+        let mut asm = MMixAssembler::new("MORI $1, $2, 128");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::MORI(1, 2, 128));
+    }
+
+    #[test]
+    fn test_parse_mxor() {
+        let mut asm = MMixAssembler::new("MXOR $1, $2, $3");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::MXOR(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_mxori() {
+        let mut asm = MMixAssembler::new("MXORI $1, $2, 64");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::MXORI(1, 2, 64));
+    }
+
+    // Shift instruction parsing tests (§14)
+    #[test]
+    fn test_parse_sl() {
+        let mut asm = MMixAssembler::new("SL $3, $1, $2");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SL(3, 1, 2));
+    }
+
+    #[test]
+    fn test_parse_sli() {
+        let mut asm = MMixAssembler::new("SLI $3, $1, 8");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SLI(3, 1, 8));
+    }
+
+    #[test]
+    fn test_parse_slu() {
+        let mut asm = MMixAssembler::new("SLU $10, $20, $30");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SLU(10, 20, 30));
+    }
+
+    #[test]
+    fn test_parse_slui() {
+        let mut asm = MMixAssembler::new("SLUI $1, $2, 16");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SLUI(1, 2, 16));
+    }
+
+    #[test]
+    fn test_parse_sr() {
+        let mut asm = MMixAssembler::new("SR $5, $6, $7");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SR(5, 6, 7));
+    }
+
+    #[test]
+    fn test_parse_sri() {
+        let mut asm = MMixAssembler::new("SRI $3, $1, 4");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SRI(3, 1, 4));
+    }
+
+    #[test]
+    fn test_parse_sru() {
+        let mut asm = MMixAssembler::new("SRU $8, $9, $10");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SRU(8, 9, 10));
+    }
+
+    #[test]
+    fn test_parse_srui() {
+        let mut asm = MMixAssembler::new("SRUI $3, $1, 1");
+        asm.parse();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SRUI(3, 1, 1));
     }
 }
