@@ -39,6 +39,16 @@ fn main() {
     let mut assembler = MMixAssembler::new(&source);
     assembler.parse();
 
+    // Debug: print labels and instructions
+    eprintln!("Labels:");
+    for (label, addr) in &assembler.labels {
+        eprintln!("  {} -> 0x{:X}", label, addr);
+    }
+    eprintln!("Instructions ({}):", assembler.instructions.len());
+    for (addr, inst) in &assembler.instructions {
+        eprintln!("  0x{:X}: {:?}", addr, inst);
+    }
+
     // Generate object code
     let object_code = assembler.generate_object_code();
 

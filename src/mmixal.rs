@@ -93,8 +93,8 @@ pub enum MMixInstruction {
 pub struct MMixAssembler {
     scanner: Scanner,
     line: usize,
-    labels: HashMap<String, u64>,
-    instructions: Vec<(u64, MMixInstruction)>,
+    pub labels: HashMap<String, u64>,
+    pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
 }
 
@@ -116,17 +116,6 @@ impl MMixAssembler {
                 break;
             }
 
-            // Check for label (identifier followed by colon)
-            if let Some(label) = self.try_parse_label() {
-                self.labels.insert(label, self.current_addr);
-                self.skip_whitespace_and_comments();
-                // Label may be alone on a line
-                if self.scanner.is_done() || matches!(self.scanner.peek(), Some(&'\n') | Some(&';'))
-                {
-                    continue;
-                }
-            }
-
             if let Some(instruction) = self.parse_instruction() {
                 self.instructions
                     .push((self.current_addr, instruction.clone()));
@@ -141,6 +130,17 @@ impl MMixAssembler {
                     _ => 4, // All other instructions are 4 bytes
                 };
                 self.current_addr += size;
+            } else {
+                // Unknown instruction - skip to next line to avoid infinite loop
+                while !self.scanner.is_done() {
+                    if let Some(&ch) = self.scanner.pop() {
+                        if ch == '\n' {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -404,7 +404,7 @@ impl MMixAssembler {
                         self.scanner.pop();
                         self.line += 1;
                     }
-                    ';' => {
+                    ';' | '%' => {
                         // Skip until end of line
                         while !self.scanner.is_done() {
                             if let Some(&ch) = self.scanner.peek() {
@@ -427,21 +427,38 @@ impl MMixAssembler {
     fn parse_instruction(&mut self) -> Option<MMixInstruction> {
         let mnemonic = self.parse_mnemonic()?;
 
+        // Check if this is actually a label (mnemonic followed by ':')
+        self.skip_whitespace_and_comments();
+        if matches!(self.scanner.peek(), Some(&':')) {
+            self.scanner.pop(); // consume ':'
+            // Store the label at current address
+            self.labels.insert(mnemonic, self.current_addr);
+            
+            // Check if there's an instruction on the same line after the label
+            self.skip_whitespace_and_comments();
+            if self.scanner.is_done() || matches!(self.scanner.peek(), Some(&'\n')) {
+                // Label only, no instruction on this line
+                return None;
+            }
+            // There's more on this line, try to parse it as an instruction
+            return self.parse_instruction();
+        }
+
         match mnemonic.to_uppercase().as_str() {
-            ".BYTE" => {
+            "BYTE" | ".BYTE" => {
                 let value = self.parse_number()? as u8;
                 Some(MMixInstruction::BYTE(value))
             }
-            ".WYDE" => {
+            "WYDE" | ".WYDE" => {
                 let value = self.parse_number()? as u16;
                 Some(MMixInstruction::WYDE(value))
             }
-            ".TETRA" => {
+            "TETRA" | ".TETRA" => {
                 let value = self.parse_number()? as u32;
                 Some(MMixInstruction::TETRA(value))
             }
-            ".OCTA" | ".QUAD" => {
-                // .quad is alias for .octa (8 bytes)
+            "OCTA" | "QUAD" | ".OCTA" | ".QUAD" => {
+                // QUAD is alias for OCTA (8 bytes)
                 let value = self.parse_number_or_label()?;
                 Some(MMixInstruction::OCTA(value))
             }
@@ -1733,7 +1750,7 @@ mod tests {
 
     #[test]
     fn test_parse_label_with_instruction() {
-        let program = "SET $1, 100\nLOOP:\nINCL $1, $1, $1\nHALT";
+        let program = "SET $1, 100\nLOOP:\nADD $1, $1, $1\nHALT";
         let mut asm = MMixAssembler::new(program);
         asm.parse();
         assert_eq!(asm.labels.get("LOOP"), Some(&16)); // After SET (16 bytes)
