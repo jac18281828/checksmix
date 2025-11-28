@@ -4,13 +4,15 @@
 WHITESPACE = _{ " " | "\t" | "\r" }
 COMMENT = _{ (";" | "%") ~ (!"\n" ~ ANY)* }
 
-// Numbers: decimal, hex (0x...), or octal (0...)
-hex_number = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+// Numbers: decimal, hex (#... or 0x...), octal (0...), or symbolic names
+hex_number = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
+oct_number = @{ "0" ~ ASCII_OCT_DIGIT+ }
 dec_number = @{ ASCII_DIGIT+ }
-number = { hex_number | dec_number }
+number = { hex_number | oct_number | dec_number | identifier }
 
-// Registers: $0-$255 or symbolic names
-register = @{ "$" ~ ASCII_DIGIT+ }
+// Registers: $0-$255 or symbolic names from IS directive  
+register_num = @{ "$" ~ ASCII_DIGIT+ }
+register = { register_num | identifier }
 
 // Identifiers for labels and symbolic names
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -24,6 +26,13 @@ directive_wyde = { ^"WYDE" | ^".WYDE" }
 directive_tetra = { ^"TETRA" | ^".TETRA" }
 directive_octa = { ^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD" }
 
+// Control directives
+directive_loc = { ^"LOC" }
+directive_is = { ^"IS" }
+
+// Debug directive - %debug followed by text and register references
+debug_directive = { "%debug" ~ (!"\n" ~ ANY)* }
+
 data_directive = {
     directive_byte ~ number |
     directive_wyde ~ number |
@@ -31,74 +40,92 @@ data_directive = {
     directive_octa ~ (number | identifier)
 }
 
-// Instruction mnemonics
-mnemonic_set = { ^"SET" }
-mnemonic_setl = { ^"SETL" }
-mnemonic_seth = { ^"SETH" }
+loc_directive = { directive_loc ~ number }
+is_directive = { identifier ~ directive_is ~ (register | number) }
+
+// A line can have: [label:] [instruction|directive]
+// IS directive is special - identifier IS value (no label, no colon)
+statement = {
+    is_directive |
+    label_def? ~ (instruction | data_directive | loc_directive | debug_directive)?
+}
 mnemonic_setmh = { ^"SETMH" }
 mnemonic_setml = { ^"SETML" }
+mnemonic_setl = { ^"SETL" }
+mnemonic_seth = { ^"SETH" }
+mnemonic_set = { ^"SET" }
 mnemonic_incl = { ^"INCL" }
 
-// Load/Store instructions
-mnemonic_ldb = { ^"LDB" }
-mnemonic_ldbi = { ^"LDBI" }
-mnemonic_ldbu = { ^"LDBU" }
+// Load/Store instructions - ordered longest first
 mnemonic_ldbui = { ^"LDBUI" }
-mnemonic_ldw = { ^"LDW" }
-mnemonic_ldwi = { ^"LDWI" }
-mnemonic_ldwu = { ^"LDWU" }
+mnemonic_ldbu = { ^"LDBU" }
+mnemonic_ldbi = { ^"LDBI" }
+mnemonic_ldb = { ^"LDB" }
 mnemonic_ldwui = { ^"LDWUI" }
-mnemonic_ldt = { ^"LDT" }
-mnemonic_ldti = { ^"LDTI" }
-mnemonic_ldtu = { ^"LDTU" }
+mnemonic_ldwu = { ^"LDWU" }
+mnemonic_ldwi = { ^"LDWI" }
+mnemonic_ldw = { ^"LDW" }
 mnemonic_ldtui = { ^"LDTUI" }
-mnemonic_ldo = { ^"LDO" }
-mnemonic_ldoi = { ^"LDOI" }
-mnemonic_ldou = { ^"LDOU" }
+mnemonic_ldtu = { ^"LDTU" }
+mnemonic_ldti = { ^"LDTI" }
+mnemonic_ldt = { ^"LDT" }
 mnemonic_ldoui = { ^"LDOUI" }
+mnemonic_ldou = { ^"LDOU" }
+mnemonic_ldoi = { ^"LDOI" }
+mnemonic_ldo = { ^"LDO" }
 
-mnemonic_stb = { ^"STB" }
-mnemonic_stbi = { ^"STBI" }
-mnemonic_stbu = { ^"STBU" }
 mnemonic_stbui = { ^"STBUI" }
-mnemonic_stw = { ^"STW" }
-mnemonic_stwi = { ^"STWI" }
-mnemonic_stwu = { ^"STWU" }
+mnemonic_stbu = { ^"STBU" }
+mnemonic_stbi = { ^"STBI" }
+mnemonic_stb = { ^"STB" }
 mnemonic_stwui = { ^"STWUI" }
-mnemonic_stt = { ^"STT" }
-mnemonic_stti = { ^"STTI" }
-mnemonic_sttu = { ^"STTU" }
+mnemonic_stwu = { ^"STWU" }
+mnemonic_stwi = { ^"STWI" }
+mnemonic_stw = { ^"STW" }
 mnemonic_sttui = { ^"STTUI" }
-mnemonic_sto = { ^"STO" }
-mnemonic_stoi = { ^"STOI" }
-mnemonic_stou = { ^"STOU" }
+mnemonic_sttu = { ^"STTU" }
+mnemonic_stti = { ^"STTI" }
+mnemonic_stt = { ^"STT" }
 mnemonic_stoui = { ^"STOUI" }
+mnemonic_stou = { ^"STOU" }
+mnemonic_stoi = { ^"STOI" }
+mnemonic_sto = { ^"STO" }
 
-// Arithmetic instructions
-mnemonic_add = { ^"ADD" }
-mnemonic_addi = { ^"ADDI" }
-mnemonic_addu = { ^"ADDU" }
-mnemonic_addui = { ^"ADDUI" }
-mnemonic_2addu = { ^"2ADDU" }
-mnemonic_2addui = { ^"2ADDUI" }
-mnemonic_4addu = { ^"4ADDU" }
-mnemonic_4addui = { ^"4ADDUI" }
-mnemonic_8addu = { ^"8ADDU" }
-mnemonic_8addui = { ^"8ADDUI" }
-mnemonic_16addu = { ^"16ADDU" }
+// Arithmetic instructions - ordered longest first
 mnemonic_16addui = { ^"16ADDUI" }
-mnemonic_sub = { ^"SUB" }
-mnemonic_subi = { ^"SUBI" }
-mnemonic_subu = { ^"SUBU" }
+mnemonic_16addu = { ^"16ADDU" }
+mnemonic_8addui = { ^"8ADDUI" }
+mnemonic_8addu = { ^"8ADDU" }
+mnemonic_4addui = { ^"4ADDUI" }
+mnemonic_4addu = { ^"4ADDU" }
+mnemonic_2addui = { ^"2ADDUI" }
+mnemonic_2addu = { ^"2ADDU" }
+mnemonic_addui = { ^"ADDUI" }
+mnemonic_addu = { ^"ADDU" }
+mnemonic_addi = { ^"ADDI" }
+mnemonic_add = { ^"ADD" }
 mnemonic_subui = { ^"SUBUI" }
-mnemonic_neg = { ^"NEG" }
-mnemonic_negi = { ^"NEGI" }
-mnemonic_negu = { ^"NEGU" }
+mnemonic_subu = { ^"SUBU" }
+mnemonic_subi = { ^"SUBI" }
+mnemonic_sub = { ^"SUB" }
 mnemonic_negui = { ^"NEGUI" }
-mnemonic_mul = { ^"MUL" }
+mnemonic_negu = { ^"NEGU" }
+mnemonic_negi = { ^"NEGI" }
+mnemonic_neg = { ^"NEG" }
+mnemonic_mului = { ^"MULUI" }
+mnemonic_mulu = { ^"MULU" }
 mnemonic_muli = { ^"MULI" }
-mnemonic_div = { ^"DIV" }
+mnemonic_mul = { ^"MUL" }
+mnemonic_divui = { ^"DIVUI" }
+mnemonic_divu = { ^"DIVU" }
 mnemonic_divi = { ^"DIVI" }
+mnemonic_div = { ^"DIV" }
+
+// Comparison instructions - ordered longest first
+mnemonic_cmpui = { ^"CMPUI" }
+mnemonic_cmpu = { ^"CMPU" }
+mnemonic_cmpi = { ^"CMPI" }
+mnemonic_cmp = { ^"CMP" }
 
 // Bitwise operations (§10) - ordered longest first for exact matching
 mnemonic_andni = { ^"ANDNI" }
@@ -120,23 +147,23 @@ mnemonic_nor = { ^"NOR" }
 mnemonic_muxi = { ^"MUXI" }
 mnemonic_mux = { ^"MUX" }
 
-// Bit fiddling operations (§11-12)
-mnemonic_bdif = { ^"BDIF" }
+// Bit fiddling operations (§11-12) - ordered longest first
 mnemonic_bdifi = { ^"BDIFI" }
-mnemonic_wdif = { ^"WDIF" }
+mnemonic_bdif = { ^"BDIF" }
 mnemonic_wdifi = { ^"WDIFI" }
-mnemonic_tdif = { ^"TDIF" }
+mnemonic_wdif = { ^"WDIF" }
 mnemonic_tdifi = { ^"TDIFI" }
-mnemonic_odif = { ^"ODIF" }
+mnemonic_tdif = { ^"TDIF" }
 mnemonic_odifi = { ^"ODIFI" }
-mnemonic_sadd = { ^"SADD" }
+mnemonic_odif = { ^"ODIF" }
 mnemonic_saddi = { ^"SADDI" }
-mnemonic_mor = { ^"MOR" }
-mnemonic_mori = { ^"MORI" }
-mnemonic_mxor = { ^"MXOR" }
+mnemonic_sadd = { ^"SADD" }
 mnemonic_mxori = { ^"MXORI" }
+mnemonic_mxor = { ^"MXOR" }
+mnemonic_mori = { ^"MORI" }
+mnemonic_mor = { ^"MOR" }
 
-// Shift instructions (§14) - ordered longest first for exact matching
+// Shift instructions (§14) - ordered longest first
 mnemonic_slui = { ^"SLUI" }
 mnemonic_slu = { ^"SLU" }
 mnemonic_sli = { ^"SLI" }
@@ -146,14 +173,23 @@ mnemonic_sru = { ^"SRU" }
 mnemonic_sri = { ^"SRI" }
 mnemonic_sr = { ^"SR" }
 
-// Branch/Jump instructions
+// Branch/Jump instructions - ordered longest first
+mnemonic_pbod = { ^"PBOD" }
+mnemonic_pbnn = { ^"PBNN" }
+mnemonic_pbnz = { ^"PBNZ" }
+mnemonic_pbnp = { ^"PBNP" }
+mnemonic_pbev = { ^"PBEV" }
+mnemonic_pbn = { ^"PBN" }
+mnemonic_pbz = { ^"PBZ" }
+mnemonic_pbp = { ^"PBP" }
+mnemonic_jne = { ^"JNE" }
 mnemonic_jmp = { ^"JMP" }
 mnemonic_je = { ^"JE" }
-mnemonic_jne = { ^"JNE" }
 mnemonic_jl = { ^"JL" }
 mnemonic_jg = { ^"JG" }
 
 // Other instructions
+mnemonic_trap = { ^"TRAP" }
 mnemonic_halt = { ^"HALT" }
 
 // Instruction operands
@@ -173,54 +209,64 @@ inst_setmh = { mnemonic_setmh ~ operand_reg_imm }
 inst_setml = { mnemonic_setml ~ operand_reg_imm }
 inst_incl = { mnemonic_incl ~ operand_reg_reg_reg }
 
-// Load/Store (can take reg+reg or reg+imm)
+// Load/Store (can take reg+reg or reg+imm) - ordered longest first
 inst_load_store_rrr = {
-    (mnemonic_ldb | mnemonic_ldbu | mnemonic_ldw | mnemonic_ldwu |
-     mnemonic_ldt | mnemonic_ldtu | mnemonic_ldo | mnemonic_ldou |
-     mnemonic_stb | mnemonic_stbu | mnemonic_stw | mnemonic_stwu |
-     mnemonic_stt | mnemonic_sttu | mnemonic_sto | mnemonic_stou) ~
+    (mnemonic_ldbui | mnemonic_ldbu | mnemonic_ldbi | mnemonic_ldb |
+     mnemonic_ldwui | mnemonic_ldwu | mnemonic_ldwi | mnemonic_ldw |
+     mnemonic_ldtui | mnemonic_ldtu | mnemonic_ldti | mnemonic_ldt |
+     mnemonic_ldoui | mnemonic_ldou | mnemonic_ldoi | mnemonic_ldo |
+     mnemonic_stbui | mnemonic_stbu | mnemonic_stbi | mnemonic_stb |
+     mnemonic_stwui | mnemonic_stwu | mnemonic_stwi | mnemonic_stw |
+     mnemonic_sttui | mnemonic_sttu | mnemonic_stti | mnemonic_stt |
+     mnemonic_stoui | mnemonic_stou | mnemonic_stoi | mnemonic_sto) ~
     operand_reg_reg_reg
 }
 
 inst_load_store_rri = {
-    (mnemonic_ldbi | mnemonic_ldbui | mnemonic_ldwi | mnemonic_ldwui |
-     mnemonic_ldti | mnemonic_ldtui | mnemonic_ldoi | mnemonic_ldoui |
-     mnemonic_stbi | mnemonic_stbui | mnemonic_stwi | mnemonic_stwui |
-     mnemonic_stti | mnemonic_sttui | mnemonic_stoi | mnemonic_stoui) ~
+    (mnemonic_ldbui | mnemonic_ldbi | mnemonic_ldwui | mnemonic_ldwi |
+     mnemonic_ldtui | mnemonic_ldti | mnemonic_ldoui | mnemonic_ldoi |
+     mnemonic_stbui | mnemonic_stbi | mnemonic_stwui | mnemonic_stwi |
+     mnemonic_sttui | mnemonic_stti | mnemonic_stoui | mnemonic_stoi) ~
     operand_reg_reg_imm
 }
 
-// Arithmetic (3 operands)
+// Arithmetic (3 operands) - ordered longest first
 inst_arith_rrr = {
-    (mnemonic_add | mnemonic_addu | mnemonic_2addu | mnemonic_4addu |
-     mnemonic_8addu | mnemonic_16addu | mnemonic_sub | mnemonic_subu |
-     mnemonic_mul | mnemonic_div) ~
+    (mnemonic_16addu | mnemonic_8addu | mnemonic_4addu | mnemonic_2addu |
+     mnemonic_addui | mnemonic_addu | mnemonic_addi | mnemonic_add |
+     mnemonic_subui | mnemonic_subu | mnemonic_subi | mnemonic_sub |
+     mnemonic_mului | mnemonic_mulu | mnemonic_muli | mnemonic_mul |
+     mnemonic_divui | mnemonic_divu | mnemonic_divi | mnemonic_div |
+     mnemonic_cmpui | mnemonic_cmpu | mnemonic_cmpi | mnemonic_cmp) ~
     operand_reg_reg_reg
 }
 
 inst_arith_rri = {
-    (mnemonic_addi | mnemonic_addui | mnemonic_2addui | mnemonic_4addui |
-     mnemonic_8addui | mnemonic_16addui | mnemonic_subi | mnemonic_subui |
-     mnemonic_muli | mnemonic_divi) ~
+    (mnemonic_16addui | mnemonic_8addui | mnemonic_4addui | mnemonic_2addui |
+     mnemonic_addui | mnemonic_addi | mnemonic_subui | mnemonic_subi |
+     mnemonic_mului | mnemonic_muli | mnemonic_divui | mnemonic_divi |
+     mnemonic_cmpui | mnemonic_cmpi) ~
     operand_reg_reg_imm
 }
 
-// NEG is special: NEG $X, Y, $Z (Y is immediate/literal)
+// NEG is special: NEG $X, Y, $Z (Y is immediate/literal) - ordered longest first
 inst_neg_rrr = {
-    (mnemonic_neg | mnemonic_negu) ~
+    (mnemonic_negu | mnemonic_neg) ~
     register ~ comma ~ number ~ comma ~ register
 }
 
 inst_neg_rri = {
-    (mnemonic_negi | mnemonic_negui) ~
+    (mnemonic_negui | mnemonic_negi) ~
     register ~ comma ~ number ~ comma ~ number
 }
 
-// Bitwise operations (3 operands) - ordered longest first for exact matching
+// Bitwise operations (3 operands) - ordered longest first
 inst_bitwise_rrr = {
-    (mnemonic_andn | mnemonic_nand | mnemonic_nxor | mnemonic_and | 
-     mnemonic_orn | mnemonic_nor | mnemonic_or | 
-     mnemonic_xor | mnemonic_mux) ~
+    (mnemonic_andni | mnemonic_andn | mnemonic_nandi | mnemonic_nand |
+     mnemonic_nxori | mnemonic_nxor | mnemonic_andi | mnemonic_and |
+     mnemonic_orni | mnemonic_orn | mnemonic_nori | mnemonic_nor | 
+     mnemonic_ori | mnemonic_or | mnemonic_xori | mnemonic_xor |
+     mnemonic_muxi | mnemonic_mux) ~
     operand_reg_reg_reg
 }
 
@@ -231,10 +277,12 @@ inst_bitwise_rri = {
     operand_reg_reg_imm
 }
 
-// Bit fiddling operations (3 operands)
+// Bit fiddling operations (3 operands) - ordered longest first
 inst_bitfiddle_rrr = {
-    (mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif |
-     mnemonic_sadd | mnemonic_mor | mnemonic_mxor) ~
+    (mnemonic_bdifi | mnemonic_bdif | mnemonic_wdifi | mnemonic_wdif |
+     mnemonic_tdifi | mnemonic_tdif | mnemonic_odifi | mnemonic_odif |
+     mnemonic_saddi | mnemonic_sadd | mnemonic_mxori | mnemonic_mxor |
+     mnemonic_mori | mnemonic_mor) ~
     operand_reg_reg_reg
 }
 
@@ -244,9 +292,10 @@ inst_bitfiddle_rri = {
     operand_reg_reg_imm
 }
 
-// Shift instructions (§14) - 3 operands
+// Shift instructions (§14) - 3 operands - ordered longest first
 inst_shift_rrr = {
-    (mnemonic_slu | mnemonic_sl | mnemonic_sru | mnemonic_sr) ~
+    (mnemonic_slui | mnemonic_slu | mnemonic_sli | mnemonic_sl |
+     mnemonic_srui | mnemonic_sru | mnemonic_sri | mnemonic_sr) ~
     operand_reg_reg_reg
 }
 
@@ -255,13 +304,25 @@ inst_shift_rri = {
     operand_reg_reg_imm
 }
 
-// Branch instructions
+// Branch instructions - ordered longest first
 inst_branch = {
-    (mnemonic_je | mnemonic_jne | mnemonic_jl | mnemonic_jg) ~
+    (mnemonic_jne | mnemonic_je | mnemonic_jl | mnemonic_jg) ~
+    operand_reg_imm
+}
+
+inst_pbranch = {
+    (mnemonic_pbod | mnemonic_pbnn | mnemonic_pbnz | mnemonic_pbnp |
+     mnemonic_pbev | mnemonic_pbn | mnemonic_pbz | mnemonic_pbp) ~
     operand_reg_imm
 }
 
 inst_jmp = { mnemonic_jmp ~ operand_imm }
+
+// TRAP instruction: TRAP X, Y, Z
+inst_trap = { mnemonic_trap ~ operand_num_num_num }
+
+// Operand patterns
+operand_num_num_num = { number ~ comma ~ number ~ comma ~ number }
 
 // Simple instructions
 inst_halt = { mnemonic_halt }
@@ -275,13 +336,8 @@ instruction = {
     inst_bitwise_rri | inst_bitwise_rrr |
     inst_bitfiddle_rri | inst_bitfiddle_rrr |
     inst_shift_rri | inst_shift_rrr |
-    inst_branch | inst_jmp |
-    inst_halt
-}
-
-// A line can have: [label:] [instruction|directive]
-statement = {
-    label_def? ~ (instruction | data_directive)?
+    inst_pbranch | inst_branch | inst_jmp |
+    inst_trap | inst_halt
 }
 
 // Program is multiple statements separated by newlines

@@ -83,10 +83,20 @@ pub enum MMixInstruction {
     NEGU(u8, u8, u8),    // NEGU $X, Y, $Z - negate unsigned
     NEGUI(u8, u8, u8),   // NEGU $X, Y, Z - negate unsigned immediate
 
-    MUL(u8, u8, u8),  // MUL $X, $Y, $Z - multiply
-    MULI(u8, u8, u8), // MUL $X, $Y, Z - multiply immediate
-    DIV(u8, u8, u8),  // DIV $X, $Y, $Z - divide
-    DIVI(u8, u8, u8), // DIV $X, $Y, Z - divide immediate
+    MUL(u8, u8, u8),   // MUL $X, $Y, $Z - multiply
+    MULI(u8, u8, u8),  // MUL $X, $Y, Z - multiply immediate
+    MULU(u8, u8, u8),  // MULU $X, $Y, $Z - multiply unsigned
+    MULUI(u8, u8, u8), // MULU $X, $Y, Z - multiply unsigned immediate
+    DIV(u8, u8, u8),   // DIV $X, $Y, $Z - divide
+    DIVI(u8, u8, u8),  // DIV $X, $Y, Z - divide immediate
+    DIVU(u8, u8, u8),  // DIVU $X, $Y, $Z - divide unsigned
+    DIVUI(u8, u8, u8), // DIVU $X, $Y, Z - divide unsigned immediate
+
+    // Comparison instructions
+    CMP(u8, u8, u8),   // CMP $X, $Y, $Z - compare signed
+    CMPI(u8, u8, u8),  // CMP $X, $Y, Z - compare signed immediate
+    CMPU(u8, u8, u8),  // CMPU $X, $Y, $Z - compare unsigned
+    CMPUI(u8, u8, u8), // CMPU $X, $Y, Z - compare unsigned immediate
 
     INCL(u8, u8, u8), // INCL $X, $Y, $Z
 
@@ -137,11 +147,22 @@ pub enum MMixInstruction {
     SRUI(u8, u8, u8), // SRU $X, $Y, Z - shift right unsigned immediate
 
     // Branch instructions
-    JMP(u8),     // JMP offset
-    JE(u8, u8),  // JE $X, offset
-    JNE(u8, u8), // JNE $X, offset
-    JL(u8, u8),  // JL $X, offset
-    JG(u8, u8),  // JG $X, offset
+    JMP(u8),      // JMP offset
+    JE(u8, u8),   // JE $X, offset
+    JNE(u8, u8),  // JNE $X, offset
+    JL(u8, u8),   // JL $X, offset
+    JG(u8, u8),   // JG $X, offset
+    PBN(u8, u8),  // PBN $X, offset - probable branch negative
+    PBZ(u8, u8),  // PBZ $X, offset - probable branch zero
+    PBP(u8, u8),  // PBP $X, offset - probable branch positive
+    PBOD(u8, u8), // PBOD $X, offset - probable branch odd
+    PBNN(u8, u8), // PBNN $X, offset - probable branch nonnegative
+    PBNZ(u8, u8), // PBNZ $X, offset - probable branch nonzero
+    PBNP(u8, u8), // PBNP $X, offset - probable branch nonpositive
+    PBEV(u8, u8), // PBEV $X, offset - probable branch even
+
+    // System instructions
+    TRAP(u8, u8, u8), // TRAP X, Y, Z - trap/system call
 
     // Data directives
     BYTE(u8),   // BYTE - 1 byte of data
@@ -156,6 +177,7 @@ pub enum MMixInstruction {
 pub struct MMixAssembler {
     source: String,
     pub labels: HashMap<String, u64>,
+    pub symbols: HashMap<String, u64>, // For IS directive - symbolic names
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
 }
@@ -165,6 +187,7 @@ impl MMixAssembler {
         Self {
             source: source.to_string(),
             labels: HashMap::new(),
+            symbols: HashMap::new(),
             instructions: Vec::new(),
             current_addr: 0,
         }
@@ -214,6 +237,15 @@ impl MMixAssembler {
                 Rule::data_directive => {
                     inst = Some(self.parse_data_directive(inner_pair)?);
                 }
+                Rule::loc_directive => {
+                    self.parse_loc_directive(inner_pair)?;
+                }
+                Rule::is_directive => {
+                    self.parse_is_directive(inner_pair)?;
+                }
+                Rule::debug_directive => {
+                    self.parse_debug_directive(inner_pair)?;
+                }
                 _ => {}
             }
         }
@@ -256,8 +288,10 @@ impl MMixAssembler {
             Rule::inst_bitfiddle_rri => self.parse_inst_bitfiddle_rri(inner),
             Rule::inst_shift_rrr => self.parse_inst_shift_rrr(inner),
             Rule::inst_shift_rri => self.parse_inst_shift_rri(inner),
+            Rule::inst_pbranch => self.parse_inst_pbranch(inner),
             Rule::inst_branch => self.parse_inst_branch(inner),
             Rule::inst_jmp => self.parse_inst_jmp(inner),
+            Rule::inst_trap => self.parse_inst_trap(inner),
             Rule::inst_halt => Ok(MMixInstruction::HALT),
             _ => Err(format!("Unhandled instruction: {:?}", inner.as_rule())),
         }
@@ -268,8 +302,8 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let reg = Self::parse_register(ops.next().unwrap())?;
-        let val = Self::parse_number(ops.next().unwrap())?;
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())?;
         Ok(MMixInstruction::SET(reg, val))
     }
 
@@ -281,8 +315,8 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let reg = Self::parse_register(ops.next().unwrap())?;
-        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
         Ok(MMixInstruction::SETL(reg, val))
     }
 
@@ -294,8 +328,8 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let reg = Self::parse_register(ops.next().unwrap())?;
-        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
         Ok(MMixInstruction::SETH(reg, val))
     }
 
@@ -307,8 +341,8 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let reg = Self::parse_register(ops.next().unwrap())?;
-        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
         Ok(MMixInstruction::SETMH(reg, val))
     }
 
@@ -320,8 +354,8 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let reg = Self::parse_register(ops.next().unwrap())?;
-        let val = Self::parse_number(ops.next().unwrap())? as u16;
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
         Ok(MMixInstruction::SETML(reg, val))
     }
 
@@ -333,9 +367,9 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
         Ok(MMixInstruction::INCL(x, y, z))
     }
 
@@ -347,9 +381,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "LDB" => Ok(MMixInstruction::LDB(x, y, z)),
@@ -380,9 +414,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "LDBI" => Ok(MMixInstruction::LDBI(x, y, z)),
@@ -413,9 +447,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ADD" => Ok(MMixInstruction::ADD(x, y, z)),
@@ -427,7 +461,11 @@ impl MMixAssembler {
             "SUB" => Ok(MMixInstruction::SUB(x, y, z)),
             "SUBU" => Ok(MMixInstruction::SUBU(x, y, z)),
             "MUL" => Ok(MMixInstruction::MUL(x, y, z)),
+            "MULU" => Ok(MMixInstruction::MULU(x, y, z)),
             "DIV" => Ok(MMixInstruction::DIV(x, y, z)),
+            "DIVU" => Ok(MMixInstruction::DIVU(x, y, z)),
+            "CMP" => Ok(MMixInstruction::CMP(x, y, z)),
+            "CMPU" => Ok(MMixInstruction::CMPU(x, y, z)),
             _ => Err(format!("Unknown arithmetic instruction: {}", mnem.as_str())),
         }
     }
@@ -440,9 +478,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ADDI" => Ok(MMixInstruction::ADDI(x, y, z)),
@@ -454,7 +492,11 @@ impl MMixAssembler {
             "SUBI" => Ok(MMixInstruction::SUBI(x, y, z)),
             "SUBUI" => Ok(MMixInstruction::SUBUI(x, y, z)),
             "MULI" => Ok(MMixInstruction::MULI(x, y, z)),
+            "MULUI" => Ok(MMixInstruction::MULUI(x, y, z)),
             "DIVI" => Ok(MMixInstruction::DIVI(x, y, z)),
+            "DIVUI" => Ok(MMixInstruction::DIVUI(x, y, z)),
+            "CMPI" => Ok(MMixInstruction::CMPI(x, y, z)),
+            "CMPUI" => Ok(MMixInstruction::CMPUI(x, y, z)),
             _ => Err(format!("Unknown arithmetic instruction: {}", mnem.as_str())),
         }
     }
@@ -467,9 +509,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         parts.next(); // skip operand wrapper
         let mut ops = parts;
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_number(ops.next().unwrap())? as u8;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "NEG" => Ok(MMixInstruction::NEG(x, y, z)),
@@ -486,9 +528,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         parts.next(); // skip operand wrapper
         let mut ops = parts;
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_number(ops.next().unwrap())? as u8;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "NEGI" => Ok(MMixInstruction::NEGI(x, y, z)),
@@ -505,9 +547,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "AND" => Ok(MMixInstruction::AND(x, y, z)),
@@ -531,9 +573,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ANDI" => Ok(MMixInstruction::ANDI(x, y, z)),
@@ -557,9 +599,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "BDIF" => Ok(MMixInstruction::BDIF(x, y, z)),
@@ -584,9 +626,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "BDIFI" => Ok(MMixInstruction::BDIFI(x, y, z)),
@@ -611,9 +653,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_register(ops.next().unwrap())?;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "SL" => Ok(MMixInstruction::SL(x, y, z)),
@@ -632,9 +674,9 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let y = Self::parse_register(ops.next().unwrap())?;
-        let z = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "SLI" => Ok(MMixInstruction::SLI(x, y, z)),
@@ -653,8 +695,8 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = Self::parse_register(ops.next().unwrap())?;
-        let offset = Self::parse_number(ops.next().unwrap())? as u8;
+        let x = self.parse_register(ops.next().unwrap())?;
+        let offset = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "JE" => Ok(MMixInstruction::JE(x, offset)),
@@ -670,8 +712,49 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let offset = Self::parse_number(ops.next().unwrap())? as u8;
+        let offset = self.parse_number(ops.next().unwrap())? as u8;
         Ok(MMixInstruction::JMP(offset))
+    }
+
+    fn parse_inst_pbranch(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let offset = self.parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "PBN" => Ok(MMixInstruction::PBN(x, offset)),
+            "PBZ" => Ok(MMixInstruction::PBZ(x, offset)),
+            "PBP" => Ok(MMixInstruction::PBP(x, offset)),
+            "PBOD" => Ok(MMixInstruction::PBOD(x, offset)),
+            "PBNN" => Ok(MMixInstruction::PBNN(x, offset)),
+            "PBNZ" => Ok(MMixInstruction::PBNZ(x, offset)),
+            "PBNP" => Ok(MMixInstruction::PBNP(x, offset)),
+            "PBEV" => Ok(MMixInstruction::PBEV(x, offset)),
+            _ => Err(format!(
+                "Unknown probable branch instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_trap(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_number(ops.next().unwrap())? as u8;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
+        Ok(MMixInstruction::TRAP(x, y, z))
     }
 
     fn parse_data_directive(
@@ -684,22 +767,22 @@ impl MMixAssembler {
 
         match directive.as_rule() {
             Rule::directive_byte => {
-                let val = Self::parse_number(value_pair)? as u8;
+                let val = self.parse_number(value_pair)? as u8;
                 Ok(MMixInstruction::BYTE(val))
             }
             Rule::directive_wyde => {
-                let val = Self::parse_number(value_pair)? as u16;
+                let val = self.parse_number(value_pair)? as u16;
                 Ok(MMixInstruction::WYDE(val))
             }
             Rule::directive_tetra => {
-                let val = Self::parse_number(value_pair)? as u32;
+                let val = self.parse_number(value_pair)? as u32;
                 Ok(MMixInstruction::TETRA(val))
             }
             Rule::directive_octa => {
                 let val = if value_pair.as_rule() == Rule::identifier {
                     self.labels.get(value_pair.as_str()).copied().unwrap_or(0)
                 } else {
-                    Self::parse_number(value_pair)?
+                    self.parse_number(value_pair)?
                 };
                 Ok(MMixInstruction::OCTA(val))
             }
@@ -707,26 +790,98 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_register(pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
+    fn parse_loc_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let mut parts = pair.into_inner();
+        let _directive = parts.next(); // Skip "LOC" keyword
+        let addr = self.parse_number(parts.next().unwrap())?;
+        self.current_addr = addr;
+        Ok(())
+    }
+
+    fn parse_is_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let mut parts = pair.into_inner();
+        let symbol_name = parts.next().unwrap().as_str().to_string();
+        let _is_keyword = parts.next(); // Skip "IS" keyword
+        let value_pair = parts.next().unwrap();
+
+        let value = match value_pair.as_rule() {
+            Rule::register => self.parse_register(value_pair)? as u64,
+            Rule::number => self.parse_number(value_pair)?,
+            _ => return Err(format!("IS directive requires register or number")),
+        };
+
+        self.symbols.insert(symbol_name, value);
+        Ok(())
+    }
+
+    fn parse_debug_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        // Debug directive: %debug message with $reg references
+        // We'll emit this as a TRAP 255,0,0 instruction with the debug text as a comment
         let text = pair.as_str();
+        eprintln!("Debug: {}", text); // Print at assembly time
+
+        // Optionally, insert a TRAP instruction for runtime debugging
+        // TRAP 255 is reserved for debugging purposes
+        let debug_trap = MMixInstruction::TRAP(255, 0, 0);
+        let size = Self::instruction_size(&debug_trap);
+        self.instructions.push((self.current_addr, debug_trap));
+        self.current_addr += size;
+
+        Ok(())
+    }
+
+    fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
+        let text = pair.as_str();
+
+        // Check if it's a symbolic name from IS directive
         if !text.starts_with('$') {
-            return Err(format!("Expected register, got: {}", text));
+            // Try to resolve as symbol
+            if let Some(&value) = self.symbols.get(text) {
+                if value <= 255 {
+                    return Ok(value as u8);
+                } else {
+                    return Err(format!(
+                        "Symbol '{}' value {} exceeds register range",
+                        text, value
+                    ));
+                }
+            }
+            return Err(format!("Expected register or symbol, got: {}", text));
         }
+
         text[1..]
             .parse::<u8>()
             .map_err(|e| format!("Invalid register number: {}", e))
     }
 
-    fn parse_number(pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
+    fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let inner = pair.into_inner().next().unwrap();
         let text = inner.as_str();
 
         match inner.as_rule() {
-            Rule::hex_number => u64::from_str_radix(&text[2..], 16)
-                .map_err(|e| format!("Invalid hex number: {}", e)),
+            Rule::hex_number => {
+                // Support both # and 0x/0X prefixes
+                let hex_str = if text.starts_with('#') {
+                    &text[1..]
+                } else if text.starts_with("0x") || text.starts_with("0X") {
+                    &text[2..]
+                } else {
+                    text
+                };
+                u64::from_str_radix(hex_str, 16).map_err(|e| format!("Invalid hex number: {}", e))
+            }
+            Rule::oct_number => u64::from_str_radix(&text[1..], 8)
+                .map_err(|e| format!("Invalid octal number: {}", e)),
             Rule::dec_number => text
                 .parse::<u64>()
                 .map_err(|e| format!("Invalid decimal number: {}", e)),
+            Rule::identifier => {
+                // Try to resolve as symbol from IS directive
+                self.symbols
+                    .get(text)
+                    .copied()
+                    .ok_or_else(|| format!("Undefined symbol: {}", text))
+            }
             _ => Err(format!("Expected number, got: {:?}", inner.as_rule())),
         }
     }
@@ -1128,7 +1283,7 @@ mod tests {
 
     #[test]
     fn test_parse_octa_directive() {
-        let mut asm = MMixAssembler::new("OCTA 0x123456789ABCDEF0");
+        let mut asm = MMixAssembler::new("OCTA #123456789ABCDEF0");
         asm.parse();
         assert_eq!(asm.instructions.len(), 1);
         assert_eq!(
@@ -1162,7 +1317,7 @@ mod tests {
 
     #[test]
     fn test_parse_andi() {
-        let mut asm = MMixAssembler::new("ANDI $1, $2, 0xFF");
+        let mut asm = MMixAssembler::new("ANDI $1, $2, #FF");
         asm.parse();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 0xFF));
     }
@@ -1226,7 +1381,7 @@ mod tests {
 
     #[test]
     fn test_parse_bdifi() {
-        let mut asm = MMixAssembler::new("BDIFI $1, $2, 0x10");
+        let mut asm = MMixAssembler::new("BDIFI $1, $2, #10");
         asm.parse();
         assert_eq!(asm.instructions[0].1, MMixInstruction::BDIFI(1, 2, 0x10));
     }

@@ -1,5 +1,381 @@
 use std::fmt;
 
+/// Macro for register-register binary operations
+macro_rules! binop_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $f:expr) => {{
+        let a = $cpu.get_register($y);
+        let b = $cpu.get_register($z);
+        $cpu.set_register($x, $f(a, b));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for register-immediate binary operations
+macro_rules! binop_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $f:expr) => {{
+        let a = $cpu.get_register($y);
+        let b = $z as u64;
+        $cpu.set_register($x, $f(a, b));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for comparison operations (register-register)
+macro_rules! cmp_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $conv:expr) => {{
+        let a = $conv($cpu.get_register($y));
+        let b = $conv($cpu.get_register($z));
+        let result = if a < b {
+            (-1i64) as u64
+        } else if a == b {
+            0
+        } else {
+            1
+        };
+        $cpu.set_register($x, result);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for comparison operations (register-immediate)
+macro_rules! cmp_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $conv_y:expr, $conv_z:expr) => {{
+        let a = $conv_y($cpu.get_register($y));
+        let b = $conv_z($z);
+        let result = if a < b {
+            (-1i64) as u64
+        } else if a == b {
+            0
+        } else {
+            1
+        };
+        $cpu.set_register($x, result);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for floating-point binary operations (register-register)
+macro_rules! fbinop_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $op:expr) => {{
+        let y_val = MMix::u64_to_f64($cpu.get_register($y));
+        let z_val = MMix::u64_to_f64($cpu.get_register($z));
+        let result = $op(y_val, z_val);
+        $cpu.set_register($x, MMix::f64_to_u64(result));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for floating-point unary operations
+macro_rules! funop {
+    ($cpu:expr, $x:expr, $z:expr, $op:expr) => {{
+        let z_val = MMix::u64_to_f64($cpu.get_register($z));
+        let result = $op(z_val);
+        $cpu.set_register($x, MMix::f64_to_u64(result));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for multiply-add operations: $X = $Y * N + $Z (register-register)
+macro_rules! muladd_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $n:expr) => {{
+        let sum = $cpu
+            .get_register($y)
+            .wrapping_mul($n)
+            .wrapping_add($cpu.get_register($z));
+        $cpu.set_register($x, sum);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for multiply-add operations: $X = $Y * N + Z (register-immediate)
+macro_rules! muladd_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $n:expr) => {{
+        let sum = $cpu
+            .get_register($y)
+            .wrapping_mul($n)
+            .wrapping_add($z as u64);
+        $cpu.set_register($x, sum);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for float-to-int conversions
+macro_rules! f2i_conv {
+    ($cpu:expr, $x:expr, $z:expr, $conv:expr) => {{
+        let z_val = MMix::u64_to_f64($cpu.get_register($z));
+        let result = $conv(z_val);
+        $cpu.set_register($x, result);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for int-to-float conversions (register)
+macro_rules! i2f_conv_rr {
+    ($cpu:expr, $x:expr, $z:expr, $conv:expr) => {{
+        let z_val = $cpu.get_register($z);
+        let result = $conv(z_val);
+        $cpu.set_register($x, MMix::f64_to_u64(result));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for int-to-float conversions (immediate)
+macro_rules! i2f_conv_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $conv:expr) => {{
+        let yz = ($y as u16) << 8 | $z as u16;
+        let result = $conv(yz);
+        $cpu.set_register($x, MMix::f64_to_u64(result));
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for floating point comparison/test operations
+macro_rules! fcmp_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $test:expr) => {{
+        let y_val = MMix::u64_to_f64($cpu.get_register($y));
+        let z_val = MMix::u64_to_f64($cpu.get_register($z));
+        let result = $test(y_val, z_val);
+        $cpu.set_register($x, result);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed multiplication with overflow detection (register-register)
+macro_rules! mul_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $cpu.get_register($z) as i64;
+        let product = (a as i128) * (b as i128);
+        $cpu.set_register($x, product as u64);
+        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
+        let sign_ext = if (product as u64) as i64 >= 0 {
+            0i64
+        } else {
+            -1i64
+        };
+        if (product >> 64) as i64 != sign_ext {
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed multiplication with overflow detection (register-immediate)
+macro_rules! mul_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $z as i64;
+        let product = (a as i128) * (b as i128);
+        $cpu.set_register($x, product as u64);
+        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
+        let sign_ext = if (product as u64) as i64 >= 0 {
+            0i64
+        } else {
+            -1i64
+        };
+        if (product >> 64) as i64 != sign_ext {
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for unsigned multiplication (register-register)
+macro_rules! mulu_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as u128;
+        let b = $cpu.get_register($z) as u128;
+        let product = a * b;
+        $cpu.set_register($x, product as u64);
+        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for unsigned multiplication (register-immediate)
+macro_rules! mulu_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as u128;
+        let b = $z as u128;
+        let product = a * b;
+        $cpu.set_register($x, product as u64);
+        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed division (register-register)
+macro_rules! div_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let dividend = $cpu.get_register($y) as i64;
+        let divisor = $cpu.get_register($z) as i64;
+        if divisor == 0 {
+            $cpu.set_register($x, 0);
+            $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
+        } else {
+            let quotient = dividend / divisor;
+            let remainder = dividend % divisor;
+            $cpu.set_register($x, quotient as u64);
+            $cpu.set_special(SpecialReg::RR, remainder as u64);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed division (register-immediate)
+macro_rules! div_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let dividend = $cpu.get_register($y) as i64;
+        let divisor = $z as i64;
+        if divisor == 0 {
+            $cpu.set_register($x, 0);
+            $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
+        } else {
+            let quotient = dividend / divisor;
+            let remainder = dividend % divisor;
+            $cpu.set_register($x, quotient as u64);
+            $cpu.set_special(SpecialReg::RR, remainder as u64);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for unsigned division (register-register)
+macro_rules! divu_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let dividend_low = $cpu.get_register($y);
+        let dividend_high = $cpu.get_special(SpecialReg::RD);
+        let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
+        let divisor = $cpu.get_register($z) as u128;
+        if divisor == 0 {
+            $cpu.set_register($x, 0);
+            $cpu.set_special(SpecialReg::RR, dividend_low);
+        } else {
+            let quotient = dividend / divisor;
+            let remainder = dividend % divisor;
+            $cpu.set_register($x, quotient as u64);
+            $cpu.set_special(SpecialReg::RR, remainder as u64);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for unsigned division (register-immediate)
+macro_rules! divu_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let dividend_low = $cpu.get_register($y);
+        let dividend_high = $cpu.get_special(SpecialReg::RD);
+        let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
+        let divisor = $z as u128;
+        if divisor == 0 {
+            $cpu.set_register($x, 0);
+            $cpu.set_special(SpecialReg::RR, dividend_low);
+        } else {
+            let quotient = dividend / divisor;
+            let remainder = dividend % divisor;
+            $cpu.set_register($x, quotient as u64);
+            $cpu.set_special(SpecialReg::RR, remainder as u64);
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed addition with overflow detection (register-register)
+macro_rules! add_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $cpu.get_register($z) as i64;
+        match a.checked_add(b) {
+            Some(result) => {
+                $cpu.set_register($x, result as u64);
+            }
+            None => {
+                $cpu.set_register($x, a.wrapping_add(b) as u64);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            }
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed addition with overflow detection (register-immediate)
+macro_rules! add_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $z as i64;
+        match a.checked_add(b) {
+            Some(result) => {
+                $cpu.set_register($x, result as u64);
+            }
+            None => {
+                $cpu.set_register($x, a.wrapping_add(b) as u64);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            }
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed subtraction with overflow detection (register-register)
+macro_rules! sub_rr {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $cpu.get_register($z) as i64;
+        match a.checked_sub(b) {
+            Some(result) => {
+                $cpu.set_register($x, result as u64);
+            }
+            None => {
+                $cpu.set_register($x, a.wrapping_sub(b) as u64);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            }
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
+/// Macro for signed subtraction with overflow detection (register-immediate)
+macro_rules! sub_ri {
+    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
+        let a = $cpu.get_register($y) as i64;
+        let b = $z as i64;
+        match a.checked_sub(b) {
+            Some(result) => {
+                $cpu.set_register($x, result as u64);
+            }
+            None => {
+                $cpu.set_register($x, a.wrapping_sub(b) as u64);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            }
+        }
+        $cpu.advance_pc();
+        true
+    }};
+}
+
 /// Special register identifiers for MMIX.
 /// These 32 special registers control various aspects of MMIX operation.
 /// Per TAOCP specification.
@@ -254,23 +630,6 @@ impl MMix {
 
     // ========== Internal Helpers ==========
 
-    /// Binary operation: $X = $Y op $Z (register-register)
-    #[inline]
-    fn binop_rr(&mut self, x: u8, y: u8, z: u8, op: fn(u64, u64) -> u64) {
-        let val_y = self.get_register(y);
-        let val_z = self.get_register(z);
-        self.set_register(x, op(val_y, val_z));
-        self.advance_pc();
-    }
-
-    /// Binary operation: $X = $Y op Z (register-immediate)
-    #[inline]
-    fn binop_ri(&mut self, x: u8, y: u8, z: u8, op: fn(u64, u64) -> u64) {
-        let val_y = self.get_register(y);
-        self.set_register(x, op(val_y, z as u64));
-        self.advance_pc();
-    }
-
     /// Conditional branch forward: if cond, PC += (Y<<8|Z) * 4
     #[inline]
     fn branch_forward(&mut self, cond: bool, y: u8, z: u8) {
@@ -404,134 +763,69 @@ impl MMix {
             }
             0x02 => {
                 // FUN $X, $Y, $Z - Floating unordered
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = if y_val.is_nan() || z_val.is_nan() {
-                    1
-                } else {
-                    0
-                };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                fcmp_rr!(
+                    self,
+                    x,
+                    y,
+                    z,
+                    |y: f64, z: f64| if y.is_nan() || z.is_nan() { 1 } else { 0 }
+                )
             }
             0x03 => {
                 // FEQL $X, $Y, $Z - Floating equal to
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = if y_val == z_val { 1 } else { 0 };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                fcmp_rr!(self, x, y, z, |y: f64, z: f64| if y == z { 1 } else { 0 })
             }
             0x04 => {
-                // FADD $X, $Y, $Z - Floating add
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = y_val + z_val;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FADD $X, $Y, $Z
+                fbinop_rr!(self, x, y, z, |a, b| a + b)
             }
             0x05 => {
                 // FIX $X, $Z - Convert floating to fixed (signed)
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = z_val as i64 as u64;
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                f2i_conv!(self, x, z, |f: f64| f as i64 as u64)
             }
             0x06 => {
-                // FSUB $X, $Y, $Z - Floating subtract
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = y_val - z_val;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FSUB $X, $Y, $Z
+                fbinop_rr!(self, x, y, z, |a, b| a - b)
             }
             0x07 => {
                 // FIXU $X, $Z - Convert floating to fixed unsigned
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = z_val as u64;
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                f2i_conv!(self, x, z, |f: f64| f as u64)
             }
             0x08 => {
                 // FLOT $X, $Z - Convert fixed to floating (signed)
-                let z_val = self.get_register(z) as i64;
-                let result = z_val as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, z, |v: u64| (v as i64) as f64)
             }
             0x09 => {
                 // FLOTI $X, YZ - Convert fixed to floating immediate (signed)
-                let yz = (y as u16) << 8 | z as u16;
-                let val = yz as i16 as i64;
-                let result = val as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |yz: u16| (yz as i16 as i64) as f64)
             }
             0x0A => {
                 // FLOTU $X, $Z - Convert fixed unsigned to floating
-                let z_val = self.get_register(z);
-                let result = z_val as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, z, |v: u64| v as f64)
             }
             0x0B => {
                 // FLOTUI $X, YZ - Convert fixed unsigned to floating immediate
-                let yz = (y as u16) << 8 | z as u16;
-                let result = yz as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |yz: u16| yz as f64)
             }
             0x0C => {
                 // SFLOT $X, $Z - Convert fixed to short float (signed, 32-bit)
-                let z_val = self.get_register(z) as i64;
-                let result = (z_val as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, z, |v: u64| ((v as i64) as f32) as f64)
             }
             0x0D => {
                 // SFLOTI $X, YZ - Convert fixed to short float immediate (signed)
-                let yz = (y as u16) << 8 | z as u16;
-                let val = yz as i16 as i64;
-                let result = (val as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |yz: u16| ((yz as i16 as i64) as f32) as f64)
             }
             0x0E => {
                 // SFLOTU $X, $Z - Convert fixed unsigned to short float
-                let z_val = self.get_register(z);
-                let result = (z_val as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, z, |v: u64| (v as f32) as f64)
             }
             0x0F => {
                 // SFLOTUI $X, YZ - Convert fixed unsigned to short float immediate
-                let yz = (y as u16) << 8 | z as u16;
-                let result = (yz as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |yz: u16| (yz as f32) as f64)
             }
             0x10 => {
-                // FMUL $X, $Y, $Z - Floating multiply
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = y_val * z_val;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FMUL $X, $Y, $Z
+                fbinop_rr!(self, x, y, z, |a, b| a * b)
             }
             0x11 => {
                 // FCMPE $X, $Y, $Z - Floating compare with epsilon
@@ -578,30 +872,16 @@ impl MMix {
                 true
             }
             0x14 => {
-                // FDIV $X, $Y, $Z - Floating divide
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = y_val / z_val;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FDIV $X, $Y, $Z
+                fbinop_rr!(self, x, y, z, |a, b| a / b)
             }
             0x15 => {
-                // FSQRT $X, $Z - Floating square root
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = z_val.sqrt();
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FSQRT $X, $Z
+                funop!(self, x, z, |v: f64| v.sqrt())
             }
             0x16 => {
-                // FREM $X, $Y, $Z - Floating remainder
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                let result = y_val % z_val;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                // FREM $X, $Y, $Z
+                fbinop_rr!(self, x, y, z, |a, b| a % b)
             }
             0x17 => {
                 // FINT $X, $Y, $Z - Floating integerize with rounding mode from rA
@@ -788,14 +1068,12 @@ impl MMix {
                 true
             }
             0x22 => {
-                // ADDU $X, $Y, $Z - Add unsigned (also LDA)
-                self.binop_rr(x, y, z, u64::wrapping_add);
-                true
+                // ADDU $X, $Y, $Z
+                binop_rr!(self, x, y, z, u64::wrapping_add)
             }
             0x23 => {
-                // ADDUI $X, $Y, Z - Add unsigned immediate (also LDA)
-                self.binop_ri(x, y, z, u64::wrapping_add);
-                true
+                // ADDUI $X, $Y, Z
+                binop_ri!(self, x, y, z, u64::wrapping_add)
             }
             // SET instructions
             // SET family instructions - opcodes 0xE0-0xEF
@@ -1333,332 +1611,110 @@ impl MMix {
             // Arithmetic instructions (§9) - MUL/DIV opcodes 0x18-0x1F
             0x18 => {
                 // MUL $X, $Y, $Z - Multiply signed with overflow
-                let a = self.get_register(y) as i64;
-                let b = self.get_register(z) as i64;
-                let product = (a as i128) * (b as i128);
-                self.set_register(x, product as u64);
-                // Set rH to high 64 bits
-                self.set_special(SpecialReg::RH, (product >> 64) as u64);
-                // Check for overflow (high bits not equal to sign extension)
-                let sign_ext = if (product as u64) as i64 >= 0 {
-                    0i64
-                } else {
-                    -1i64
-                };
-                if (product >> 64) as i64 != sign_ext {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                }
-                self.advance_pc();
-                true
+                mul_rr!(self, x, y, z)
             }
             0x19 => {
                 // MULI $X, $Y, Z - Multiply signed immediate with overflow
-                let a = self.get_register(y) as i64;
-                let b = z as i64;
-                let product = (a as i128) * (b as i128);
-                self.set_register(x, product as u64);
-                self.set_special(SpecialReg::RH, (product >> 64) as u64);
-                let sign_ext = if (product as u64) as i64 >= 0 {
-                    0i64
-                } else {
-                    -1i64
-                };
-                if (product >> 64) as i64 != sign_ext {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                }
-                self.advance_pc();
-                true
+                mul_ri!(self, x, y, z)
             }
             0x1A => {
                 // MULU $X, $Y, $Z - Multiply unsigned
-                let a = self.get_register(y) as u128;
-                let b = self.get_register(z) as u128;
-                let product = a * b;
-                self.set_register(x, product as u64);
-                self.set_special(SpecialReg::RH, (product >> 64) as u64);
-                self.advance_pc();
-                true
+                mulu_rr!(self, x, y, z)
             }
             0x1B => {
                 // MULUI $X, $Y, Z - Multiply unsigned immediate
-                let a = self.get_register(y) as u128;
-                let b = z as u128;
-                let product = a * b;
-                self.set_register(x, product as u64);
-                self.set_special(SpecialReg::RH, (product >> 64) as u64);
-                self.advance_pc();
-                true
+                mulu_ri!(self, x, y, z)
             }
             0x1C => {
                 // DIV $X, $Y, $Z - Divide signed
-                let dividend_low = self.get_register(y) as i64;
-                let divisor = self.get_register(z) as i64;
-                if divisor == 0 {
-                    // Division by zero - result is undefined, set to 0
-                    self.set_register(x, 0);
-                    self.set_special(SpecialReg::RR, self.get_register(y));
-                } else {
-                    let quotient = dividend_low / divisor;
-                    let remainder = dividend_low % divisor;
-                    self.set_register(x, quotient as u64);
-                    self.set_special(SpecialReg::RR, remainder as u64);
-                }
-                self.advance_pc();
-                true
+                div_rr!(self, x, y, z)
             }
             0x1D => {
                 // DIVI $X, $Y, Z - Divide signed immediate
-                let dividend = self.get_register(y) as i64;
-                let divisor = z as i64;
-                if divisor == 0 {
-                    self.set_register(x, 0);
-                    self.set_special(SpecialReg::RR, self.get_register(y));
-                } else {
-                    let quotient = dividend / divisor;
-                    let remainder = dividend % divisor;
-                    self.set_register(x, quotient as u64);
-                    self.set_special(SpecialReg::RR, remainder as u64);
-                }
-                self.advance_pc();
-                true
+                div_ri!(self, x, y, z)
             }
             0x1E => {
                 // DIVU $X, $Y, $Z - Divide unsigned
-                let dividend_low = self.get_register(y);
-                let dividend_high = self.get_special(SpecialReg::RD);
-                let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
-                let divisor = self.get_register(z) as u128;
-                if divisor == 0 {
-                    self.set_register(x, 0);
-                    self.set_special(SpecialReg::RR, dividend_low);
-                } else {
-                    let quotient = dividend / divisor;
-                    let remainder = dividend % divisor;
-                    self.set_register(x, quotient as u64);
-                    self.set_special(SpecialReg::RR, remainder as u64);
-                }
-                self.advance_pc();
-                true
+                divu_rr!(self, x, y, z)
             }
             0x1F => {
                 // DIVUI $X, $Y, Z - Divide unsigned immediate
-                let dividend_low = self.get_register(y);
-                let dividend_high = self.get_special(SpecialReg::RD);
-                let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
-                let divisor = z as u128;
-                if divisor == 0 {
-                    self.set_register(x, 0);
-                    self.set_special(SpecialReg::RR, dividend_low);
-                } else {
-                    let quotient = dividend / divisor;
-                    let remainder = dividend % divisor;
-                    self.set_register(x, quotient as u64);
-                    self.set_special(SpecialReg::RR, remainder as u64);
-                }
-                self.advance_pc();
-                true
+                divu_ri!(self, x, y, z)
             }
             // ADD/SUB and variants - opcodes 0x20-0x2F
             0x20 => {
                 // ADD $X, $Y, $Z - Add signed with overflow check
-                let a = self.get_register(y) as i64;
-                let b = self.get_register(z) as i64;
-                match a.checked_add(b) {
-                    Some(result) => {
-                        self.set_register(x, result as u64);
-                    }
-                    None => {
-                        // Overflow occurred - set rA overflow bit
-                        self.set_register(x, a.wrapping_add(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                    }
-                }
-                self.advance_pc();
-                true
+                add_rr!(self, x, y, z)
             }
             0x21 => {
                 // ADDI $X, $Y, Z - Add signed immediate with overflow check
-                let a = self.get_register(y) as i64;
-                let b = z as i64;
-                match a.checked_add(b) {
-                    Some(result) => {
-                        self.set_register(x, result as u64);
-                    }
-                    None => {
-                        self.set_register(x, a.wrapping_add(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                    }
-                }
-                self.advance_pc();
-                true
+                add_ri!(self, x, y, z)
             }
             // 0x22 and 0x23 are ADDU/ADDUI, already implemented above
             0x24 => {
                 // SUB $X, $Y, $Z - Subtract signed with overflow check
-                let a = self.get_register(y) as i64;
-                let b = self.get_register(z) as i64;
-                match a.checked_sub(b) {
-                    Some(result) => {
-                        self.set_register(x, result as u64);
-                    }
-                    None => {
-                        self.set_register(x, a.wrapping_sub(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                    }
-                }
-                self.advance_pc();
-                true
+                sub_rr!(self, x, y, z)
             }
             0x25 => {
                 // SUBI $X, $Y, Z - Subtract signed immediate with overflow check
-                let a = self.get_register(y) as i64;
-                let b = z as i64;
-                match a.checked_sub(b) {
-                    Some(result) => {
-                        self.set_register(x, result as u64);
-                    }
-                    None => {
-                        self.set_register(x, a.wrapping_sub(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
-                    }
-                }
-                self.advance_pc();
-                true
+                sub_ri!(self, x, y, z)
             }
             0x26 => {
-                // SUBU $X, $Y, $Z - Subtract unsigned
-                self.binop_rr(x, y, z, u64::wrapping_sub);
-                true
+                // SUBU $X, $Y, $Z
+                binop_rr!(self, x, y, z, u64::wrapping_sub)
             }
             0x27 => {
-                // SUBUI $X, $Y, Z - Subtract unsigned immediate
-                self.binop_ri(x, y, z, u64::wrapping_sub);
-                true
+                // SUBUI $X, $Y, Z
+                binop_ri!(self, x, y, z, u64::wrapping_sub)
             }
             0x28 => {
-                // 2ADDU $X, $Y, $Z - Times 2 and add unsigned
-                let doubled = self.get_register(y).wrapping_mul(2);
-                let sum = doubled.wrapping_add(self.get_register(z));
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 2ADDU $X, $Y, $Z
+                muladd_rr!(self, x, y, z, 2)
             }
             0x29 => {
-                // 2ADDUI $X, $Y, Z - Times 2 and add unsigned immediate
-                let doubled = self.get_register(y).wrapping_mul(2);
-                let sum = doubled.wrapping_add(z as u64);
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 2ADDUI $X, $Y, Z
+                muladd_ri!(self, x, y, z, 2)
             }
             0x2A => {
-                // 4ADDU $X, $Y, $Z - Times 4 and add unsigned
-                let quadrupled = self.get_register(y).wrapping_mul(4);
-                let sum = quadrupled.wrapping_add(self.get_register(z));
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 4ADDU $X, $Y, $Z
+                muladd_rr!(self, x, y, z, 4)
             }
             0x2B => {
-                // 4ADDUI $X, $Y, Z - Times 4 and add unsigned immediate
-                let quadrupled = self.get_register(y).wrapping_mul(4);
-                let sum = quadrupled.wrapping_add(z as u64);
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 4ADDUI $X, $Y, Z
+                muladd_ri!(self, x, y, z, 4)
             }
             0x2C => {
-                // 8ADDU $X, $Y, $Z - Times 8 and add unsigned
-                let octupled = self.get_register(y).wrapping_mul(8);
-                let sum = octupled.wrapping_add(self.get_register(z));
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 8ADDU $X, $Y, $Z
+                muladd_rr!(self, x, y, z, 8)
             }
             0x2D => {
-                // 8ADDUI $X, $Y, Z - Times 8 and add unsigned immediate
-                let octupled = self.get_register(y).wrapping_mul(8);
-                let sum = octupled.wrapping_add(z as u64);
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 8ADDUI $X, $Y, Z
+                muladd_ri!(self, x, y, z, 8)
             }
             0x2E => {
-                // 16ADDU $X, $Y, $Z - Times 16 and add unsigned
-                let multiplied = self.get_register(y).wrapping_mul(16);
-                let sum = multiplied.wrapping_add(self.get_register(z));
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 16ADDU $X, $Y, $Z
+                muladd_rr!(self, x, y, z, 16)
             }
             0x2F => {
-                // 16ADDUI $X, $Y, Z - Times 16 and add unsigned immediate
-                let multiplied = self.get_register(y).wrapping_mul(16);
-                let sum = multiplied.wrapping_add(z as u64);
-                self.set_register(x, sum);
-                self.advance_pc();
-                true
+                // 16ADDUI $X, $Y, Z
+                muladd_ri!(self, x, y, z, 16)
             }
             // CMP instructions - opcodes 0x30-0x33
             0x30 => {
-                // CMP $X, $Y, $Z - Compare signed
-                let a = self.get_register(y) as i64;
-                let b = self.get_register(z) as i64;
-                let result = if a < b {
-                    (-1i64) as u64
-                } else if a == b {
-                    0
-                } else {
-                    1
-                };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // CMP $X, $Y, $Z
+                cmp_rr!(self, x, y, z, |v| v as i64)
             }
             0x31 => {
-                // CMPI $X, $Y, Z - Compare signed immediate
-                let a = self.get_register(y) as i64;
-                let b = z as i64;
-                let result = if a < b {
-                    (-1i64) as u64
-                } else if a == b {
-                    0
-                } else {
-                    1
-                };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // CMPI $X, $Y, Z
+                cmp_ri!(self, x, y, z, |v| v as i64, |v| v as i64)
             }
             0x32 => {
-                // CMPU $X, $Y, $Z - Compare unsigned
-                let a = self.get_register(y);
-                let b = self.get_register(z);
-                let result = if a < b {
-                    (-1i64) as u64
-                } else if a == b {
-                    0
-                } else {
-                    1
-                };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // CMPU $X, $Y, $Z
+                cmp_rr!(self, x, y, z, |v| v)
             }
             0x33 => {
-                // CMPUI $X, $Y, Z - Compare unsigned immediate
-                let a = self.get_register(y);
-                let b = z as u64;
-                let result = if a < b {
-                    (-1i64) as u64
-                } else if a == b {
-                    0
-                } else {
-                    1
-                };
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // CMPUI $X, $Y, Z
+                cmp_ri!(self, x, y, z, |v| v, |v| v as u64)
             }
             0x34 => {
                 // NEG $X, Y, $Z - Negate with overflow check
@@ -2212,124 +2268,68 @@ impl MMix {
 
             // Bitwise operations (§10) - opcodes 0xC0-0xCF, 0xD8-0xD9
             0xC0 => {
-                // OR $X, $Y, $Z - Bitwise or
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, val_y | val_z);
-                self.advance_pc();
-                true
+                // OR $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a, b| a | b)
             }
             0xC1 => {
-                // ORI $X, $Y, Z - Bitwise or immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, val_y | (z as u64));
-                self.advance_pc();
-                true
+                // ORI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a, b| a | b)
             }
             0xC2 => {
-                // ORN $X, $Y, $Z - Bitwise or-not
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, val_y | !val_z);
-                self.advance_pc();
-                true
+                // ORN $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| a | !b)
             }
             0xC3 => {
-                // ORNI $X, $Y, Z - Bitwise or-not immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, val_y | !(z as u64));
-                self.advance_pc();
-                true
+                // ORNI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| a | !b)
             }
             0xC4 => {
-                // NOR $X, $Y, $Z - Bitwise not-or
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, !(val_y | val_z));
-                self.advance_pc();
-                true
+                // NOR $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| !(a | b))
             }
             0xC5 => {
-                // NORI $X, $Y, Z - Bitwise not-or immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, !(val_y | (z as u64)));
-                self.advance_pc();
-                true
+                // NORI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| !(a | b))
             }
             0xC6 => {
-                // XOR $X, $Y, $Z - Bitwise exclusive-or
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, val_y ^ val_z);
-                self.advance_pc();
-                true
+                // XOR $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a, b| a ^ b)
             }
             0xC7 => {
-                // XORI $X, $Y, Z - Bitwise exclusive-or immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, val_y ^ (z as u64));
-                self.advance_pc();
-                true
+                // XORI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a, b| a ^ b)
             }
             0xC8 => {
-                // AND $X, $Y, $Z - Bitwise and
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, val_y & val_z);
-                self.advance_pc();
-                true
+                // AND $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a, b| a & b)
             }
             0xC9 => {
-                // ANDI $X, $Y, Z - Bitwise and immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, val_y & (z as u64));
-                self.advance_pc();
-                true
+                // ANDI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a, b| a & b)
             }
             0xCA => {
-                // ANDN $X, $Y, $Z - Bitwise and-not
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, val_y & !val_z);
-                self.advance_pc();
-                true
+                // ANDN $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| a & !b)
             }
             0xCB => {
-                // ANDNI $X, $Y, Z - Bitwise and-not immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, val_y & !(z as u64));
-                self.advance_pc();
-                true
+                // ANDNI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| a & !b)
             }
             0xCC => {
-                // NAND $X, $Y, $Z - Bitwise not-and
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, !(val_y & val_z));
-                self.advance_pc();
-                true
+                // NAND $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| !(a & b))
             }
             0xCD => {
-                // NANDI $X, $Y, Z - Bitwise not-and immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, !(val_y & (z as u64)));
-                self.advance_pc();
-                true
+                // NANDI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| !(a & b))
             }
             0xCE => {
-                // NXOR $X, $Y, $Z - Bitwise not-exclusive-or
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                self.set_register(x, !(val_y ^ val_z));
-                self.advance_pc();
-                true
+                // NXOR $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| !(a ^ b))
             }
             0xCF => {
-                // NXORI $X, $Y, Z - Bitwise not-exclusive-or immediate
-                let val_y = self.get_register(y);
-                self.set_register(x, !(val_y ^ (z as u64)));
-                self.advance_pc();
-                true
+                // NXORI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| !(a ^ b))
             }
             // Bit fiddling operations (§11-12) - opcodes 0xD0-0xDF
             0xD0 => {
@@ -2419,39 +2419,20 @@ impl MMix {
                 true
             }
             0xD6 => {
-                // ODIF $X, $Y, $Z - Octa difference (unsigned)
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                let result = val_y.saturating_sub(val_z);
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // ODIF $X, $Y, $Z
+                binop_rr!(self, x, y, z, u64::saturating_sub)
             }
             0xD7 => {
-                // ODIFI $X, $Y, Z - Octa difference immediate (unsigned)
-                let val_y = self.get_register(y);
-                let z_u64 = z as u64;
-                let result = val_y.saturating_sub(z_u64);
-                self.set_register(x, result);
-                self.advance_pc();
-                true
+                // ODIFI $X, $Y, Z
+                binop_ri!(self, x, y, z, u64::saturating_sub)
             }
             0xDA => {
-                // SADD $X, $Y, $Z - Sideways add (population count of Y \ Z)
-                let val_y = self.get_register(y);
-                let val_z = self.get_register(z);
-                let count = (val_y & !val_z).count_ones() as u64;
-                self.set_register(x, count);
-                self.advance_pc();
-                true
+                // SADD $X, $Y, $Z
+                binop_rr!(self, x, y, z, |a: u64, b: u64| (a & !b).count_ones() as u64)
             }
             0xDB => {
-                // SADDI $X, $Y, Z - Sideways add immediate
-                let val_y = self.get_register(y);
-                let count = (val_y & !(z as u64)).count_ones() as u64;
-                self.set_register(x, count);
-                self.advance_pc();
-                true
+                // SADDI $X, $Y, Z
+                binop_ri!(self, x, y, z, |a: u64, b: u64| (a & !b).count_ones() as u64)
             }
             0xDC => {
                 // MOR $X, $Y, $Z - Multiple or (Boolean matrix multiplication)
