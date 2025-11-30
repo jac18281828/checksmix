@@ -4,8 +4,14 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
+use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() {
+    // Initialize tracing subscriber with RUST_LOG environment variable support
+    // By default, no debug output unless RUST_LOG is set
+    // Example: RUST_LOG=checksmix=debug cargo run --bin mmixasm -- file.mms
+    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 || args.len() > 3 {

@@ -3,8 +3,14 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
+use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() {
+    // Initialize tracing subscriber with RUST_LOG environment variable support
+    // By default, no debug output unless RUST_LOG is set
+    // Example: RUST_LOG=checksmix=debug cargo run --bin checksmix -- file.mms
+    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
@@ -99,18 +105,30 @@ fn run_mms(filename: &str) {
     println!("Assembly parsed successfully");
     println!();
 
-    let object_code = assembler.generate_object_code();
-    println!("Generated {} bytes of object code", object_code.len());
-    println!();
-
     // Execute the assembled code
     let mut mmix = MMix::new();
 
-    // Load the object code into memory starting at address 0
-    for (i, &byte) in object_code.iter().enumerate() {
-        mmix.write_byte(i as u64, byte);
+    // Load instructions directly at their addresses
+    for (addr, inst) in &assembler.instructions {
+        let bytes = assembler.encode_instruction_bytes(inst);
+        for (offset, &byte) in bytes.iter().enumerate() {
+            mmix.write_byte(addr + offset as u64, byte);
+        }
     }
 
+    // Set PC to the Main label if it exists, otherwise to #100 or first code instruction
+    if let Some(&main_addr) = assembler.labels.get("Main") {
+        mmix.set_pc(main_addr);
+    } else {
+        // Default to #100 (common MMIX convention) or first instruction < Data_Segment
+        let code_addr = assembler
+            .instructions
+            .iter()
+            .find(|(addr, _)| *addr < 0x2000000000000000)
+            .map(|(addr, _)| *addr)
+            .unwrap_or(0x100);
+        mmix.set_pc(code_addr);
+    }
     println!("=== Initial Machine State ===");
     println!("{}", mmix);
     println!();
@@ -144,6 +162,9 @@ fn run_mmo(filename: &str) {
     for (i, &byte) in data.iter().enumerate() {
         mmix.write_byte(i as u64, byte);
     }
+
+    // Set PC to 0x100 (standard MMIX code start)
+    mmix.set_pc(0x100);
 
     println!("Loaded {} bytes into memory", data.len());
     println!();

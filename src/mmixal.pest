@@ -4,21 +4,33 @@
 WHITESPACE = _{ " " | "\t" | "\r" }
 COMMENT = _{ (";" | "%") ~ (!"\n" ~ ANY)* }
 
-// Numbers: decimal, hex (#... or 0x...), octal (0...), or symbolic names
-hex_number = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
-oct_number = @{ "0" ~ ASCII_OCT_DIGIT+ }
-dec_number = @{ ASCII_DIGIT+ }
-number = { hex_number | oct_number | dec_number | identifier }
+// Symbols/identifiers for labels and symbolic names
+symbol = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Numeric literals: decimal, hex (#... or 0x...), octal (0...)
+// @ represents current location
+at_symbol = @{ "@" }
+hex_literal = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
+oct_literal = @{ "0" ~ ASCII_OCT_DIGIT+ }
+dec_literal = @{ ASCII_DIGIT+ }
+number_literal = { at_symbol | hex_literal | oct_literal | dec_literal }
+
+// Expression value: can be a numeric literal or a symbol (label/constant)
+expr_value = { number_literal | symbol }
 
 // Registers: $0-$255 or symbolic names from IS directive  
 register_num = @{ "$" ~ ASCII_DIGIT+ }
-register = { register_num | identifier }
+register = { register_num | symbol }
 
-// Identifiers for labels and symbolic names
+// Identifiers (kept for backward compatibility in some contexts)
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Label definition: identifier followed by colon
-label_def = { identifier ~ ":" }
+// Label definition: symbol optionally followed by colon
+// In standard MMIXAL, labels can appear with or without colons
+label_def = { symbol ~ ":"? }
+
+// String literal for BYTE directive
+string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 // Data directives (with or without leading dot)
 directive_byte = { ^"BYTE" | ^".BYTE" }
@@ -29,25 +41,41 @@ directive_octa = { ^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD" }
 // Control directives
 directive_loc = { ^"LOC" }
 directive_is = { ^"IS" }
+directive_greg = { ^"GREG" }
 
-// Debug directive - %debug followed by text and register references
-debug_directive = { "%debug" ~ (!"\n" ~ ANY)* }
+// BYTE can take strings or comma-separated values
+byte_value = { string_literal | expr_value }
+byte_values = { byte_value ~ ("," ~ byte_value)* }
 
 data_directive = {
-    directive_byte ~ number |
-    directive_wyde ~ number |
-    directive_tetra ~ number |
-    directive_octa ~ (number | identifier)
+    directive_byte ~ byte_values |
+    directive_wyde ~ expr_value |
+    directive_tetra ~ expr_value |
+    directive_octa ~ expr_value
 }
 
-loc_directive = { directive_loc ~ number }
-is_directive = { identifier ~ directive_is ~ (register | number) }
+greg_directive = { directive_greg ~ expr_value }
 
-// A line can have: [label:] [instruction|directive]
-// IS directive is special - identifier IS value (no label, no colon)
+loc_directive = { directive_loc ~ expr_value }
+is_directive = { symbol ~ directive_is ~ (register | expr_value) }
+
+// Group all directives under a single rule
+// Note: debug directives are handled by preprocessor, not grammar
+directive = {
+    is_directive
+  | loc_directive
+  | greg_directive
+  | data_directive
+}
+
+// A line can have: [label] [instruction|directive]
+// Labels may optionally end with colon
+// IS directive is special - identifier IS value (no label separator)
+// Order matters: try directive first (which includes is_directive), then label+content
 statement = {
-    is_directive |
-    label_def? ~ (instruction | data_directive | loc_directive | debug_directive)?
+    directive
+  | instruction
+  | label_def ~ (instruction | directive)?
 }
 mnemonic_setmh = { ^"SETMH" }
 mnemonic_setml = { ^"SETML" }
@@ -73,6 +101,8 @@ mnemonic_ldoui = { ^"LDOUI" }
 mnemonic_ldou = { ^"LDOU" }
 mnemonic_ldoi = { ^"LDOI" }
 mnemonic_ldo = { ^"LDO" }
+mnemonic_ldai = { ^"LDAI" }
+mnemonic_lda = { ^"LDA" }
 
 mnemonic_stbui = { ^"STBUI" }
 mnemonic_stbu = { ^"STBU" }
@@ -188,7 +218,61 @@ mnemonic_je = { ^"JE" }
 mnemonic_jl = { ^"JL" }
 mnemonic_jg = { ^"JG" }
 
+// Subroutine and control flow instructions
+mnemonic_pushj = { ^"PUSHJ" }
+mnemonic_pushjb = { ^"PUSHJB" }
+mnemonic_pushgo = { ^"PUSHGO" }
+mnemonic_pushgoi = { ^"PUSHGOI" }
+mnemonic_pop = { ^"POP" }
+mnemonic_go = { ^"GO" }
+mnemonic_goi = { ^"GOI" }
+mnemonic_save = { ^"SAVE" }
+mnemonic_unsave = { ^"UNSAVE" }
+mnemonic_resume = { ^"RESUME" }
+mnemonic_trip = { ^"TRIP" }
+mnemonic_swym = { ^"SWYM" }
+mnemonic_sync = { ^"SYNC" }
+
+// Special register access
+mnemonic_get = { ^"GET" }
+mnemonic_put = { ^"PUT" }
+mnemonic_puti = { ^"PUTI" }
+
+// Prefetch and cache instructions
+mnemonic_prego = { ^"PREGO" }
+mnemonic_pregoi = { ^"PREGOI" }
+mnemonic_preld = { ^"PRELD" }
+mnemonic_preldi = { ^"PRELDI" }
+mnemonic_prest = { ^"PREST" }
+mnemonic_presti = { ^"PRESTI" }
+mnemonic_syncd = { ^"SYNCD" }
+mnemonic_syncdi = { ^"SYNCDI" }
+mnemonic_syncid = { ^"SYNCID" }
+mnemonic_syncidi = { ^"SYNCIDI" }
+
+// Additional load/store instructions
+mnemonic_ldunci = { ^"LDUNCI" }
+mnemonic_ldunc = { ^"LDUNC" }
+mnemonic_stunci = { ^"STUNCI" }
+mnemonic_stunc = { ^"STUNC" }
+mnemonic_ldhti = { ^"LDHTI" }
+mnemonic_ldht = { ^"LDHT" }
+mnemonic_sthti = { ^"STHTI" }
+mnemonic_stht = { ^"STHT" }
+mnemonic_ldsfi = { ^"LDSFI" }
+mnemonic_ldsf = { ^"LDSF" }
+mnemonic_stsfi = { ^"STSFI" }
+mnemonic_stsf = { ^"STSF" }
+mnemonic_ldvtsi = { ^"LDVTSI" }
+mnemonic_ldvts = { ^"LDVTS" }
+mnemonic_cswapi = { ^"CSWAPI" }
+mnemonic_cswap = { ^"CSWAP" }
+mnemonic_stcoi = { ^"STCOI" }
+mnemonic_stco = { ^"STCO" }
+
 // Other instructions
+mnemonic_geta = { ^"GETA" }
+mnemonic_getab = { ^"GETAB" }
 mnemonic_trap = { ^"TRAP" }
 mnemonic_halt = { ^"HALT" }
 
@@ -196,18 +280,18 @@ mnemonic_halt = { ^"HALT" }
 comma = _{ "," }
 
 operand_reg_reg_reg = { register ~ comma ~ register ~ comma ~ register }
-operand_reg_reg_imm = { register ~ comma ~ register ~ comma ~ number }
-operand_reg_imm = { register ~ comma ~ number }
+operand_reg_reg_imm = { register ~ comma ~ register ~ comma ~ expr_value }
+operand_reg_imm = { register ~ comma ~ expr_value }
 operand_reg = { register }
-operand_imm = { number }
+operand_imm = { expr_value }
 
 // Instructions with different operand patterns
-inst_set = { mnemonic_set ~ operand_reg_imm }
-inst_setl = { mnemonic_setl ~ operand_reg_imm }
-inst_seth = { mnemonic_seth ~ operand_reg_imm }
-inst_setmh = { mnemonic_setmh ~ operand_reg_imm }
-inst_setml = { mnemonic_setml ~ operand_reg_imm }
-inst_incl = { mnemonic_incl ~ operand_reg_reg_reg }
+inst_set_ri = { mnemonic_set ~ operand_reg_imm }
+inst_setl_ri = { mnemonic_setl ~ operand_reg_imm }
+inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
+inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
+inst_setml_ri = { mnemonic_setml ~ operand_reg_imm }
+inst_incl_rrr = { mnemonic_incl ~ operand_reg_reg_reg }
 
 // Load/Store (can take reg+reg or reg+imm) - ordered longest first
 inst_load_store_rrr = {
@@ -229,6 +313,10 @@ inst_load_store_rri = {
      mnemonic_sttui | mnemonic_stti | mnemonic_stoui | mnemonic_stoi) ~
     operand_reg_reg_imm
 }
+
+// LDA can take 2 or 3 operands: LDA $X,Label or LDA $X,$Y,Z
+inst_lda_rri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_reg_imm }
+inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
 
 // Arithmetic (3 operands) - ordered longest first
 inst_arith_rrr = {
@@ -252,12 +340,12 @@ inst_arith_rri = {
 // NEG is special: NEG $X, Y, $Z (Y is immediate/literal) - ordered longest first
 inst_neg_rrr = {
     (mnemonic_negu | mnemonic_neg) ~
-    register ~ comma ~ number ~ comma ~ register
+    register ~ comma ~ expr_value ~ comma ~ register
 }
 
 inst_neg_rri = {
     (mnemonic_negui | mnemonic_negi) ~
-    register ~ comma ~ number ~ comma ~ number
+    register ~ comma ~ expr_value ~ comma ~ expr_value
 }
 
 // Bitwise operations (3 operands) - ordered longest first
@@ -318,32 +406,113 @@ inst_pbranch = {
 
 inst_jmp = { mnemonic_jmp ~ operand_imm }
 
-// TRAP instruction: TRAP X, Y, Z
-inst_trap = { mnemonic_trap ~ operand_num_num_num }
+// TRAP instruction: TRAP X, Y, Z (where X, Y, Z can be numbers or identifiers)
+inst_trap = { mnemonic_trap ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
+
+// GETA instructions: GETA $X, addr
+inst_geta = { mnemonic_geta ~ operand_reg_imm }
+inst_getab = { mnemonic_getab ~ operand_reg_imm }
+
+// Subroutine instructions
+inst_pushj = { mnemonic_pushj ~ operand_reg_imm }
+inst_pushjb = { mnemonic_pushjb ~ operand_reg_imm }
+inst_pushgo_rrr = { mnemonic_pushgo ~ operand_reg_reg_reg }
+inst_pushgo_rri = { mnemonic_pushgoi ~ operand_reg_reg_imm }
+inst_pop = { mnemonic_pop ~ expr_value ~ comma ~ expr_value }
+inst_go_rrr = { mnemonic_go ~ operand_reg_reg_reg }
+inst_go_rri = { mnemonic_goi ~ operand_reg_reg_imm }
+
+// Special register access
+inst_get = { mnemonic_get ~ register ~ comma ~ expr_value }
+inst_put = { mnemonic_put ~ expr_value ~ comma ~ register }
+inst_puti = { mnemonic_puti ~ expr_value ~ comma ~ expr_value }
+
+// Context management
+inst_save = { mnemonic_save ~ register ~ comma ~ expr_value }
+inst_unsave = { mnemonic_unsave ~ expr_value ~ comma ~ register }
+
+// Prefetch and cache control
+inst_preld_rrr = { mnemonic_preld ~ operand_reg_reg_reg }
+inst_preld_rri = { mnemonic_preldi ~ operand_reg_reg_imm }
+inst_prego_rrr = { mnemonic_prego ~ operand_reg_reg_reg }
+inst_prego_rri = { mnemonic_pregoi ~ operand_reg_reg_imm }
+inst_prest_rrr = { mnemonic_prest ~ operand_reg_reg_reg }
+inst_prest_rri = { mnemonic_presti ~ operand_reg_reg_imm }
+inst_syncd_rrr = { mnemonic_syncd ~ operand_reg_reg_reg }
+inst_syncd_rri = { mnemonic_syncdi ~ operand_reg_reg_imm }
+inst_syncid_rrr = { mnemonic_syncid ~ operand_reg_reg_reg }
+inst_syncid_rri = { mnemonic_syncidi ~ operand_reg_reg_imm }
+
+// Additional load/store 
+inst_ldunc_rrr = { mnemonic_ldunc ~ operand_reg_reg_reg }
+inst_ldunc_rri = { mnemonic_ldunci ~ operand_reg_reg_imm }
+inst_stunc_rrr = { mnemonic_stunc ~ operand_reg_reg_reg }
+inst_stunc_rri = { mnemonic_stunci ~ operand_reg_reg_imm }
+inst_ldht_rrr = { mnemonic_ldht ~ operand_reg_reg_reg }
+inst_ldht_rri = { mnemonic_ldhti ~ operand_reg_reg_imm }
+inst_stht_rrr = { mnemonic_stht ~ operand_reg_reg_reg }
+inst_stht_rri = { mnemonic_sthti ~ operand_reg_reg_imm }
+inst_ldsf_rrr = { mnemonic_ldsf ~ operand_reg_reg_reg }
+inst_ldsf_rri = { mnemonic_ldsfi ~ operand_reg_reg_imm }
+inst_stsf_rrr = { mnemonic_stsf ~ operand_reg_reg_reg }
+inst_stsf_rri = { mnemonic_stsfi ~ operand_reg_reg_imm }
+inst_ldvts_rrr = { mnemonic_ldvts ~ operand_reg_reg_reg }
+inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_reg_reg_imm }
+inst_cswap_rrr = { mnemonic_cswap ~ operand_reg_reg_reg }
+inst_cswap_rri = { mnemonic_cswapi ~ operand_reg_reg_imm }
+inst_stco_rrr = { mnemonic_stco ~ expr_value ~ comma ~ register ~ comma ~ register }
+inst_stco_rri = { mnemonic_stcoi ~ expr_value ~ comma ~ register ~ comma ~ expr_value }
+
+// System instructions  
+inst_resume = { mnemonic_resume ~ operand_imm }
+inst_trip = { mnemonic_trip ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
+inst_swym = { mnemonic_swym }
+inst_sync = { mnemonic_sync ~ operand_imm }
 
 // Operand patterns
-operand_num_num_num = { number ~ comma ~ number ~ comma ~ number }
+operand_num_num_num = { expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
 
 // Simple instructions
 inst_halt = { mnemonic_halt }
 
 // Combined instruction rule
 instruction = {
-    inst_set | inst_setl | inst_seth | inst_setmh | inst_setml | inst_incl |
+    inst_set_ri | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
     inst_load_store_rri | inst_load_store_rrr |
+    inst_ldunc_rrr | inst_ldunc_rri | inst_stunc_rrr | inst_stunc_rri |
+    inst_ldht_rrr | inst_ldht_rri | inst_stht_rrr | inst_stht_rri |
+    inst_ldsf_rrr | inst_ldsf_rri | inst_stsf_rrr | inst_stsf_rri |
+    inst_ldvts_rrr | inst_ldvts_rri | inst_cswap_rrr | inst_cswap_rri |
+    inst_stco_rrr | inst_stco_rri |
+    inst_lda_rri | inst_lda_ri |
     inst_arith_rri | inst_arith_rrr |
     inst_neg_rri | inst_neg_rrr |
     inst_bitwise_rri | inst_bitwise_rrr |
     inst_bitfiddle_rri | inst_bitfiddle_rrr |
     inst_shift_rri | inst_shift_rrr |
     inst_pbranch | inst_branch | inst_jmp |
+    inst_pushj | inst_pushjb | inst_pushgo_rrr | inst_pushgo_rri | inst_pop |
+    inst_go_rrr | inst_go_rri |
+    inst_preld_rrr | inst_preld_rri | inst_prego_rrr | inst_prego_rri |
+    inst_prest_rrr | inst_prest_rri |
+    inst_syncd_rrr | inst_syncd_rri | inst_syncid_rrr | inst_syncid_rri |
+    inst_get | inst_put | inst_puti |
+    inst_save | inst_unsave |
+    inst_geta | inst_getab |
+    inst_resume | inst_trip | inst_swym | inst_sync |
     inst_trap | inst_halt
 }
 
-// Program is multiple statements separated by newlines
+// One logical line: optional statement on this line
+line = { statement? }
+
+// Program is zero or more lines separated by newlines
+// This allows blank lines, comment-only lines, and empty files
 program = {
     SOI ~
-    statement ~ (NEWLINE+ ~ statement)* ~ NEWLINE* ~
+    NEWLINE* ~                 // allow leading blank lines / comment lines
+    line ~ (NEWLINE+ ~ line)*  // lines separated by 1+ newlines
+    ~ NEWLINE* ~               // allow trailing blank lines
     EOI
 }
 

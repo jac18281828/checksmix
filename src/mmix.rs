@@ -1,4 +1,5 @@
 use std::fmt;
+use tracing::{debug, instrument, trace};
 
 /// Macro for register-register binary operations
 macro_rules! binop_rr {
@@ -532,12 +533,23 @@ impl MMix {
 
     /// Read a byte from memory at the given address.
     /// Uninitialized memory reads as zero.
+    #[instrument(skip(self), level = "trace")]
     pub fn read_byte(&self, addr: u64) -> u8 {
-        *self.memory.get(&addr).unwrap_or(&0)
+        let value = *self.memory.get(&addr).unwrap_or(&0);
+        trace!(
+            addr = format!("0x{:X}", addr),
+            value, "Read byte from memory"
+        );
+        value
     }
 
     /// Write a byte to memory at the given address.
+    #[instrument(skip(self), level = "trace")]
     pub fn write_byte(&mut self, addr: u64, value: u8) {
+        trace!(
+            addr = format!("0x{:X}", addr),
+            value, "Writing byte to memory"
+        );
         if value == 0 {
             self.memory.shift_remove(&addr); // Don't store zeros (sparse memory)
         } else {
@@ -630,23 +642,25 @@ impl MMix {
 
     // ========== Internal Helpers ==========
 
-    /// Conditional branch forward: if cond, PC += (Y<<8|Z) * 4
+    /// Conditional branch forward: if cond, PC = (PC + 4) + (Y<<8|Z) * 4
     #[inline]
     fn branch_forward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
             let offset = ((y as u16) << 8 | z as u16) as i16;
-            self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
+            // Branch is relative to PC+4 (after the branch instruction)
+            self.pc = (self.pc + 4).wrapping_add((offset as i64 * 4) as u64);
         } else {
             self.advance_pc();
         }
     }
 
-    /// Conditional branch backward: if cond, PC -= (Y<<8|Z) * 4
+    /// Conditional branch backward: if cond, PC = (PC + 4) - (Y<<8|Z) * 4
     #[inline]
     fn branch_backward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
             let offset = (y as u16) << 8 | z as u16;
-            self.pc = self.pc.wrapping_sub((offset as u64) * 4);
+            // Branch is relative to PC+4 (after the branch instruction)
+            self.pc = (self.pc + 4).wrapping_sub((offset as u64) * 4);
         } else {
             self.advance_pc();
         }
@@ -729,29 +743,99 @@ impl MMix {
         self.advance_pc();
     }
 
+    /// Handle TRAP system calls
+    /// Returns true if execution should continue, false if halted
+    fn handle_trap(&mut self, trap_code: u8, arg: u8) -> bool {
+        match trap_code {
+            0 => {
+                // Halt - stop execution
+                debug!(trap_code, arg, "TRAP: Halt");
+                self.advance_pc();
+                false
+            }
+            7 => {
+                // Fputs - write null-terminated string to file
+                // Standard calling convention: $0 contains the string address
+                // arg (Z) contains the file descriptor (0=stdin, 1=stdout, 2=stderr)
+
+                let str_addr = self.get_register(0);
+                let mut output = String::new();
+                let mut addr = str_addr;
+
+                // Read null-terminated string from memory
+                loop {
+                    let byte = self.read_byte(addr);
+                    if byte == 0 {
+                        break;
+                    }
+                    output.push(byte as char);
+                    addr += 1;
+                    // Safety limit
+                    if addr.wrapping_sub(str_addr) > 10000 {
+                        eprintln!("Warning: Fputs string too long, truncating");
+                        break;
+                    }
+                }
+
+                // Write to appropriate stream
+                match arg {
+                    1 => print!("{}", output),  // stdout
+                    2 => eprint!("{}", output), // stderr
+                    _ => {
+                        debug!(trap_code, arg, "Fputs to unsupported file descriptor");
+                    }
+                }
+
+                debug!(
+                    trap_code,
+                    arg,
+                    str_addr = format!("0x{:X}", str_addr),
+                    "TRAP: Fputs"
+                );
+                self.advance_pc();
+                true
+            }
+            _ => {
+                // Unhandled trap - just advance PC and continue
+                debug!(trap_code, arg, "TRAP: Unhandled trap code");
+                self.advance_pc();
+                true
+            }
+        }
+    }
+
     // ========== Instruction Execution ==========
 
     /// Execute a single instruction at the current program counter.
     /// Returns true if execution should continue, false if halted.
+    #[instrument(skip(self), fields(pc = format!("0x{:X}", self.pc)))]
     pub fn execute_instruction(&mut self) -> bool {
         let (op, x, y, z) = self.fetch_instruction();
+        debug!(
+            op = format!("0x{:02X}", op),
+            x, y, z, "Executing instruction"
+        );
 
         match op {
             // Floating Point instructions
             0x00 => {
                 // TRAP X, YZ or TRAP X, Y, Z - Force trap interrupt
                 // X = 0 for immediate (YZ), X > 0 for register ($Y, $Z)
-                let trap_val = if x == 0 {
-                    ((y as u64) << 8) | (z as u64)
+                // For immediate form: Y is the trap number, Z is an argument
+                if x == 0 {
+                    // Immediate TRAP - handle system calls
+                    self.handle_trap(y, z)
                 } else {
-                    let y_val = self.get_register(y);
-                    let z_val = self.get_register(z);
-                    (y_val << 32) | z_val
-                };
-                // Set rBB to trap value for inspection
-                self.set_special(SpecialReg::RBB, trap_val);
-                // Don't advance PC - trap handler will handle it
-                false
+                    // Register form - not commonly used for syscalls
+                    let trap_val = {
+                        let y_val = self.get_register(y);
+                        let z_val = self.get_register(z);
+                        (y_val << 32) | z_val
+                    };
+                    self.set_special(SpecialReg::RBB, trap_val);
+                    self.advance_pc();
+                    false // Halt by default for unhandled register traps
+                }
             }
             0x01 => {
                 // FCMP $X, $Y, $Z - Floating compare
@@ -1078,16 +1162,15 @@ impl MMix {
             // SET instructions
             // SET family instructions - opcodes 0xE0-0xEF
             0xE0 => {
-                // SETH $X, YZ - Set high wyde
+                // SETH $X, YZ - Set high wyde (clears low 48 bits)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 48;
-                let current = self.get_register(x);
-                self.set_register(x, current | value);
+                self.set_register(x, value);
                 self.advance_pc();
                 true
             }
             0xE1 => {
-                // SETMH $X, YZ - Set medium high wyde
+                // SETMH $X, YZ - Set medium high wyde (ORs with existing bits)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 32;
                 let current = self.get_register(x);
@@ -1096,7 +1179,7 @@ impl MMix {
                 true
             }
             0xE2 => {
-                // SETML $X, YZ - Set medium low wyde
+                // SETML $X, YZ - Set medium low wyde (ORs with existing bits)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 16;
                 let current = self.get_register(x);
@@ -1105,7 +1188,7 @@ impl MMix {
                 true
             }
             0xE3 => {
-                // SETL $X, YZ - Set low wyde
+                // SETL $X, YZ - Set low wyde (ORs with existing bits)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let current = self.get_register(x);
                 self.set_register(x, current | yz);
@@ -2581,17 +2664,17 @@ impl MMix {
                 true
             }
             0xF4 => {
-                // GETA $X, YZ - Get address
+                // GETA $X, YZ - Get address relative to PC+4
                 let offset = ((y as u16) << 8 | z as u16) as i16;
-                let addr = self.pc.wrapping_add((offset as i64 * 4) as u64);
+                let addr = (self.pc + 4).wrapping_add((offset as i64 * 4) as u64);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true
             }
             0xF5 => {
-                // GETAB $X, YZ - Get address backward
+                // GETAB $X, YZ - Get address backward relative to PC+4
                 let offset = (y as u16) << 8 | z as u16;
-                let addr = self.pc.wrapping_sub((offset as u64) * 4);
+                let addr = (self.pc + 4).wrapping_sub((offset as u64) * 4);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true
@@ -2633,16 +2716,63 @@ impl MMix {
                 true
             }
             0xFA => {
-                // SAVE $X, 0 - Save process state
-                // Store context at address in $X
-                // This is a simplified implementation
+                // SAVE $X,Z - Save process state
+                // Saves local registers and special registers to memory
+                // Returns address of saved context in $X
+
+                // Allocate memory for context (256 general registers + 32 special registers)
+                // Each register is 8 bytes (octa)
+                let context_size = (256 + 32) * 8;
+
+                // For simplicity, allocate context at a fixed high address
+                // In a real implementation, this would use a stack or memory allocator
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static CONTEXT_COUNTER: AtomicU64 = AtomicU64::new(0x8000000000000000);
+                let context_addr = CONTEXT_COUNTER.fetch_add(context_size, Ordering::Relaxed);
+
+                // Save all 256 general registers
+                for i in 0..256 {
+                    let value = self.get_register(i as u8);
+                    self.write_octa(context_addr + (i * 8), value);
+                }
+
+                // Save special registers
+                for i in 0..32 {
+                    let value = self.special_regs[i];
+                    self.write_octa(context_addr + (256 * 8) + (i as u64 * 8), value);
+                }
+
+                // Return context address in $X
+                self.set_register(x, context_addr);
                 self.advance_pc();
                 true
             }
             0xFB => {
-                // UNSAVE $Z - Restore process state
-                // Restore context from address in $Z
-                // This is a simplified implementation
+                // UNSAVE X,$Z - Restore process state
+                // Restores local registers and special registers from memory
+                // NOTE: Does NOT restore rJ (return address) - that's managed by PUSHJ/POP
+                let context_addr = self.get_register(z);
+
+                // Save current rJ before restoring
+                let saved_rj = self.get_special(SpecialReg::RJ);
+
+                // Restore all 256 general registers
+                for i in 0..256 {
+                    let value = self.read_octa(context_addr + (i * 8));
+                    self.set_register(i as u8, value);
+                }
+
+                // Restore special registers (excluding rJ)
+                for i in 0..32 {
+                    if i != SpecialReg::RJ as usize {
+                        let value = self.read_octa(context_addr + (256 * 8) + (i as u64 * 8));
+                        self.special_regs[i] = value;
+                    }
+                }
+
+                // Restore rJ
+                self.set_special(SpecialReg::RJ, saved_rj);
+
                 self.advance_pc();
                 true
             }
@@ -2679,7 +2809,9 @@ impl MMix {
 
     /// Execute instructions starting from the current PC until a halt condition.
     /// Returns the number of instructions executed.
+    #[instrument(skip(self))]
     pub fn run(&mut self) -> usize {
+        debug!("Starting MMIX execution");
         let mut count = 0;
         while self.execute_instruction() {
             count += 1;
@@ -2689,6 +2821,7 @@ impl MMix {
                 break;
             }
         }
+        debug!(instruction_count = count, "Execution completed");
         count
     }
 }
