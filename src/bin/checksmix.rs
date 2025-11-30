@@ -100,7 +100,11 @@ fn run_mms(filename: &str) {
     println!();
 
     let mut assembler = MMixAssembler::new(&input);
-    assembler.parse();
+
+    if let Err(e) = assembler.parse() {
+        eprintln!("Parse error: {}", e);
+        process::exit(1);
+    }
 
     println!("Assembly parsed successfully");
     println!();
@@ -157,16 +161,86 @@ fn run_mmo(filename: &str) {
     println!();
 
     let mut mmix = MMix::new();
+    let mut entry_point = 0x100u64; // Default entry point
 
-    // Load the binary data into memory starting at address 0
-    for (i, &byte) in data.iter().enumerate() {
-        mmix.write_byte(i as u64, byte);
+    // Parse .mmo format
+    let mut i = 0;
+    let mut current_addr = 0u64;
+
+    while i < data.len() {
+        if i + 4 > data.len() {
+            break;
+        }
+
+        let opcode = data[i];
+
+        match opcode {
+            0x98 => {
+                // lop_quote: YZ tetras of literal data follow
+                let yz = ((data[i + 1] as usize) << 8) | (data[i + 2] as usize);
+                i += 4;
+
+                // Load yz tetras (4*yz bytes) at current_addr
+                let byte_count = yz * 4;
+                for offset in 0..byte_count {
+                    if i + offset < data.len() {
+                        mmix.write_byte(current_addr + offset as u64, data[i + offset]);
+                    }
+                }
+                current_addr += byte_count as u64;
+                i += byte_count;
+            }
+            0x9A => {
+                // lop_loc: Set loading address
+                // Custom format: 3 tetras (12 bytes)
+                // Tetra 1: 0x9A 00 00 00
+                // Tetra 2: high 32 bits of address
+                // Tetra 3: low 32 bits of address
+                i += 4; // Skip the lop_loc tetra
+
+                if i + 8 <= data.len() {
+                    let high = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+                    let low =
+                        u32::from_be_bytes([data[i + 4], data[i + 5], data[i + 6], data[i + 7]]);
+                    current_addr = ((high as u64) << 32) | (low as u64);
+                    i += 8;
+                }
+            }
+            0x9D => {
+                // lop_pre: Preamble (skip)
+                i += 4;
+            }
+            0x9F => {
+                // lop_post: Postamble with entry point
+                // Entry point is 8 bytes following this tetra
+                i += 4;
+                if i + 8 <= data.len() {
+                    entry_point = u64::from_be_bytes([
+                        data[i],
+                        data[i + 1],
+                        data[i + 2],
+                        data[i + 3],
+                        data[i + 4],
+                        data[i + 5],
+                        data[i + 6],
+                        data[i + 7],
+                    ]);
+                    i += 8;
+                }
+            }
+            _ => {
+                // Unknown or literal data - treat as data at current address
+                mmix.write_byte(current_addr, data[i]);
+                current_addr += 1;
+                i += 1;
+            }
+        }
     }
 
-    // Set PC to 0x100 (standard MMIX code start)
-    mmix.set_pc(0x100);
+    // Set PC to entry point from postamble
+    mmix.set_pc(entry_point);
 
-    println!("Loaded {} bytes into memory", data.len());
+    println!("Loaded object file (entry point: 0x{:X})", entry_point);
     println!();
 
     println!("=== Initial Machine State ===");

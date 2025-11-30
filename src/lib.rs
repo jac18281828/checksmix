@@ -1,13 +1,16 @@
 use lyn::Scanner; // Still used by MIX parser
 use std::fmt;
 
+mod encode;
 mod mix;
 mod mmix;
 mod mmixal;
+mod mmo;
 
 pub use mix::Mix;
 pub use mmix::{MMix, SpecialReg};
 pub use mmixal::MMixAssembler;
+pub use mmo::MmoGenerator;
 
 /// A trait representing a computer capable of executing a program.
 pub trait Computer: fmt::Display {

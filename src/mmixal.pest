@@ -32,16 +32,16 @@ label_def = { symbol ~ ":"? }
 // String literal for BYTE directive
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
-// Data directives (with or without leading dot)
-directive_byte = { ^"BYTE" | ^".BYTE" }
-directive_wyde = { ^"WYDE" | ^".WYDE" }
-directive_tetra = { ^"TETRA" | ^".TETRA" }
-directive_octa = { ^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD" }
+// Data directives (with or without leading dot) - must be complete words
+directive_byte = @{ (^"BYTE" | ^".BYTE") ~ !ASCII_ALPHANUMERIC }
+directive_wyde = @{ (^"WYDE" | ^".WYDE") ~ !ASCII_ALPHANUMERIC }
+directive_tetra = @{ (^"TETRA" | ^".TETRA") ~ !ASCII_ALPHANUMERIC }
+directive_octa = @{ (^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD") ~ !ASCII_ALPHANUMERIC }
 
-// Control directives
-directive_loc = { ^"LOC" }
-directive_is = { ^"IS" }
-directive_greg = { ^"GREG" }
+// Control directives - must be complete words, not prefixes
+directive_loc = @{ ^"LOC" ~ !ASCII_ALPHANUMERIC }
+directive_is = @{ ^"IS" ~ !ASCII_ALPHANUMERIC }
+directive_greg = @{ ^"GREG" ~ !ASCII_ALPHANUMERIC }
 
 // BYTE can take strings or comma-separated values
 byte_value = { string_literal | expr_value }

@@ -12,11 +12,22 @@ struct MMixalParser;
 #[derive(Debug, Clone, PartialEq)]
 pub enum MMixInstruction {
     // Immediate load instructions
-    SET(u8, u64),   // SET $X, value - pseudo-instruction
-    SETL(u8, u16),  // SETL $X, YZ - set low wyde
-    SETH(u8, u16),  // SETH $X, YZ - set high wyde
-    SETMH(u8, u16), // SETMH $X, YZ - set medium high wyde
-    SETML(u8, u16), // SETML $X, YZ - set medium low wyde
+    SET(u8, u64),    // SET $X, value - pseudo-instruction
+    SETL(u8, u16),   // SETL $X, YZ - set low wyde
+    SETH(u8, u16),   // SETH $X, YZ - set high wyde
+    SETMH(u8, u16),  // SETMH $X, YZ - set medium high wyde
+    SETML(u8, u16),  // SETML $X, YZ - set medium low wyde
+    INCH(u8, u16),   // INCH $X, YZ - increment high wyde
+    INCMH(u8, u16),  // INCMH $X, YZ - increment medium high wyde
+    INCML(u8, u16),  // INCML $X, YZ - increment medium low wyde
+    ORH(u8, u16),    // ORH $X, YZ - or high wyde
+    ORMH(u8, u16),   // ORMH $X, YZ - or medium high wyde
+    ORML(u8, u16),   // ORML $X, YZ - or medium low wyde
+    ORL(u8, u16),    // ORL $X, YZ - or low wyde
+    ANDNH(u8, u16),  // ANDNH $X, YZ - and-not high wyde
+    ANDNMH(u8, u16), // ANDNMH $X, YZ - and-not medium high wyde
+    ANDNML(u8, u16), // ANDNML $X, YZ - and-not medium low wyde
+    ANDNL(u8, u16),  // ANDNL $X, YZ - and-not low wyde
 
     // Load instructions
     LDB(u8, u8, u8),    // LDB $X, $Y, $Z - load byte signed
@@ -105,6 +116,23 @@ pub enum MMixInstruction {
     DIVU(u8, u8, u8),  // DIVU $X, $Y, $Z - divide unsigned
     DIVUI(u8, u8, u8), // DIVU $X, $Y, Z - divide unsigned immediate
 
+    // Floating point instructions
+    FCMP(u8, u8, u8),    // FCMP $X, $Y, $Z - floating compare
+    FUN(u8, u8, u8),     // FUN $X, $Y, $Z - floating unordered
+    FEQL(u8, u8, u8),    // FEQL $X, $Y, $Z - floating equal
+    FADD(u8, u8, u8),    // FADD $X, $Y, $Z - floating add
+    FIX(u8, u8, u8),     // FIX $X, $Y, $Z - convert float to fixed
+    FSUB(u8, u8, u8),    // FSUB $X, $Y, $Z - floating subtract
+    FIXU(u8, u8, u8),    // FIXU $X, $Y, $Z - convert float to fixed unsigned
+    FLOT(u8, u8, u8),    // FLOT $X, $Y, $Z - convert fixed to float
+    FLOTI(u8, u8, u8),   // FLOTI $X, $Y, Z - convert fixed to float immediate
+    FLOTU(u8, u8, u8),   // FLOTU $X, $Y, $Z - convert fixed unsigned to float
+    FLOTUI(u8, u8, u8),  // FLOTUI $X, $Y, Z - convert fixed unsigned to float immediate
+    SFLOT(u8, u8, u8),   // SFLOT $X, $Y, $Z - convert fixed to short float
+    SFLOTI(u8, u8, u8),  // SFLOTI $X, $Y, Z - convert fixed to short float immediate
+    SFLOTU(u8, u8, u8),  // SFLOTU $X, $Y, $Z - convert fixed unsigned to short float
+    SFLOTUI(u8, u8, u8), // SFLOTUI $X, $Y, Z - convert fixed unsigned to short float immediate
+
     // Comparison instructions
     CMP(u8, u8, u8),   // CMP $X, $Y, $Z - compare signed
     CMPI(u8, u8, u8),  // CMP $X, $Y, Z - compare signed immediate
@@ -160,19 +188,79 @@ pub enum MMixInstruction {
     SRUI(u8, u8, u8), // SRU $X, $Y, Z - shift right unsigned immediate
 
     // Branch instructions
-    JMP(u32),         // JMP offset (24-bit)
-    JE(u8, u8),       // JE $X, offset
-    JNE(u8, u8),      // JNE $X, offset
-    JL(u8, u8),       // JL $X, offset
-    JG(u8, u8),       // JG $X, offset
-    PBN(u8, u8, u8),  // PBN $X, Y, Z - probable branch negative (Y,Z = offset)
-    PBZ(u8, u8, u8),  // PBZ $X, Y, Z - probable branch zero
-    PBP(u8, u8, u8),  // PBP $X, Y, Z - probable branch positive
-    PBOD(u8, u8, u8), // PBOD $X, Y, Z - probable branch odd
-    PBNN(u8, u8, u8), // PBNN $X, Y, Z - probable branch nonnegative
-    PBNZ(u8, u8, u8), // PBNZ $X, Y, Z - probable branch nonzero
-    PBNP(u8, u8, u8), // PBNP $X, Y, Z - probable branch nonpositive
-    PBEV(u8, u8, u8), // PBEV $X, Y, Z - probable branch even
+    JMP(u32),          // JMP offset (24-bit)
+    JE(u8, u8),        // JE $X, offset
+    JNE(u8, u8),       // JNE $X, offset
+    JL(u8, u8),        // JL $X, offset
+    JG(u8, u8),        // JG $X, offset
+    BN(u8, u8),        // BN $X, offset - branch if negative
+    BNB(u8, u8),       // BNB $X, offset - branch if negative backward
+    BZ(u8, u8),        // BZ $X, offset - branch if zero
+    BZB(u8, u8),       // BZB $X, offset - branch if zero backward
+    BP(u8, u8),        // BP $X, offset - branch if positive
+    BPB(u8, u8),       // BPB $X, offset - branch if positive backward
+    BOD(u8, u8),       // BOD $X, offset - branch if odd
+    BODB(u8, u8),      // BODB $X, offset - branch if odd backward
+    BNN(u8, u8),       // BNN $X, offset - branch if non-negative
+    BNNB(u8, u8),      // BNNB $X, offset - branch if non-negative backward
+    BNZ(u8, u8),       // BNZ $X, offset - branch if non-zero
+    BNZB(u8, u8),      // BNZB $X, offset - branch if non-zero backward
+    BNP(u8, u8),       // BNP $X, offset - branch if non-positive
+    BNPB(u8, u8),      // BNPB $X, offset - branch if non-positive backward
+    BEV(u8, u8),       // BEV $X, offset - branch if even
+    BEVB(u8, u8),      // BEVB $X, offset - branch if even backward
+    PBN(u8, u8, u8),   // PBN $X, Y, Z - probable branch negative (Y,Z = offset)
+    PBNB(u8, u8, u8),  // PBNB $X, Y, Z - probable branch negative backward
+    PBZ(u8, u8, u8),   // PBZ $X, Y, Z - probable branch zero
+    PBZB(u8, u8, u8),  // PBZB $X, Y, Z - probable branch zero backward
+    PBP(u8, u8, u8),   // PBP $X, Y, Z - probable branch positive
+    PBPB(u8, u8, u8),  // PBPB $X, Y, Z - probable branch positive backward
+    PBOD(u8, u8, u8),  // PBOD $X, Y, Z - probable branch odd
+    PBODB(u8, u8, u8), // PBODB $X, Y, Z - probable branch odd backward
+    PBNN(u8, u8, u8),  // PBNN $X, Y, Z - probable branch nonnegative
+    PBNNB(u8, u8, u8), // PBNNB $X, Y, Z - probable branch nonnegative backward
+    PBNZ(u8, u8, u8),  // PBNZ $X, Y, Z - probable branch nonzero
+    PBNZB(u8, u8, u8), // PBNZB $X, Y, Z - probable branch nonzero backward
+    PBNP(u8, u8, u8),  // PBNP $X, Y, Z - probable branch nonpositive
+    PBNPB(u8, u8, u8), // PBNPB $X, Y, Z - probable branch nonpositive backward
+    PBEV(u8, u8, u8),  // PBEV $X, Y, Z - probable branch even
+    PBEVB(u8, u8, u8), // PBEVB $X, Y, Z - probable branch even backward
+
+    // Conditional set instructions
+    CSN(u8, u8, u8),   // CSN $X, $Y, $Z - conditional set if negative
+    CSNI(u8, u8, u8),  // CSNI $X, $Y, Z - conditional set if negative immediate
+    CSZ(u8, u8, u8),   // CSZ $X, $Y, $Z - conditional set if zero
+    CSZI(u8, u8, u8),  // CSZI $X, $Y, Z - conditional set if zero immediate
+    CSP(u8, u8, u8),   // CSP $X, $Y, $Z - conditional set if positive
+    CSPI(u8, u8, u8),  // CSPI $X, $Y, Z - conditional set if positive immediate
+    CSOD(u8, u8, u8),  // CSOD $X, $Y, $Z - conditional set if odd
+    CSODI(u8, u8, u8), // CSODI $X, $Y, Z - conditional set if odd immediate
+    CSNN(u8, u8, u8),  // CSNN $X, $Y, $Z - conditional set if non-negative
+    CSNNI(u8, u8, u8), // CSNNI $X, $Y, Z - conditional set if non-negative immediate
+    CSNZ(u8, u8, u8),  // CSNZ $X, $Y, $Z - conditional set if non-zero
+    CSNZI(u8, u8, u8), // CSNZI $X, $Y, Z - conditional set if non-zero immediate
+    CSNP(u8, u8, u8),  // CSNP $X, $Y, $Z - conditional set if non-positive
+    CSNPI(u8, u8, u8), // CSNPI $X, $Y, Z - conditional set if non-positive immediate
+    CSEV(u8, u8, u8),  // CSEV $X, $Y, $Z - conditional set if even
+    CSEVI(u8, u8, u8), // CSEVI $X, $Y, Z - conditional set if even immediate
+
+    // Zero or set instructions
+    ZSN(u8, u8, u8),   // ZSN $X, $Y, $Z - zero or set if negative
+    ZSNI(u8, u8, u8),  // ZSNI $X, $Y, Z - zero or set if negative immediate
+    ZSZ(u8, u8, u8),   // ZSZ $X, $Y, $Z - zero or set if zero
+    ZSZI(u8, u8, u8),  // ZSZI $X, $Y, Z - zero or set if zero immediate
+    ZSP(u8, u8, u8),   // ZSP $X, $Y, $Z - zero or set if positive
+    ZSPI(u8, u8, u8),  // ZSPI $X, $Y, Z - zero or set if positive immediate
+    ZSOD(u8, u8, u8),  // ZSOD $X, $Y, $Z - zero or set if odd
+    ZSODI(u8, u8, u8), // ZSODI $X, $Y, Z - zero or set if odd immediate
+    ZSNN(u8, u8, u8),  // ZSNN $X, $Y, $Z - zero or set if non-negative
+    ZSNNI(u8, u8, u8), // ZSNNI $X, $Y, Z - zero or set if non-negative immediate
+    ZSNZ(u8, u8, u8),  // ZSNZ $X, $Y, $Z - zero or set if non-zero
+    ZSNZI(u8, u8, u8), // ZSNZI $X, $Y, Z - zero or set if non-zero immediate
+    ZSNP(u8, u8, u8),  // ZSNP $X, $Y, $Z - zero or set if non-positive
+    ZSNPI(u8, u8, u8), // ZSNPI $X, $Y, Z - zero or set if non-positive immediate
+    ZSEV(u8, u8, u8),  // ZSEV $X, $Y, $Z - zero or set if even
+    ZSEVI(u8, u8, u8), // ZSEVI $X, $Y, Z - zero or set if even immediate
 
     // System instructions
     TRAP(u8, u8, u8),    // TRAP X, Y, Z - trap/system call
@@ -333,7 +421,7 @@ impl MMixAssembler {
     }
 
     #[instrument(skip(self), fields(source_len = self.source.len()))]
-    pub fn parse(&mut self) {
+    pub fn parse(&mut self) -> Result<(), String> {
         debug!("Starting MMIXAL parsing (two-pass)");
         match self.parse_two_pass() {
             Ok(_) => {
@@ -343,10 +431,9 @@ impl MMixAssembler {
                     symbol_count = self.symbols.len(),
                     "Parsing completed successfully"
                 );
+                Ok(())
             }
-            Err(e) => {
-                eprintln!("Parse error: {}", e);
-            }
+            Err(e) => Err(e),
         }
     }
 
@@ -467,6 +554,12 @@ impl MMixAssembler {
             }
         }
 
+        // Handle standalone labels (labels not followed by instruction or directive)
+        if let Some(label) = label_name {
+            debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Collected standalone label");
+            self.labels.insert(label, self.current_addr);
+        }
+
         Ok(())
     }
 
@@ -501,8 +594,7 @@ impl MMixAssembler {
                                 self.labels.insert(label, self.current_addr);
                             }
                             // Data directives might expand to multiple bytes (e.g., BYTE "string")
-                            let instructions =
-                                self.parse_data_directive_expanded(directive_pair)?;
+                            let instructions = self.parse_data_directive(directive_pair)?;
                             for instruction in instructions {
                                 let size = Self::instruction_size(&instruction);
                                 debug!(inst = ?instruction, addr = format!("0x{:X}", self.current_addr), size, "Added instruction");
@@ -531,6 +623,12 @@ impl MMixAssembler {
             debug!(inst = ?instruction, addr = format!("0x{:X}", self.current_addr), size, "Added instruction");
             self.instructions.push((self.current_addr, instruction));
             self.current_addr += size;
+        }
+
+        // Handle standalone labels (labels not followed by instruction or directive)
+        if let Some(label) = label_name {
+            debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Defined standalone label");
+            self.labels.insert(label, self.current_addr);
         }
 
         Ok(())
@@ -1164,9 +1262,9 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let target = self.parse_number(ops.next().unwrap())?;
         // Calculate relative offset from current instruction
-        // Offset is (target - (PC + 4)) / 4 as a signed 24-bit value
+        // Offset is (target - PC) / 4 as a signed 24-bit value
         let pc = self.current_addr;
-        let offset = ((target as i64 - (pc as i64 + 4)) / 4) as i32;
+        let offset = ((target as i64 - pc as i64) / 4) as i32;
         // Mask to 24 bits
         let offset_24 = (offset & 0xFFFFFF) as u32;
         Ok(MMixInstruction::JMP(offset_24))
@@ -1184,9 +1282,9 @@ impl MMixAssembler {
         let target = self.parse_number(ops.next().unwrap())?;
 
         // Calculate relative offset from current instruction
-        // PBZ uses YZ as a 16-bit offset: offset = (target - (PC + 4)) / 4
+        // PBZ uses YZ as a 16-bit offset: offset = (target - PC) / 4
         let pc = self.current_addr;
-        let offset = ((target as i64 - (pc as i64 + 4)) / 4) as i16;
+        let offset = ((target as i64 - pc as i64) / 4) as i16;
         // Split into Y (high byte) and Z (low byte)
         let offset_u16 = offset as u16;
         let y = ((offset_u16 >> 8) & 0xFF) as u8;
@@ -1690,7 +1788,7 @@ impl MMixAssembler {
 
     /// Parse a data directive and expand it to potentially multiple instructions
     /// (e.g., BYTE "Hello" becomes multiple BYTE instructions)
-    fn parse_data_directive_expanded(
+    fn parse_data_directive(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<MMixInstruction>, String> {
@@ -1868,1030 +1966,14 @@ impl MMixAssembler {
         }
     }
 
-    /// Generate binary object code
-    #[instrument(skip(self), fields(instruction_count = self.instructions.len()))]
-    pub fn generate_object_code(&self) -> Vec<u8> {
-        debug!("Generating object code");
-        let mut code = Vec::new();
-
-        for (_, instruction) in &self.instructions {
-            match instruction {
-                MMixInstruction::SET(x, value) => {
-                    let b0 = (value >> 48) as u16;
-                    let b1 = (value >> 32) as u16;
-                    let b2 = (value >> 16) as u16;
-                    let b3 = *value as u16;
-                    code.extend_from_slice(&Self::encode_instruction(0xE0, *x, b0)); // SETH
-                    code.extend_from_slice(&Self::encode_instruction(0xE1, *x, b1)); // SETMH
-                    code.extend_from_slice(&Self::encode_instruction(0xE2, *x, b2)); // SETML
-                    code.extend_from_slice(&Self::encode_instruction(0xE3, *x, b3)); // SETL
-                }
-                MMixInstruction::SETL(x, yz) => {
-                    code.extend_from_slice(&Self::encode_instruction(0xE3, *x, *yz));
-                }
-                MMixInstruction::SETH(x, yz) => {
-                    code.extend_from_slice(&Self::encode_instruction(0xE0, *x, *yz));
-                }
-                MMixInstruction::SETMH(x, yz) => {
-                    code.extend_from_slice(&Self::encode_instruction(0xE1, *x, *yz));
-                }
-                MMixInstruction::SETML(x, yz) => {
-                    code.extend_from_slice(&Self::encode_instruction(0xE2, *x, *yz));
-                }
-                MMixInstruction::INCL(x, y, z) => {
-                    code.extend_from_slice(&[0xE6, *x, *y, *z]);
-                }
-                MMixInstruction::LDB(x, y, z) => {
-                    code.extend_from_slice(&[0x80, *x, *y, *z]);
-                }
-                MMixInstruction::LDBI(x, y, z) => {
-                    code.extend_from_slice(&[0x81, *x, *y, *z]);
-                }
-                MMixInstruction::LDBU(x, y, z) => {
-                    code.extend_from_slice(&[0x82, *x, *y, *z]);
-                }
-                MMixInstruction::LDBUI(x, y, z) => {
-                    code.extend_from_slice(&[0x83, *x, *y, *z]);
-                }
-                MMixInstruction::LDW(x, y, z) => {
-                    code.extend_from_slice(&[0x84, *x, *y, *z]);
-                }
-                MMixInstruction::LDWI(x, y, z) => {
-                    code.extend_from_slice(&[0x85, *x, *y, *z]);
-                }
-                MMixInstruction::LDWU(x, y, z) => {
-                    code.extend_from_slice(&[0x86, *x, *y, *z]);
-                }
-                MMixInstruction::LDWUI(x, y, z) => {
-                    code.extend_from_slice(&[0x87, *x, *y, *z]);
-                }
-                MMixInstruction::LDT(x, y, z) => {
-                    code.extend_from_slice(&[0x88, *x, *y, *z]);
-                }
-                MMixInstruction::LDTI(x, y, z) => {
-                    code.extend_from_slice(&[0x89, *x, *y, *z]);
-                }
-                MMixInstruction::LDTU(x, y, z) => {
-                    code.extend_from_slice(&[0x8A, *x, *y, *z]);
-                }
-                MMixInstruction::LDTUI(x, y, z) => {
-                    code.extend_from_slice(&[0x8B, *x, *y, *z]);
-                }
-                MMixInstruction::LDO(x, y, z) => {
-                    code.extend_from_slice(&[0x8C, *x, *y, *z]);
-                }
-                MMixInstruction::LDOI(x, y, z) => {
-                    code.extend_from_slice(&[0x8D, *x, *y, *z]);
-                }
-                MMixInstruction::LDOU(x, y, z) => {
-                    code.extend_from_slice(&[0x8E, *x, *y, *z]);
-                }
-                MMixInstruction::LDOUI(x, y, z) => {
-                    code.extend_from_slice(&[0x8F, *x, *y, *z]);
-                }
-                MMixInstruction::LDHT(x, y, z) => {
-                    code.extend_from_slice(&[0x98, *x, *y, *z]);
-                }
-                MMixInstruction::LDHTI(x, y, z) => {
-                    code.extend_from_slice(&[0x99, *x, *y, *z]);
-                }
-                MMixInstruction::LDA(x, y, z) => {
-                    // LDA is a pseudo-instruction for ADDU
-                    code.extend_from_slice(&[0x22, *x, *y, *z]);
-                }
-                MMixInstruction::LDAI(x, y, z) => {
-                    // LDAI is a pseudo-instruction for ADDUI
-                    code.extend_from_slice(&[0x23, *x, *y, *z]);
-                }
-                MMixInstruction::STB(x, y, z) => {
-                    code.extend_from_slice(&[0xA0, *x, *y, *z]);
-                }
-                MMixInstruction::STBI(x, y, z) => {
-                    code.extend_from_slice(&[0xA1, *x, *y, *z]);
-                }
-                MMixInstruction::STBU(x, y, z) => {
-                    code.extend_from_slice(&[0xA2, *x, *y, *z]);
-                }
-                MMixInstruction::STBUI(x, y, z) => {
-                    code.extend_from_slice(&[0xA3, *x, *y, *z]);
-                }
-                MMixInstruction::STW(x, y, z) => {
-                    code.extend_from_slice(&[0xA4, *x, *y, *z]);
-                }
-                MMixInstruction::STWI(x, y, z) => {
-                    code.extend_from_slice(&[0xA5, *x, *y, *z]);
-                }
-                MMixInstruction::STWU(x, y, z) => {
-                    code.extend_from_slice(&[0xA6, *x, *y, *z]);
-                }
-                MMixInstruction::STWUI(x, y, z) => {
-                    code.extend_from_slice(&[0xA7, *x, *y, *z]);
-                }
-                MMixInstruction::STT(x, y, z) => {
-                    code.extend_from_slice(&[0xA8, *x, *y, *z]);
-                }
-                MMixInstruction::STTI(x, y, z) => {
-                    code.extend_from_slice(&[0xA9, *x, *y, *z]);
-                }
-                MMixInstruction::STTU(x, y, z) => {
-                    code.extend_from_slice(&[0xAA, *x, *y, *z]);
-                }
-                MMixInstruction::STTUI(x, y, z) => {
-                    code.extend_from_slice(&[0xAB, *x, *y, *z]);
-                }
-                MMixInstruction::STO(x, y, z) => {
-                    code.extend_from_slice(&[0xAC, *x, *y, *z]);
-                }
-                MMixInstruction::STOI(x, y, z) => {
-                    code.extend_from_slice(&[0xAD, *x, *y, *z]);
-                }
-                MMixInstruction::STOU(x, y, z) => {
-                    code.extend_from_slice(&[0xAE, *x, *y, *z]);
-                }
-                MMixInstruction::STOUI(x, y, z) => {
-                    code.extend_from_slice(&[0xAF, *x, *y, *z]);
-                }
-                MMixInstruction::ADD(x, y, z) => {
-                    code.extend_from_slice(&[0x20, *x, *y, *z]);
-                }
-                MMixInstruction::ADDI(x, y, z) => {
-                    code.extend_from_slice(&[0x21, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU(x, y, z) => {
-                    code.extend_from_slice(&[0x22, *x, *y, *z]);
-                }
-                MMixInstruction::ADDUI(x, y, z) => {
-                    code.extend_from_slice(&[0x23, *x, *y, *z]);
-                }
-                MMixInstruction::SUB(x, y, z) => {
-                    code.extend_from_slice(&[0x24, *x, *y, *z]);
-                }
-                MMixInstruction::SUBI(x, y, z) => {
-                    code.extend_from_slice(&[0x25, *x, *y, *z]);
-                }
-                MMixInstruction::SUBU(x, y, z) => {
-                    code.extend_from_slice(&[0x26, *x, *y, *z]);
-                }
-                MMixInstruction::SUBUI(x, y, z) => {
-                    code.extend_from_slice(&[0x27, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU2(x, y, z) => {
-                    code.extend_from_slice(&[0x28, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU2I(x, y, z) => {
-                    code.extend_from_slice(&[0x29, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU4(x, y, z) => {
-                    code.extend_from_slice(&[0x2A, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU4I(x, y, z) => {
-                    code.extend_from_slice(&[0x2B, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU8(x, y, z) => {
-                    code.extend_from_slice(&[0x2C, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU8I(x, y, z) => {
-                    code.extend_from_slice(&[0x2D, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU16(x, y, z) => {
-                    code.extend_from_slice(&[0x2E, *x, *y, *z]);
-                }
-                MMixInstruction::ADDU16I(x, y, z) => {
-                    code.extend_from_slice(&[0x2F, *x, *y, *z]);
-                }
-                MMixInstruction::NEG(x, y, z) => {
-                    code.extend_from_slice(&[0x34, *x, *y, *z]);
-                }
-                MMixInstruction::NEGI(x, y, z) => {
-                    code.extend_from_slice(&[0x35, *x, *y, *z]);
-                }
-                MMixInstruction::NEGU(x, y, z) => {
-                    code.extend_from_slice(&[0x36, *x, *y, *z]);
-                }
-                MMixInstruction::NEGUI(x, y, z) => {
-                    code.extend_from_slice(&[0x37, *x, *y, *z]);
-                }
-                MMixInstruction::MUL(x, y, z) => {
-                    code.extend_from_slice(&[0x18, *x, *y, *z]);
-                }
-                MMixInstruction::MULI(x, y, z) => {
-                    code.extend_from_slice(&[0x19, *x, *y, *z]);
-                }
-                MMixInstruction::MULU(x, y, z) => {
-                    code.extend_from_slice(&[0x1A, *x, *y, *z]);
-                }
-                MMixInstruction::MULUI(x, y, z) => {
-                    code.extend_from_slice(&[0x1B, *x, *y, *z]);
-                }
-                MMixInstruction::DIV(x, y, z) => {
-                    code.extend_from_slice(&[0x1C, *x, *y, *z]);
-                }
-                MMixInstruction::DIVI(x, y, z) => {
-                    code.extend_from_slice(&[0x1D, *x, *y, *z]);
-                }
-                MMixInstruction::DIVU(x, y, z) => {
-                    code.extend_from_slice(&[0x1E, *x, *y, *z]);
-                }
-                MMixInstruction::DIVUI(x, y, z) => {
-                    code.extend_from_slice(&[0x1F, *x, *y, *z]);
-                }
-                // Comparison instructions (§13) - opcodes 0x30-0x33
-                MMixInstruction::CMP(x, y, z) => {
-                    code.extend_from_slice(&[0x30, *x, *y, *z]);
-                }
-                MMixInstruction::CMPI(x, y, z) => {
-                    code.extend_from_slice(&[0x31, *x, *y, *z]);
-                }
-                MMixInstruction::CMPU(x, y, z) => {
-                    code.extend_from_slice(&[0x32, *x, *y, *z]);
-                }
-                MMixInstruction::CMPUI(x, y, z) => {
-                    code.extend_from_slice(&[0x33, *x, *y, *z]);
-                }
-                // Bitwise operations (§10) - opcodes 0xC0-0xCF, 0xD8-0xD9
-                MMixInstruction::OR(x, y, z) => {
-                    code.extend_from_slice(&[0xC0, *x, *y, *z]);
-                }
-                MMixInstruction::ORI(x, y, z) => {
-                    code.extend_from_slice(&[0xC1, *x, *y, *z]);
-                }
-                MMixInstruction::ORN(x, y, z) => {
-                    code.extend_from_slice(&[0xC2, *x, *y, *z]);
-                }
-                MMixInstruction::ORNI(x, y, z) => {
-                    code.extend_from_slice(&[0xC3, *x, *y, *z]);
-                }
-                MMixInstruction::NOR(x, y, z) => {
-                    code.extend_from_slice(&[0xC4, *x, *y, *z]);
-                }
-                MMixInstruction::NORI(x, y, z) => {
-                    code.extend_from_slice(&[0xC5, *x, *y, *z]);
-                }
-                MMixInstruction::XOR(x, y, z) => {
-                    code.extend_from_slice(&[0xC6, *x, *y, *z]);
-                }
-                MMixInstruction::XORI(x, y, z) => {
-                    code.extend_from_slice(&[0xC7, *x, *y, *z]);
-                }
-                MMixInstruction::AND(x, y, z) => {
-                    code.extend_from_slice(&[0xC8, *x, *y, *z]);
-                }
-                MMixInstruction::ANDI(x, y, z) => {
-                    code.extend_from_slice(&[0xC9, *x, *y, *z]);
-                }
-                MMixInstruction::ANDN(x, y, z) => {
-                    code.extend_from_slice(&[0xCA, *x, *y, *z]);
-                }
-                MMixInstruction::ANDNI(x, y, z) => {
-                    code.extend_from_slice(&[0xCB, *x, *y, *z]);
-                }
-                MMixInstruction::NAND(x, y, z) => {
-                    code.extend_from_slice(&[0xCC, *x, *y, *z]);
-                }
-                MMixInstruction::NANDI(x, y, z) => {
-                    code.extend_from_slice(&[0xCD, *x, *y, *z]);
-                }
-                MMixInstruction::NXOR(x, y, z) => {
-                    code.extend_from_slice(&[0xCE, *x, *y, *z]);
-                }
-                MMixInstruction::NXORI(x, y, z) => {
-                    code.extend_from_slice(&[0xCF, *x, *y, *z]);
-                }
-                MMixInstruction::MUX(x, y, z) => {
-                    code.extend_from_slice(&[0xD8, *x, *y, *z]);
-                }
-                MMixInstruction::MUXI(x, y, z) => {
-                    code.extend_from_slice(&[0xD9, *x, *y, *z]);
-                }
-                // Bit fiddling operations (§11-12)
-                MMixInstruction::BDIF(x, y, z) => {
-                    code.extend_from_slice(&[0xD0, *x, *y, *z]);
-                }
-                MMixInstruction::BDIFI(x, y, z) => {
-                    code.extend_from_slice(&[0xD1, *x, *y, *z]);
-                }
-                MMixInstruction::WDIF(x, y, z) => {
-                    code.extend_from_slice(&[0xD2, *x, *y, *z]);
-                }
-                MMixInstruction::WDIFI(x, y, z) => {
-                    code.extend_from_slice(&[0xD3, *x, *y, *z]);
-                }
-                MMixInstruction::TDIF(x, y, z) => {
-                    code.extend_from_slice(&[0xD4, *x, *y, *z]);
-                }
-                MMixInstruction::TDIFI(x, y, z) => {
-                    code.extend_from_slice(&[0xD5, *x, *y, *z]);
-                }
-                MMixInstruction::ODIF(x, y, z) => {
-                    code.extend_from_slice(&[0xD6, *x, *y, *z]);
-                }
-                MMixInstruction::ODIFI(x, y, z) => {
-                    code.extend_from_slice(&[0xD7, *x, *y, *z]);
-                }
-                MMixInstruction::SADD(x, y, z) => {
-                    code.extend_from_slice(&[0xDA, *x, *y, *z]);
-                }
-                MMixInstruction::SADDI(x, y, z) => {
-                    code.extend_from_slice(&[0xDB, *x, *y, *z]);
-                }
-                MMixInstruction::MOR(x, y, z) => {
-                    code.extend_from_slice(&[0xDC, *x, *y, *z]);
-                }
-                MMixInstruction::MORI(x, y, z) => {
-                    code.extend_from_slice(&[0xDD, *x, *y, *z]);
-                }
-                MMixInstruction::MXOR(x, y, z) => {
-                    code.extend_from_slice(&[0xDE, *x, *y, *z]);
-                }
-                MMixInstruction::MXORI(x, y, z) => {
-                    code.extend_from_slice(&[0xDF, *x, *y, *z]);
-                }
-                // Shift instructions (§14)
-                MMixInstruction::SL(x, y, z) => {
-                    code.extend_from_slice(&[0x38, *x, *y, *z]);
-                }
-                MMixInstruction::SLI(x, y, z) => {
-                    code.extend_from_slice(&[0x39, *x, *y, *z]);
-                }
-                MMixInstruction::SLU(x, y, z) => {
-                    code.extend_from_slice(&[0x3A, *x, *y, *z]);
-                }
-                MMixInstruction::SLUI(x, y, z) => {
-                    code.extend_from_slice(&[0x3B, *x, *y, *z]);
-                }
-                MMixInstruction::SR(x, y, z) => {
-                    code.extend_from_slice(&[0x3C, *x, *y, *z]);
-                }
-                MMixInstruction::SRI(x, y, z) => {
-                    code.extend_from_slice(&[0x3D, *x, *y, *z]);
-                }
-                MMixInstruction::SRU(x, y, z) => {
-                    code.extend_from_slice(&[0x3E, *x, *y, *z]);
-                }
-                MMixInstruction::SRUI(x, y, z) => {
-                    code.extend_from_slice(&[0x3F, *x, *y, *z]);
-                }
-                MMixInstruction::JMP(offset) => {
-                    let x = ((offset >> 16) & 0xFF) as u8;
-                    let y = ((offset >> 8) & 0xFF) as u8;
-                    let z = (offset & 0xFF) as u8;
-                    code.extend_from_slice(&[0xF0, x, y, z]);
-                }
-                MMixInstruction::JE(x, offset) => {
-                    code.extend_from_slice(&[0x2E, *x, 0, *offset]);
-                }
-                MMixInstruction::JNE(x, offset) => {
-                    code.extend_from_slice(&[0x2F, *x, 0, *offset]);
-                }
-                MMixInstruction::JL(x, offset) => {
-                    code.extend_from_slice(&[0x32, *x, 0, *offset]);
-                }
-                MMixInstruction::JG(x, offset) => {
-                    code.extend_from_slice(&[0x34, *x, 0, *offset]);
-                }
-                MMixInstruction::BYTE(value) => {
-                    code.push(*value);
-                }
-                MMixInstruction::WYDE(value) => {
-                    code.extend_from_slice(&value.to_be_bytes());
-                }
-                MMixInstruction::TETRA(value) => {
-                    code.extend_from_slice(&value.to_be_bytes());
-                }
-                MMixInstruction::OCTA(value) => {
-                    code.extend_from_slice(&value.to_be_bytes());
-                }
-                MMixInstruction::GETA(x, y, z) => {
-                    code.extend_from_slice(&[0xF4, *x, *y, *z]);
-                }
-                MMixInstruction::GETAB(x, y, z) => {
-                    code.extend_from_slice(&[0xF5, *x, *y, *z]);
-                }
-                MMixInstruction::PUSHJ(x, y, z) => {
-                    code.extend_from_slice(&[0xF2, *x, *y, *z]);
-                }
-                MMixInstruction::PUSHJB(x, y, z) => {
-                    code.extend_from_slice(&[0xF3, *x, *y, *z]);
-                }
-                MMixInstruction::PUSHGO(x, y, z) => {
-                    code.extend_from_slice(&[0xBE, *x, *y, *z]);
-                }
-                MMixInstruction::PUSHGOI(x, y, z) => {
-                    code.extend_from_slice(&[0xBF, *x, *y, *z]);
-                }
-                MMixInstruction::POP(x, yz) => {
-                    code.extend_from_slice(&[0xF8, *x, 0, *yz]);
-                }
-                MMixInstruction::GO(x, y, z) => {
-                    code.extend_from_slice(&[0x9E, *x, *y, *z]);
-                }
-                MMixInstruction::GOI(x, y, z) => {
-                    code.extend_from_slice(&[0x9F, *x, *y, *z]);
-                }
-                MMixInstruction::GET(x, z) => {
-                    code.extend_from_slice(&[0xFE, *x, 0, *z]);
-                }
-                MMixInstruction::PUT(x, z) => {
-                    code.extend_from_slice(&[0xF6, *x, 0, *z]);
-                }
-                MMixInstruction::PUTI(x, z) => {
-                    code.extend_from_slice(&[0xF7, *x, 0, *z]);
-                }
-                MMixInstruction::SAVE(x, z) => {
-                    code.extend_from_slice(&[0xFA, *x, 0, *z]);
-                }
-                MMixInstruction::UNSAVE(x, z) => {
-                    code.extend_from_slice(&[0xFB, *x, 0, *z]);
-                }
-                MMixInstruction::RESUME(xyz) => {
-                    code.extend_from_slice(&[0xF9, 0, 0, *xyz]);
-                }
-                MMixInstruction::TRIP(x, y, z) => {
-                    code.extend_from_slice(&[0xFF, *x, *y, *z]);
-                }
-                MMixInstruction::SWYM => {
-                    code.extend_from_slice(&[0xFD, 0, 0, 0]);
-                }
-                MMixInstruction::SYNC(xyz) => {
-                    code.extend_from_slice(&[0xFC, 0, 0, *xyz]);
-                }
-                MMixInstruction::LDUNC(x, y, z) => {
-                    code.extend_from_slice(&[0x96, *x, *y, *z]);
-                }
-                MMixInstruction::LDUNCI(x, y, z) => {
-                    code.extend_from_slice(&[0x97, *x, *y, *z]);
-                }
-                MMixInstruction::STUNC(x, y, z) => {
-                    code.extend_from_slice(&[0x9A, *x, *y, *z]);
-                }
-                MMixInstruction::STUNCI(x, y, z) => {
-                    code.extend_from_slice(&[0x9B, *x, *y, *z]);
-                }
-                MMixInstruction::STHT(x, y, z) => {
-                    code.extend_from_slice(&[0x9C, *x, *y, *z]);
-                }
-                MMixInstruction::STHTI(x, y, z) => {
-                    code.extend_from_slice(&[0x9D, *x, *y, *z]);
-                }
-                MMixInstruction::LDSF(x, y, z) => {
-                    code.extend_from_slice(&[0xA0, *x, *y, *z]);
-                }
-                MMixInstruction::LDSFI(x, y, z) => {
-                    code.extend_from_slice(&[0xA1, *x, *y, *z]);
-                }
-                MMixInstruction::STSF(x, y, z) => {
-                    code.extend_from_slice(&[0xA2, *x, *y, *z]);
-                }
-                MMixInstruction::STSFI(x, y, z) => {
-                    code.extend_from_slice(&[0xA3, *x, *y, *z]);
-                }
-                MMixInstruction::LDVTS(x, y, z) => {
-                    code.extend_from_slice(&[0xA4, *x, *y, *z]);
-                }
-                MMixInstruction::LDVTSI(x, y, z) => {
-                    code.extend_from_slice(&[0xA5, *x, *y, *z]);
-                }
-                MMixInstruction::CSWAP(x, y, z) => {
-                    code.extend_from_slice(&[0xA6, *x, *y, *z]);
-                }
-                MMixInstruction::CSWAPI(x, y, z) => {
-                    code.extend_from_slice(&[0xA7, *x, *y, *z]);
-                }
-                MMixInstruction::PRELD(x, y, z) => {
-                    code.extend_from_slice(&[0xA8, *x, *y, *z]);
-                }
-                MMixInstruction::PRELDI(x, y, z) => {
-                    code.extend_from_slice(&[0xA9, *x, *y, *z]);
-                }
-                MMixInstruction::PREGO(x, y, z) => {
-                    code.extend_from_slice(&[0xAA, *x, *y, *z]);
-                }
-                MMixInstruction::PREGOI(x, y, z) => {
-                    code.extend_from_slice(&[0xAB, *x, *y, *z]);
-                }
-                MMixInstruction::PREST(x, y, z) => {
-                    code.extend_from_slice(&[0xAC, *x, *y, *z]);
-                }
-                MMixInstruction::PRESTI(x, y, z) => {
-                    code.extend_from_slice(&[0xAD, *x, *y, *z]);
-                }
-                MMixInstruction::STCO(x, y, z) => {
-                    code.extend_from_slice(&[0xB4, *x, *y, *z]);
-                }
-                MMixInstruction::STCOI(x, y, z) => {
-                    code.extend_from_slice(&[0xB5, *x, *y, *z]);
-                }
-                MMixInstruction::SYNCD(x, y, z) => {
-                    code.extend_from_slice(&[0xB8, *x, *y, *z]);
-                }
-                MMixInstruction::SYNCDI(x, y, z) => {
-                    code.extend_from_slice(&[0xB9, *x, *y, *z]);
-                }
-                MMixInstruction::SYNCID(x, y, z) => {
-                    code.extend_from_slice(&[0xBC, *x, *y, *z]);
-                }
-                MMixInstruction::SYNCIDI(x, y, z) => {
-                    code.extend_from_slice(&[0xBD, *x, *y, *z]);
-                }
-                MMixInstruction::TRAP(x, y, z) => {
-                    code.extend_from_slice(&[0x00, *x, *y, *z]);
-                }
-                MMixInstruction::HALT => {
-                    code.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-                }
-                // Branch instructions - probable branches (§15) - opcodes 0x50-0x5F
-                MMixInstruction::PBN(x, y, z) => {
-                    code.extend_from_slice(&[0x50, *x, *y, *z]);
-                }
-                MMixInstruction::PBZ(x, y, z) => {
-                    code.extend_from_slice(&[0x52, *x, *y, *z]);
-                }
-                MMixInstruction::PBP(x, y, z) => {
-                    code.extend_from_slice(&[0x54, *x, *y, *z]);
-                }
-                MMixInstruction::PBOD(x, y, z) => {
-                    code.extend_from_slice(&[0x56, *x, *y, *z]);
-                }
-                MMixInstruction::PBNN(x, y, z) => {
-                    code.extend_from_slice(&[0x58, *x, *y, *z]);
-                }
-                MMixInstruction::PBNZ(x, y, z) => {
-                    code.extend_from_slice(&[0x5A, *x, *y, *z]);
-                }
-                MMixInstruction::PBNP(x, y, z) => {
-                    code.extend_from_slice(&[0x5C, *x, *y, *z]);
-                }
-                MMixInstruction::PBEV(x, y, z) => {
-                    code.extend_from_slice(&[0x5E, *x, *y, *z]);
-                }
-            }
-        }
-
-        code
-    }
-
-    /// Encode a single instruction to bytes
+    /// Encode a single instruction into bytes using the shared encode module
     pub fn encode_instruction_bytes(&self, instruction: &MMixInstruction) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        match instruction {
-            MMixInstruction::SET(x, value) => {
-                let b0 = (value >> 48) as u16;
-                let b1 = (value >> 32) as u16;
-                let b2 = (value >> 16) as u16;
-                let b3 = *value as u16;
-                bytes.extend_from_slice(&Self::encode_instruction(0xE0, *x, b0)); // SETH
-                bytes.extend_from_slice(&Self::encode_instruction(0xE1, *x, b1)); // SETMH
-                bytes.extend_from_slice(&Self::encode_instruction(0xE2, *x, b2)); // SETML
-                bytes.extend_from_slice(&Self::encode_instruction(0xE3, *x, b3)); // SETL
-            }
-            MMixInstruction::SETL(x, yz) => {
-                bytes.extend_from_slice(&Self::encode_instruction(0xE3, *x, *yz));
-            }
-            MMixInstruction::SETH(x, yz) => {
-                bytes.extend_from_slice(&Self::encode_instruction(0xE0, *x, *yz));
-            }
-            MMixInstruction::SETMH(x, yz) => {
-                bytes.extend_from_slice(&Self::encode_instruction(0xE1, *x, *yz));
-            }
-            MMixInstruction::SETML(x, yz) => {
-                bytes.extend_from_slice(&Self::encode_instruction(0xE2, *x, *yz));
-            }
-            MMixInstruction::BYTE(value) => {
-                bytes.push(*value);
-            }
-            MMixInstruction::WYDE(value) => {
-                bytes.extend_from_slice(&value.to_be_bytes());
-            }
-            MMixInstruction::TETRA(value) => {
-                bytes.extend_from_slice(&value.to_be_bytes());
-            }
-            MMixInstruction::OCTA(value) => {
-                bytes.extend_from_slice(&value.to_be_bytes());
-            }
-            MMixInstruction::LDA(x, y, z) => {
-                bytes.extend_from_slice(&[0x22, *x, *y, *z]);
-            }
-            MMixInstruction::LDAI(x, y, z) => {
-                bytes.extend_from_slice(&[0x23, *x, *y, *z]);
-            }
-            MMixInstruction::STBU(x, y, z) => {
-                bytes.extend_from_slice(&[0xA2, *x, *y, *z]);
-            }
-            MMixInstruction::STBUI(x, y, z) => {
-                bytes.extend_from_slice(&[0xA3, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU(x, y, z) => {
-                bytes.extend_from_slice(&[0x22, *x, *y, *z]);
-            }
-            MMixInstruction::ADDUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x23, *x, *y, *z]);
-            }
-            MMixInstruction::GETA(x, y, z) => {
-                bytes.extend_from_slice(&[0xF4, *x, *y, *z]);
-            }
-            MMixInstruction::GETAB(x, y, z) => {
-                bytes.extend_from_slice(&[0xF5, *x, *y, *z]);
-            }
-            MMixInstruction::PUSHJ(x, y, z) => {
-                bytes.extend_from_slice(&[0xF2, *x, *y, *z]);
-            }
-            MMixInstruction::PUSHJB(x, y, z) => {
-                bytes.extend_from_slice(&[0xF3, *x, *y, *z]);
-            }
-            MMixInstruction::PUSHGO(x, y, z) => {
-                bytes.extend_from_slice(&[0xBE, *x, *y, *z]);
-            }
-            MMixInstruction::PUSHGOI(x, y, z) => {
-                bytes.extend_from_slice(&[0xBF, *x, *y, *z]);
-            }
-            MMixInstruction::POP(x, yz) => {
-                bytes.extend_from_slice(&[0xF8, *x, 0, *yz]);
-            }
-            MMixInstruction::GO(x, y, z) => {
-                bytes.extend_from_slice(&[0x9E, *x, *y, *z]);
-            }
-            MMixInstruction::GOI(x, y, z) => {
-                bytes.extend_from_slice(&[0x9F, *x, *y, *z]);
-            }
-            MMixInstruction::GET(x, z) => {
-                bytes.extend_from_slice(&[0xFE, *x, 0, *z]);
-            }
-            MMixInstruction::PUT(x, z) => {
-                bytes.extend_from_slice(&[0xF6, *x, 0, *z]);
-            }
-            MMixInstruction::PUTI(x, z) => {
-                bytes.extend_from_slice(&[0xF7, *x, 0, *z]);
-            }
-            MMixInstruction::SAVE(x, z) => {
-                bytes.extend_from_slice(&[0xFA, *x, 0, *z]);
-            }
-            MMixInstruction::UNSAVE(x, z) => {
-                bytes.extend_from_slice(&[0xFB, *x, 0, *z]);
-            }
-            MMixInstruction::LDUNC(x, y, z) => {
-                bytes.extend_from_slice(&[0x96, *x, *y, *z]);
-            }
-            MMixInstruction::LDUNCI(x, y, z) => {
-                bytes.extend_from_slice(&[0x97, *x, *y, *z]);
-            }
-            MMixInstruction::STUNC(x, y, z) => {
-                bytes.extend_from_slice(&[0xB6, *x, *y, *z]);
-            }
-            MMixInstruction::STUNCI(x, y, z) => {
-                bytes.extend_from_slice(&[0xB7, *x, *y, *z]);
-            }
-            MMixInstruction::LDSF(x, y, z) => {
-                bytes.extend_from_slice(&[0x90, *x, *y, *z]);
-            }
-            MMixInstruction::LDSFI(x, y, z) => {
-                bytes.extend_from_slice(&[0x91, *x, *y, *z]);
-            }
-            MMixInstruction::STSF(x, y, z) => {
-                bytes.extend_from_slice(&[0xB0, *x, *y, *z]);
-            }
-            MMixInstruction::STSFI(x, y, z) => {
-                bytes.extend_from_slice(&[0xB1, *x, *y, *z]);
-            }
-            MMixInstruction::LDVTS(x, y, z) => {
-                bytes.extend_from_slice(&[0x98, *x, *y, *z]);
-            }
-            MMixInstruction::LDVTSI(x, y, z) => {
-                bytes.extend_from_slice(&[0x99, *x, *y, *z]);
-            }
-            MMixInstruction::CSWAP(x, y, z) => {
-                bytes.extend_from_slice(&[0x94, *x, *y, *z]);
-            }
-            MMixInstruction::CSWAPI(x, y, z) => {
-                bytes.extend_from_slice(&[0x95, *x, *y, *z]);
-            }
-            MMixInstruction::PRELD(x, y, z) => {
-                bytes.extend_from_slice(&[0x9A, *x, *y, *z]);
-            }
-            MMixInstruction::PRELDI(x, y, z) => {
-                bytes.extend_from_slice(&[0x9B, *x, *y, *z]);
-            }
-            MMixInstruction::PREGO(x, y, z) => {
-                bytes.extend_from_slice(&[0x9C, *x, *y, *z]);
-            }
-            MMixInstruction::PREGOI(x, y, z) => {
-                bytes.extend_from_slice(&[0x9D, *x, *y, *z]);
-            }
-            MMixInstruction::PREST(x, y, z) => {
-                bytes.extend_from_slice(&[0xBA, *x, *y, *z]);
-            }
-            MMixInstruction::PRESTI(x, y, z) => {
-                bytes.extend_from_slice(&[0xBB, *x, *y, *z]);
-            }
-            MMixInstruction::SYNCD(x, y, z) => {
-                bytes.extend_from_slice(&[0xB8, *x, *y, *z]);
-            }
-            MMixInstruction::SYNCDI(x, y, z) => {
-                bytes.extend_from_slice(&[0xB9, *x, *y, *z]);
-            }
-            MMixInstruction::SYNCID(x, y, z) => {
-                bytes.extend_from_slice(&[0xBC, *x, *y, *z]);
-            }
-            MMixInstruction::SYNCIDI(x, y, z) => {
-                bytes.extend_from_slice(&[0xBD, *x, *y, *z]);
-            }
-            MMixInstruction::RESUME(xyz) => {
-                bytes.extend_from_slice(&[0xF9, 0, 0, *xyz]);
-            }
-            MMixInstruction::TRIP(x, y, z) => {
-                bytes.extend_from_slice(&[0xFF, *x, *y, *z]);
-            }
-            MMixInstruction::SWYM => {
-                bytes.extend_from_slice(&[0xFD, 0, 0, 0]);
-            }
-            MMixInstruction::SYNC(xyz) => {
-                bytes.extend_from_slice(&[0xFC, 0, 0, *xyz]);
-            }
-            MMixInstruction::OR(x, y, z) => {
-                bytes.extend_from_slice(&[0xC0, *x, *y, *z]);
-            }
-            MMixInstruction::ORI(x, y, z) => {
-                bytes.extend_from_slice(&[0xC1, *x, *y, *z]);
-            }
-            MMixInstruction::TRAP(x, y, z) => {
-                bytes.extend_from_slice(&[0x00, *x, *y, *z]);
-            }
-            MMixInstruction::HALT => {
-                bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-            }
-            // Comparison instructions
-            MMixInstruction::CMP(x, y, z) => {
-                bytes.extend_from_slice(&[0x30, *x, *y, *z]);
-            }
-            MMixInstruction::CMPI(x, y, z) => {
-                bytes.extend_from_slice(&[0x31, *x, *y, *z]);
-            }
-            MMixInstruction::CMPU(x, y, z) => {
-                bytes.extend_from_slice(&[0x32, *x, *y, *z]);
-            }
-            MMixInstruction::CMPUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x33, *x, *y, *z]);
-            }
-            // Branch instructions - probable branches (§15)
-            MMixInstruction::PBN(x, y, z) => {
-                bytes.extend_from_slice(&[0x50, *x, *y, *z]);
-            }
-            MMixInstruction::PBZ(x, y, z) => {
-                bytes.extend_from_slice(&[0x52, *x, *y, *z]);
-            }
-            MMixInstruction::PBP(x, y, z) => {
-                bytes.extend_from_slice(&[0x54, *x, *y, *z]);
-            }
-            MMixInstruction::PBOD(x, y, z) => {
-                bytes.extend_from_slice(&[0x56, *x, *y, *z]);
-            }
-            MMixInstruction::PBNN(x, y, z) => {
-                bytes.extend_from_slice(&[0x58, *x, *y, *z]);
-            }
-            MMixInstruction::PBNZ(x, y, z) => {
-                bytes.extend_from_slice(&[0x5A, *x, *y, *z]);
-            }
-            MMixInstruction::PBNP(x, y, z) => {
-                bytes.extend_from_slice(&[0x5C, *x, *y, *z]);
-            }
-            MMixInstruction::PBEV(x, y, z) => {
-                bytes.extend_from_slice(&[0x5E, *x, *y, *z]);
-            }
-            // Jump instruction
-            MMixInstruction::JMP(offset) => {
-                let x = ((offset >> 16) & 0xFF) as u8;
-                let y = ((offset >> 8) & 0xFF) as u8;
-                let z = (offset & 0xFF) as u8;
-                bytes.extend_from_slice(&[0xF0, x, y, z]);
-            }
-            // Load/Store instructions
-            MMixInstruction::LDB(x, y, z) => {
-                bytes.extend_from_slice(&[0x80, *x, *y, *z]);
-            }
-            MMixInstruction::LDBI(x, y, z) => {
-                bytes.extend_from_slice(&[0x81, *x, *y, *z]);
-            }
-            MMixInstruction::LDBU(x, y, z) => {
-                bytes.extend_from_slice(&[0x82, *x, *y, *z]);
-            }
-            MMixInstruction::LDBUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x83, *x, *y, *z]);
-            }
-            MMixInstruction::LDW(x, y, z) => {
-                bytes.extend_from_slice(&[0x84, *x, *y, *z]);
-            }
-            MMixInstruction::LDWI(x, y, z) => {
-                bytes.extend_from_slice(&[0x85, *x, *y, *z]);
-            }
-            MMixInstruction::LDWU(x, y, z) => {
-                bytes.extend_from_slice(&[0x86, *x, *y, *z]);
-            }
-            MMixInstruction::LDWUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x87, *x, *y, *z]);
-            }
-            MMixInstruction::LDT(x, y, z) => {
-                bytes.extend_from_slice(&[0x88, *x, *y, *z]);
-            }
-            MMixInstruction::LDTI(x, y, z) => {
-                bytes.extend_from_slice(&[0x89, *x, *y, *z]);
-            }
-            MMixInstruction::LDTU(x, y, z) => {
-                bytes.extend_from_slice(&[0x8A, *x, *y, *z]);
-            }
-            MMixInstruction::LDTUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x8B, *x, *y, *z]);
-            }
-            MMixInstruction::LDO(x, y, z) => {
-                bytes.extend_from_slice(&[0x8C, *x, *y, *z]);
-            }
-            MMixInstruction::LDOI(x, y, z) => {
-                bytes.extend_from_slice(&[0x8D, *x, *y, *z]);
-            }
-            MMixInstruction::LDOU(x, y, z) => {
-                bytes.extend_from_slice(&[0x8E, *x, *y, *z]);
-            }
-            MMixInstruction::LDOUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x8F, *x, *y, *z]);
-            }
-            MMixInstruction::STB(x, y, z) => {
-                bytes.extend_from_slice(&[0xA0, *x, *y, *z]);
-            }
-            MMixInstruction::STBI(x, y, z) => {
-                bytes.extend_from_slice(&[0xA1, *x, *y, *z]);
-            }
-            MMixInstruction::STW(x, y, z) => {
-                bytes.extend_from_slice(&[0xA4, *x, *y, *z]);
-            }
-            MMixInstruction::STWI(x, y, z) => {
-                bytes.extend_from_slice(&[0xA5, *x, *y, *z]);
-            }
-            MMixInstruction::STWU(x, y, z) => {
-                bytes.extend_from_slice(&[0xA6, *x, *y, *z]);
-            }
-            MMixInstruction::STWUI(x, y, z) => {
-                bytes.extend_from_slice(&[0xA7, *x, *y, *z]);
-            }
-            MMixInstruction::STT(x, y, z) => {
-                bytes.extend_from_slice(&[0xA8, *x, *y, *z]);
-            }
-            MMixInstruction::STTI(x, y, z) => {
-                bytes.extend_from_slice(&[0xA9, *x, *y, *z]);
-            }
-            MMixInstruction::STTU(x, y, z) => {
-                bytes.extend_from_slice(&[0xAA, *x, *y, *z]);
-            }
-            MMixInstruction::STTUI(x, y, z) => {
-                bytes.extend_from_slice(&[0xAB, *x, *y, *z]);
-            }
-            MMixInstruction::STO(x, y, z) => {
-                bytes.extend_from_slice(&[0xAC, *x, *y, *z]);
-            }
-            MMixInstruction::STOI(x, y, z) => {
-                bytes.extend_from_slice(&[0xAD, *x, *y, *z]);
-            }
-            MMixInstruction::STOU(x, y, z) => {
-                bytes.extend_from_slice(&[0xAE, *x, *y, *z]);
-            }
-            MMixInstruction::STOUI(x, y, z) => {
-                bytes.extend_from_slice(&[0xAF, *x, *y, *z]);
-            }
-            // Arithmetic instructions
-            MMixInstruction::ADD(x, y, z) => {
-                bytes.extend_from_slice(&[0x20, *x, *y, *z]);
-            }
-            MMixInstruction::ADDI(x, y, z) => {
-                bytes.extend_from_slice(&[0x21, *x, *y, *z]);
-            }
-            MMixInstruction::SUB(x, y, z) => {
-                bytes.extend_from_slice(&[0x24, *x, *y, *z]);
-            }
-            MMixInstruction::SUBI(x, y, z) => {
-                bytes.extend_from_slice(&[0x25, *x, *y, *z]);
-            }
-            MMixInstruction::SUBU(x, y, z) => {
-                bytes.extend_from_slice(&[0x26, *x, *y, *z]);
-            }
-            MMixInstruction::SUBUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x27, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU2(x, y, z) => {
-                bytes.extend_from_slice(&[0x28, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU2I(x, y, z) => {
-                bytes.extend_from_slice(&[0x29, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU4(x, y, z) => {
-                bytes.extend_from_slice(&[0x2A, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU4I(x, y, z) => {
-                bytes.extend_from_slice(&[0x2B, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU8(x, y, z) => {
-                bytes.extend_from_slice(&[0x2C, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU8I(x, y, z) => {
-                bytes.extend_from_slice(&[0x2D, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU16(x, y, z) => {
-                bytes.extend_from_slice(&[0x2E, *x, *y, *z]);
-            }
-            MMixInstruction::ADDU16I(x, y, z) => {
-                bytes.extend_from_slice(&[0x2F, *x, *y, *z]);
-            }
-            // Bitwise operations
-            MMixInstruction::AND(x, y, z) => {
-                bytes.extend_from_slice(&[0xC8, *x, *y, *z]);
-            }
-            MMixInstruction::ANDI(x, y, z) => {
-                bytes.extend_from_slice(&[0xC9, *x, *y, *z]);
-            }
-            MMixInstruction::XOR(x, y, z) => {
-                bytes.extend_from_slice(&[0xC6, *x, *y, *z]);
-            }
-            MMixInstruction::XORI(x, y, z) => {
-                bytes.extend_from_slice(&[0xC7, *x, *y, *z]);
-            }
-            MMixInstruction::ANDN(x, y, z) => {
-                bytes.extend_from_slice(&[0xCA, *x, *y, *z]);
-            }
-            MMixInstruction::ANDNI(x, y, z) => {
-                bytes.extend_from_slice(&[0xCB, *x, *y, *z]);
-            }
-            MMixInstruction::NOR(x, y, z) => {
-                bytes.extend_from_slice(&[0xC2, *x, *y, *z]);
-            }
-            MMixInstruction::NORI(x, y, z) => {
-                bytes.extend_from_slice(&[0xC3, *x, *y, *z]);
-            }
-            MMixInstruction::NAND(x, y, z) => {
-                bytes.extend_from_slice(&[0xCC, *x, *y, *z]);
-            }
-            MMixInstruction::NANDI(x, y, z) => {
-                bytes.extend_from_slice(&[0xCD, *x, *y, *z]);
-            }
-            MMixInstruction::NXOR(x, y, z) => {
-                bytes.extend_from_slice(&[0xCE, *x, *y, *z]);
-            }
-            MMixInstruction::NXORI(x, y, z) => {
-                bytes.extend_from_slice(&[0xCF, *x, *y, *z]);
-            }
-            // Bit manipulation
-            MMixInstruction::ODIF(x, y, z) => {
-                bytes.extend_from_slice(&[0xD6, *x, *y, *z]);
-            }
-            MMixInstruction::ODIFI(x, y, z) => {
-                bytes.extend_from_slice(&[0xD7, *x, *y, *z]);
-            }
-            MMixInstruction::SADD(x, y, z) => {
-                bytes.extend_from_slice(&[0xDA, *x, *y, *z]);
-            }
-            MMixInstruction::SADDI(x, y, z) => {
-                bytes.extend_from_slice(&[0xDB, *x, *y, *z]);
-            }
-            // Shift operations
-            MMixInstruction::SL(x, y, z) => {
-                bytes.extend_from_slice(&[0x38, *x, *y, *z]);
-            }
-            MMixInstruction::SLI(x, y, z) => {
-                bytes.extend_from_slice(&[0x39, *x, *y, *z]);
-            }
-            MMixInstruction::SLU(x, y, z) => {
-                bytes.extend_from_slice(&[0x3A, *x, *y, *z]);
-            }
-            MMixInstruction::SLUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x3B, *x, *y, *z]);
-            }
-            MMixInstruction::SR(x, y, z) => {
-                bytes.extend_from_slice(&[0x3C, *x, *y, *z]);
-            }
-            MMixInstruction::SRI(x, y, z) => {
-                bytes.extend_from_slice(&[0x3D, *x, *y, *z]);
-            }
-            MMixInstruction::SRU(x, y, z) => {
-                bytes.extend_from_slice(&[0x3E, *x, *y, *z]);
-            }
-            MMixInstruction::SRUI(x, y, z) => {
-                bytes.extend_from_slice(&[0x3F, *x, *y, *z]);
-            }
-            MMixInstruction::INCL(x, y, z) => {
-                bytes.extend_from_slice(&[0xE6, *x, *y, *z]);
-            }
-            _ => {
-                // For other instructions, use a placeholder
-                eprintln!(
-                    "Warning: Unhandled instruction in encode_instruction_bytes: {:?}",
-                    instruction
-                );
-                bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-            }
-        }
-
-        bytes
+        crate::encode::encode_instruction_bytes(instruction)
     }
-    fn encode_instruction(opcode: u8, x: u8, yz: u16) -> [u8; 4] {
-        let y = (yz >> 8) as u8;
-        let z = yz as u8;
-        [opcode, x, y, z]
+
+    /// Generate object code in MMO format
+    pub fn generate_object_code(&self) -> Vec<u8> {
+        crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone()).generate()
     }
 }
 
@@ -2903,7 +1985,7 @@ mod tests {
     #[test]
     fn test_parse_simple_label() {
         let mut asm = MMixAssembler::new("LOOP: HALT");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.labels.get("LOOP"), Some(&0));
         assert_eq!(asm.instructions.len(), 1);
     }
@@ -2911,7 +1993,7 @@ mod tests {
     #[test]
     fn test_parse_octa_directive() {
         let mut asm = MMixAssembler::new("OCTA #123456789ABCDEF0");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions.len(), 1);
         assert_eq!(
             asm.instructions[0].1,
@@ -2922,7 +2004,7 @@ mod tests {
     #[test]
     fn test_parse_node_structure() {
         let mut asm = MMixAssembler::new("NODE: OCTA 42\n      OCTA 0");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.labels.get("NODE"), Some(&0));
         assert_eq!(asm.instructions.len(), 2);
     }
@@ -2930,7 +2012,7 @@ mod tests {
     #[test]
     fn test_parse_set() {
         let mut asm = MMixAssembler::new("SET $2, 10");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
     }
 
@@ -2938,63 +2020,63 @@ mod tests {
     #[test]
     fn test_parse_and() {
         let mut asm = MMixAssembler::new("AND $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::AND(1, 2, 3));
     }
 
     #[test]
     fn test_parse_andi() {
         let mut asm = MMixAssembler::new("ANDI $1, $2, #FF");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 0xFF));
     }
 
     #[test]
     fn test_parse_or() {
         let mut asm = MMixAssembler::new("OR $10, $20, $30");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::OR(10, 20, 30));
     }
 
     #[test]
     fn test_parse_xor() {
         let mut asm = MMixAssembler::new("XOR $5, $6, $7");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::XOR(5, 6, 7));
     }
 
     #[test]
     fn test_parse_andn() {
         let mut asm = MMixAssembler::new("ANDN $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDN(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nand() {
         let mut asm = MMixAssembler::new("NAND $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NAND(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nor() {
         let mut asm = MMixAssembler::new("NOR $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nxor() {
         let mut asm = MMixAssembler::new("NXOR $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NXOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mux() {
         let mut asm = MMixAssembler::new("MUX $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MUX(1, 2, 3));
     }
 
@@ -3002,98 +2084,98 @@ mod tests {
     #[test]
     fn test_parse_bdif() {
         let mut asm = MMixAssembler::new("BDIF $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::BDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_bdifi() {
         let mut asm = MMixAssembler::new("BDIFI $1, $2, #10");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::BDIFI(1, 2, 0x10));
     }
 
     #[test]
     fn test_parse_wdif() {
         let mut asm = MMixAssembler::new("WDIF $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::WDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_wdifi() {
         let mut asm = MMixAssembler::new("WDIFI $1, $2, 100");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::WDIFI(1, 2, 100));
     }
 
     #[test]
     fn test_parse_tdif() {
         let mut asm = MMixAssembler::new("TDIF $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::TDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_tdifi() {
         let mut asm = MMixAssembler::new("TDIFI $1, $2, 50");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::TDIFI(1, 2, 50));
     }
 
     #[test]
     fn test_parse_odif() {
         let mut asm = MMixAssembler::new("ODIF $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ODIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_odifi() {
         let mut asm = MMixAssembler::new("ODIFI $1, $2, 255");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ODIFI(1, 2, 255));
     }
 
     #[test]
     fn test_parse_sadd() {
         let mut asm = MMixAssembler::new("SADD $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SADD(1, 2, 3));
     }
 
     #[test]
     fn test_parse_saddi() {
         let mut asm = MMixAssembler::new("SADDI $1, $2, 0");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SADDI(1, 2, 0));
     }
 
     #[test]
     fn test_parse_mor() {
         let mut asm = MMixAssembler::new("MOR $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mori() {
         let mut asm = MMixAssembler::new("MORI $1, $2, 128");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MORI(1, 2, 128));
     }
 
     #[test]
     fn test_parse_mxor() {
         let mut asm = MMixAssembler::new("MXOR $1, $2, $3");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MXOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mxori() {
         let mut asm = MMixAssembler::new("MXORI $1, $2, 64");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MXORI(1, 2, 64));
     }
 
@@ -3101,56 +2183,56 @@ mod tests {
     #[test]
     fn test_parse_sl() {
         let mut asm = MMixAssembler::new("SL $3, $1, $2");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SL(3, 1, 2));
     }
 
     #[test]
     fn test_parse_sli() {
         let mut asm = MMixAssembler::new("SLI $3, $1, 8");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLI(3, 1, 8));
     }
 
     #[test]
     fn test_parse_slu() {
         let mut asm = MMixAssembler::new("SLU $10, $20, $30");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLU(10, 20, 30));
     }
 
     #[test]
     fn test_parse_slui() {
         let mut asm = MMixAssembler::new("SLUI $1, $2, 16");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLUI(1, 2, 16));
     }
 
     #[test]
     fn test_parse_sr() {
         let mut asm = MMixAssembler::new("SR $5, $6, $7");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SR(5, 6, 7));
     }
 
     #[test]
     fn test_parse_sri() {
         let mut asm = MMixAssembler::new("SRI $3, $1, 4");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRI(3, 1, 4));
     }
 
     #[test]
     fn test_parse_sru() {
         let mut asm = MMixAssembler::new("SRU $8, $9, $10");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRU(8, 9, 10));
     }
 
     #[test]
     fn test_parse_srui() {
         let mut asm = MMixAssembler::new("SRUI $3, $1, 1");
-        asm.parse();
+        asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRUI(3, 1, 1));
     }
 }

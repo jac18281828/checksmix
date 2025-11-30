@@ -642,25 +642,25 @@ impl MMix {
 
     // ========== Internal Helpers ==========
 
-    /// Conditional branch forward: if cond, PC = (PC + 4) + (Y<<8|Z) * 4
+    /// Conditional branch forward: if cond, PC = PC + (Y<<8|Z) * 4
     #[inline]
     fn branch_forward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
             let offset = ((y as u16) << 8 | z as u16) as i16;
-            // Branch is relative to PC+4 (after the branch instruction)
-            self.pc = (self.pc + 4).wrapping_add((offset as i64 * 4) as u64);
+            // Branch is relative to current PC
+            self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
         } else {
             self.advance_pc();
         }
     }
 
-    /// Conditional branch backward: if cond, PC = (PC + 4) - (Y<<8|Z) * 4
+    /// Conditional branch backward: if cond, PC = PC - (Y<<8|Z) * 4
     #[inline]
     fn branch_backward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
             let offset = (y as u16) << 8 | z as u16;
-            // Branch is relative to PC+4 (after the branch instruction)
-            self.pc = (self.pc + 4).wrapping_sub((offset as u64) * 4);
+            // Backward branch is relative to current PC (not PC+4)
+            self.pc = self.pc.wrapping_sub((offset as u64) * 4);
         } else {
             self.advance_pc();
         }
@@ -1170,28 +1170,34 @@ impl MMix {
                 true
             }
             0xE1 => {
-                // SETMH $X, YZ - Set medium high wyde (ORs with existing bits)
+                // SETMH $X, YZ - Set medium high wyde (clears bits 32-47, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 32;
                 let current = self.get_register(x);
-                self.set_register(x, current | value);
+                // Clear bits 32-47, then OR in the new value
+                let mask = !(0xFFFF_u64 << 32);
+                self.set_register(x, (current & mask) | value);
                 self.advance_pc();
                 true
             }
             0xE2 => {
-                // SETML $X, YZ - Set medium low wyde (ORs with existing bits)
+                // SETML $X, YZ - Set medium low wyde (clears bits 16-31, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 16;
                 let current = self.get_register(x);
-                self.set_register(x, current | value);
+                // Clear bits 16-31, then OR in the new value
+                let mask = !(0xFFFF_u64 << 16);
+                self.set_register(x, (current & mask) | value);
                 self.advance_pc();
                 true
             }
             0xE3 => {
-                // SETL $X, YZ - Set low wyde (ORs with existing bits)
+                // SETL $X, YZ - Set low wyde (clears bits 0-15, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let current = self.get_register(x);
-                self.set_register(x, current | yz);
+                // Clear bits 0-15, then OR in the new value
+                let mask = !0xFFFF_u64;
+                self.set_register(x, (current & mask) | yz);
                 self.advance_pc();
                 true
             }
@@ -2664,17 +2670,17 @@ impl MMix {
                 true
             }
             0xF4 => {
-                // GETA $X, YZ - Get address relative to PC+4
+                // GETA $X, YZ - Get address relative to current PC
                 let offset = ((y as u16) << 8 | z as u16) as i16;
-                let addr = (self.pc + 4).wrapping_add((offset as i64 * 4) as u64);
+                let addr = self.pc.wrapping_add((offset as i64 * 4) as u64);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true
             }
             0xF5 => {
-                // GETAB $X, YZ - Get address backward relative to PC+4
+                // GETAB $X, YZ - Get address backward relative to current PC
                 let offset = (y as u16) << 8 | z as u16;
-                let addr = (self.pc + 4).wrapping_sub((offset as u64) * 4);
+                let addr = self.pc.wrapping_sub((offset as u64) * 4);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true

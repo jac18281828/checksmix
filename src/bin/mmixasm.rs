@@ -43,7 +43,11 @@ fn main() {
 
     // Parse the assembly
     let mut assembler = MMixAssembler::new(&source);
-    assembler.parse();
+
+    if let Err(e) = assembler.parse() {
+        eprintln!("Parse error: {}", e);
+        process::exit(1);
+    }
 
     // Debug: print labels and instructions
     eprintln!("Labels:");
