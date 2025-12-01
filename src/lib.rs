@@ -10,7 +10,7 @@ mod mmo;
 pub use mix::Mix;
 pub use mmix::{MMix, SpecialReg};
 pub use mmixal::MMixAssembler;
-pub use mmo::MmoGenerator;
+pub use mmo::{MmoDecoder, MmoGenerator};
 
 /// A trait representing a computer capable of executing a program.
 pub trait Computer: fmt::Display {

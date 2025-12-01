@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fmt;
+
 use tracing::{debug, instrument, trace};
 
 /// Macro for register-register binary operations
@@ -480,7 +482,7 @@ pub struct MMix {
     /// In a real implementation, this would use paging/segmentation
     /// Key is the memory address, value is the byte
     /// Using IndexMap for deterministic iteration order
-    memory: indexmap::IndexMap<u64, u8>,
+    memory: HashMap<u64, u8>,
 
     /// Program counter (location of next instruction)
     pc: u64,
@@ -498,7 +500,7 @@ impl MMix {
         Self {
             general_regs: [0; 256],
             special_regs: [0; 32],
-            memory: indexmap::IndexMap::new(),
+            memory: HashMap::new(),
             pc: 0,
         }
     }
@@ -551,7 +553,7 @@ impl MMix {
             value, "Writing byte to memory"
         );
         if value == 0 {
-            self.memory.shift_remove(&addr); // Don't store zeros (sparse memory)
+            self.memory.remove(&addr); // Don't store zeros (sparse memory)
         } else {
             self.memory.insert(addr, value);
         }

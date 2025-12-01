@@ -1,4 +1,4 @@
-use checksmix::{MMix, MMixAssembler, Mix, Program};
+use checksmix::{MMix, MMixAssembler, Mix, MmoDecoder, Program};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -161,81 +161,12 @@ fn run_mmo(filename: &str) {
     println!();
 
     let mut mmix = MMix::new();
-    let mut entry_point = 0x100u64; // Default entry point
 
-    // Parse .mmo format
-    let mut i = 0;
-    let mut current_addr = 0u64;
-
-    while i < data.len() {
-        if i + 4 > data.len() {
-            break;
-        }
-
-        let opcode = data[i];
-
-        match opcode {
-            0x98 => {
-                // lop_quote: YZ tetras of literal data follow
-                let yz = ((data[i + 1] as usize) << 8) | (data[i + 2] as usize);
-                i += 4;
-
-                // Load yz tetras (4*yz bytes) at current_addr
-                let byte_count = yz * 4;
-                for offset in 0..byte_count {
-                    if i + offset < data.len() {
-                        mmix.write_byte(current_addr + offset as u64, data[i + offset]);
-                    }
-                }
-                current_addr += byte_count as u64;
-                i += byte_count;
-            }
-            0x9A => {
-                // lop_loc: Set loading address
-                // Custom format: 3 tetras (12 bytes)
-                // Tetra 1: 0x9A 00 00 00
-                // Tetra 2: high 32 bits of address
-                // Tetra 3: low 32 bits of address
-                i += 4; // Skip the lop_loc tetra
-
-                if i + 8 <= data.len() {
-                    let high = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-                    let low =
-                        u32::from_be_bytes([data[i + 4], data[i + 5], data[i + 6], data[i + 7]]);
-                    current_addr = ((high as u64) << 32) | (low as u64);
-                    i += 8;
-                }
-            }
-            0x9D => {
-                // lop_pre: Preamble (skip)
-                i += 4;
-            }
-            0x9F => {
-                // lop_post: Postamble with entry point
-                // Entry point is 8 bytes following this tetra
-                i += 4;
-                if i + 8 <= data.len() {
-                    entry_point = u64::from_be_bytes([
-                        data[i],
-                        data[i + 1],
-                        data[i + 2],
-                        data[i + 3],
-                        data[i + 4],
-                        data[i + 5],
-                        data[i + 6],
-                        data[i + 7],
-                    ]);
-                    i += 8;
-                }
-            }
-            _ => {
-                // Unknown or literal data - treat as data at current address
-                mmix.write_byte(current_addr, data[i]);
-                current_addr += 1;
-                i += 1;
-            }
-        }
-    }
+    // Decode the MMO file and load into memory
+    let decoder = MmoDecoder::new(data);
+    let entry_point = decoder.decode(|addr, byte| {
+        mmix.write_byte(addr, byte);
+    });
 
     // Set PC to entry point from postamble
     mmix.set_pc(entry_point);

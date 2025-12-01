@@ -25,7 +25,6 @@ panic = "abort"
 [dependencies]
 pest = "2.7"
 pest_derive = "2.7"
-indexmap = "2.6"
 lyn = "0.1.0"  # Temporary, for old parser
 tracing = "0.1"
 regex = "1.10"
