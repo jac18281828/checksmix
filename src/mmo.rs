@@ -4,7 +4,34 @@
 //! The MMO format consists of records (not instructions) that specify how to load
 //! code and data into memory at arbitrary 64-bit addresses.
 //!
-//! Reference: MMIXWARE documentation by Donald Knuth
+//! ## Format Specification (from MMOTYPE)
+//!
+//! ### Record Structure
+//! - All records begin with MM escape code (0x98)
+//! - Format: `MM lopcode Y Z [data...]`
+//! - YZ = (Y << 8) | Z (16-bit value)
+//! - All multi-byte values are big-endian
+//!
+//! ### Normal Data Tetrabytes
+//! Any tetrabyte NOT preceded by MM (0x98) is loaded as data at cur_loc,
+//! then cur_loc += 4. This is the primary way to load instruction/data bytes.
+//!
+//! ### Lopcodes (verified against mmotype.pdf)
+//! - 0x00 (lop_quote): Quote single tetrabyte (YZ must = 1)
+//! - 0x01 (lop_loc): Set current location
+//! - 0x02 (lop_skip): Skip YZ bytes forward
+//! - 0x03 (lop_fixo): Absolute fixup
+//! - 0x04 (lop_fixr): Relative fixup
+//! - 0x05 (lop_fixrx): Extended relative fixup
+//! - 0x06 (lop_file): File name
+//! - 0x07 (lop_line): Source line number
+//! - 0x08 (lop_spec): Special data
+//! - 0x09 (lop_pre): Preamble (Y=version, typically 1)
+//! - 0x0A (lop_post): Postamble (Y=0, Z>=32)
+//! - 0x0B (lop_stab): Symbol table
+//! - 0x0C (lop_end): End of file (YZ=symbol table length)
+//!
+//! Reference: MMIXWARE documentation by Donald Knuth, mmotype.pdf
 
 use crate::mmixal::MMixInstruction;
 use std::collections::HashMap;
@@ -53,19 +80,19 @@ impl TryFrom<u8> for MmoRecordType {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(MmoRecordType::LopQuote),
-            1 => Ok(MmoRecordType::LopLoc),
-            2 => Ok(MmoRecordType::LopSkip),
-            3 => Ok(MmoRecordType::LopFixo),
-            4 => Ok(MmoRecordType::LopFixr),
-            5 => Ok(MmoRecordType::LopFixrx),
-            6 => Ok(MmoRecordType::LopFile),
-            7 => Ok(MmoRecordType::LopLine),
-            8 => Ok(MmoRecordType::LopSpec),
-            9 => Ok(MmoRecordType::LopPre),
-            10 => Ok(MmoRecordType::LopPost),
-            11 => Ok(MmoRecordType::LopStab),
-            12 => Ok(MmoRecordType::LopEnd),
+            0x0 => Ok(MmoRecordType::LopQuote),
+            0x1 => Ok(MmoRecordType::LopLoc),
+            0x2 => Ok(MmoRecordType::LopSkip),
+            0x3 => Ok(MmoRecordType::LopFixo),
+            0x4 => Ok(MmoRecordType::LopFixr),
+            0x5 => Ok(MmoRecordType::LopFixrx),
+            0x6 => Ok(MmoRecordType::LopFile),
+            0x7 => Ok(MmoRecordType::LopLine),
+            0x8 => Ok(MmoRecordType::LopSpec),
+            0x9 => Ok(MmoRecordType::LopPre),
+            0xa => Ok(MmoRecordType::LopPost),
+            0xb => Ok(MmoRecordType::LopStab),
+            0xc => Ok(MmoRecordType::LopEnd),
             _ => Err(format!("Unknown MMO lopcode: 0x{:02X}", value)),
         }
     }
