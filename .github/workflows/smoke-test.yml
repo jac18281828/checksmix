@@ -1,0 +1,80 @@
+name: All Instruction Smoke Test
+
+on:
+  push:
+    branches: [main, mmix]
+  pull_request:
+    branches: [main, mmix]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke-test:
+    name: MMIX Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-smoke-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Assemble all_instructions_test
+        id: assemble
+        run: |
+          cargo run --release --bin mmixasm -- examples/all_instructions_test.mms
+          echo "Assembly completed"
+
+      - name: Verify object file created
+        run: |
+          if [ ! -f examples/all_instructions_test.mmo ]; then
+            echo "Error: Object file not created"
+            exit 1
+          fi
+          echo "Object file verified"
+
+      - name: Run all_instructions_test
+        id: run_test
+        run: |
+          output=$(cargo run --release --bin checksmix -- examples/all_instructions_test.mms 2>&1)
+          echo "$output"
+          
+          # Check if the output contains "All tests passed!"
+          if echo "$output" | grep -q "All tests passed!"; then
+            echo "✓ Test passed successfully"
+            exit 0
+          else
+            echo "✗ Test did not pass"
+            echo "Expected: 'All tests passed!'"
+            echo "Got output:"
+            echo "$output"
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: |
+            examples/all_instructions_test.mmo
