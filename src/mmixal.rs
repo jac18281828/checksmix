@@ -132,6 +132,11 @@ pub enum MMixInstruction {
     SFLOTI(u8, u8, u8),  // SFLOTI $X, $Y, Z - convert fixed to short float immediate
     SFLOTU(u8, u8, u8),  // SFLOTU $X, $Y, $Z - convert fixed unsigned to short float
     SFLOTUI(u8, u8, u8), // SFLOTUI $X, $Y, Z - convert fixed unsigned to short float immediate
+    FMUL(u8, u8, u8),    // FMUL $X, $Y, $Z - floating multiply
+    FDIV(u8, u8, u8),    // FDIV $X, $Y, $Z - floating divide
+    FREM(u8, u8, u8),    // FREM $X, $Y, $Z - floating remainder
+    FSQRT(u8, u8, u8),   // FSQRT $X, $Y, $Z - floating square root
+    FINT(u8, u8, u8),    // FINT $X, $Y, $Z - floating round to integer
 
     // Comparison instructions
     CMP(u8, u8, u8),   // CMP $X, $Y, $Z - compare signed
@@ -189,26 +194,26 @@ pub enum MMixInstruction {
 
     // Branch instructions
     JMP(u32),          // JMP offset (24-bit)
-    JE(u8, u8),        // JE $X, offset
-    JNE(u8, u8),       // JNE $X, offset
-    JL(u8, u8),        // JL $X, offset
-    JG(u8, u8),        // JG $X, offset
-    BN(u8, u8),        // BN $X, offset - branch if negative
-    BNB(u8, u8),       // BNB $X, offset - branch if negative backward
-    BZ(u8, u8),        // BZ $X, offset - branch if zero
-    BZB(u8, u8),       // BZB $X, offset - branch if zero backward
-    BP(u8, u8),        // BP $X, offset - branch if positive
-    BPB(u8, u8),       // BPB $X, offset - branch if positive backward
-    BOD(u8, u8),       // BOD $X, offset - branch if odd
-    BODB(u8, u8),      // BODB $X, offset - branch if odd backward
-    BNN(u8, u8),       // BNN $X, offset - branch if non-negative
-    BNNB(u8, u8),      // BNNB $X, offset - branch if non-negative backward
-    BNZ(u8, u8),       // BNZ $X, offset - branch if non-zero
-    BNZB(u8, u8),      // BNZB $X, offset - branch if non-zero backward
-    BNP(u8, u8),       // BNP $X, offset - branch if non-positive
-    BNPB(u8, u8),      // BNPB $X, offset - branch if non-positive backward
-    BEV(u8, u8),       // BEV $X, offset - branch if even
-    BEVB(u8, u8),      // BEVB $X, offset - branch if even backward
+    JE(u8, u16),       // JE $X, offset
+    JNE(u8, u16),      // JNE $X, offset
+    JL(u8, u16),       // JL $X, offset
+    JG(u8, u16),       // JG $X, offset
+    BN(u8, u16),       // BN $X, offset - branch if negative
+    BNB(u8, u16),      // BNB $X, offset - branch if negative backward
+    BZ(u8, u16),       // BZ $X, offset - branch if zero
+    BZB(u8, u16),      // BZB $X, offset - branch if zero backward
+    BP(u8, u16),       // BP $X, offset - branch if positive
+    BPB(u8, u16),      // BPB $X, offset - branch if positive backward
+    BOD(u8, u16),      // BOD $X, offset - branch if odd
+    BODB(u8, u16),     // BODB $X, offset - branch if odd backward
+    BNN(u8, u16),      // BNN $X, offset - branch if non-negative
+    BNNB(u8, u16),     // BNNB $X, offset - branch if non-negative backward
+    BNZ(u8, u16),      // BNZ $X, offset - branch if non-zero
+    BNZB(u8, u16),     // BNZB $X, offset - branch if non-zero backward
+    BNP(u8, u16),      // BNP $X, offset - branch if non-positive
+    BNPB(u8, u16),     // BNPB $X, offset - branch if non-positive backward
+    BEV(u8, u16),      // BEV $X, offset - branch if even
+    BEVB(u8, u16),     // BEVB $X, offset - branch if even backward
     PBN(u8, u8, u8),   // PBN $X, Y, Z - probable branch negative (Y,Z = offset)
     PBNB(u8, u8, u8),  // PBNB $X, Y, Z - probable branch negative backward
     PBZ(u8, u8, u8),   // PBZ $X, Y, Z - probable branch zero
@@ -305,6 +310,7 @@ pub enum MMixInstruction {
 
 pub struct MMixAssembler {
     source: String,
+    filename: String,
     pub labels: HashMap<String, u64>,
     pub symbols: HashMap<String, u64>, // For IS directive - symbolic names
     pub instructions: Vec<(u64, MMixInstruction)>,
@@ -381,7 +387,7 @@ impl MMixAssembler {
         debug!("Preprocessed source:\n{}", result);
         result
     }
-    pub fn new(source: &str) -> Self {
+    pub fn new(source: &str, filename: &str) -> Self {
         let mut symbols = HashMap::new();
 
         // Standard MMIXAL predefined symbols
@@ -413,11 +419,58 @@ impl MMixAssembler {
 
         Self {
             source: preprocessed_source,
+            filename: filename.to_string(),
             labels: HashMap::new(),
             symbols,
             instructions: Vec::new(),
             current_addr: 0,
         }
+    }
+
+    /// Format Pest parse errors in a user-friendly way
+    fn format_parse_error(error: &pest::error::Error<Rule>, filename: &str) -> String {
+        use pest::error::LineColLocation;
+
+        let (line, col) = match error.line_col {
+            LineColLocation::Pos((l, c)) => (l, c),
+            LineColLocation::Span((l, c), _) => (l, c),
+        };
+
+        // Create a user-friendly error message based on what was expected
+        let expected_msg = match &error.variant {
+            pest::error::ErrorVariant::ParsingError { positives, .. } => {
+                if positives.is_empty() {
+                    "valid MMIX instruction or directive".to_string()
+                } else {
+                    // Try to make the expected rules more user-friendly
+                    let friendly: Vec<String> = positives
+                        .iter()
+                        .map(|r| match r {
+                            Rule::instruction => "instruction".to_string(),
+                            Rule::directive => "directive".to_string(),
+                            Rule::directive_is => "IS directive (symbol definition)".to_string(),
+                            Rule::directive_loc => "LOC directive".to_string(),
+                            Rule::register => "register (e.g., $0, $1, $255)".to_string(),
+                            Rule::expr_value => "number or expression".to_string(),
+                            Rule::identifier => "label or symbol name".to_string(),
+                            _ => format!("{:?}", r),
+                        })
+                        .collect();
+
+                    if friendly.len() == 1 {
+                        friendly[0].clone()
+                    } else {
+                        format!("one of: {}", friendly.join(", "))
+                    }
+                }
+            }
+            pest::error::ErrorVariant::CustomError { message } => message.clone(),
+        };
+
+        format!(
+            "{}:{}:{}: syntax error: expected {}",
+            filename, line, col, expected_msg
+        )
     }
 
     #[instrument(skip(self), fields(source_len = self.source.len()))]
@@ -448,7 +501,10 @@ impl MMixAssembler {
         debug!("Pass 1: Collecting labels and symbols");
 
         // Pass 1: Scan for labels and symbols
-        let pairs = MMixalParser::parse(Rule::program, &source).map_err(|e| format!("{}", e))?;
+        let pairs = MMixalParser::parse(Rule::program, &source).map_err(|e| {
+            // Format Pest error in a user-friendly way
+            Self::format_parse_error(&e, &self.filename)
+        })?;
         for pair in pairs {
             if pair.as_rule() == Rule::program {
                 for line_pair in pair.into_inner() {
@@ -738,6 +794,8 @@ impl MMixAssembler {
             Rule::inst_lda_ri => self.parse_inst_lda_ri(inner),
             Rule::inst_arith_rrr => self.parse_inst_arith_rrr(inner),
             Rule::inst_arith_rri => self.parse_inst_arith_rri(inner),
+            Rule::inst_float_rrr => self.parse_inst_float_rrr(inner),
+            Rule::inst_float_rri => self.parse_inst_float_rri(inner),
             Rule::inst_neg_rrr => self.parse_inst_neg_rrr(inner),
             Rule::inst_neg_rri => self.parse_inst_neg_rri(inner),
             Rule::inst_bitwise_rrr => self.parse_inst_bitwise_rrr(inner),
@@ -1240,6 +1298,66 @@ impl MMixAssembler {
         }
     }
 
+    fn parse_inst_float_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "FCMP" => Ok(MMixInstruction::FCMP(x, y, z)),
+            "FUN" => Ok(MMixInstruction::FUN(x, y, z)),
+            "FEQL" => Ok(MMixInstruction::FEQL(x, y, z)),
+            "FADD" => Ok(MMixInstruction::FADD(x, y, z)),
+            "FSUB" => Ok(MMixInstruction::FSUB(x, y, z)),
+            "FMUL" => Ok(MMixInstruction::FMUL(x, y, z)),
+            "FDIV" => Ok(MMixInstruction::FDIV(x, y, z)),
+            "FREM" => Ok(MMixInstruction::FREM(x, y, z)),
+            "FSQRT" => Ok(MMixInstruction::FSQRT(x, y, z)),
+            "FINT" => Ok(MMixInstruction::FINT(x, y, z)),
+            "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
+            "FIXU" => Ok(MMixInstruction::FIXU(x, y, z)),
+            "FLOT" => Ok(MMixInstruction::FLOT(x, y, z)),
+            "FLOTU" => Ok(MMixInstruction::FLOTU(x, y, z)),
+            "SFLOT" => Ok(MMixInstruction::SFLOT(x, y, z)),
+            "SFLOTU" => Ok(MMixInstruction::SFLOTU(x, y, z)),
+            _ => Err(format!(
+                "Unknown floating point instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_float_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
+            "FLOTUI" => Ok(MMixInstruction::FLOTUI(x, y, z)),
+            "SFLOTI" => Ok(MMixInstruction::SFLOTI(x, y, z)),
+            "SFLOTUI" => Ok(MMixInstruction::SFLOTUI(x, y, z)),
+            _ => Err(format!(
+                "Unknown floating point immediate instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
     fn parse_inst_bitwise_rrr(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -1509,7 +1627,13 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let offset = self.parse_number(ops.next().unwrap())? as u8;
+        let target = self.parse_number(ops.next().unwrap())?;
+
+        // Calculate relative offset from current instruction
+        // Offset is (target - PC) / 4 as a signed 16-bit value
+        let pc = self.current_addr;
+        let offset_bytes = (target as i64 - pc as i64) as i16;
+        let offset = ((offset_bytes / 4) as i16) as u16;
 
         match mnem.as_str().to_uppercase().as_str() {
             "JE" => Ok(MMixInstruction::JE(x, offset)),
@@ -2282,7 +2406,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_label() {
-        let mut asm = MMixAssembler::new("LOOP: HALT");
+        let mut asm = MMixAssembler::new("LOOP: HALT", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.labels.get("LOOP"), Some(&0));
         assert_eq!(asm.instructions.len(), 1);
@@ -2290,7 +2414,7 @@ mod tests {
 
     #[test]
     fn test_parse_octa_directive() {
-        let mut asm = MMixAssembler::new("OCTA #123456789ABCDEF0");
+        let mut asm = MMixAssembler::new("OCTA #123456789ABCDEF0", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions.len(), 1);
         assert_eq!(
@@ -2301,7 +2425,7 @@ mod tests {
 
     #[test]
     fn test_parse_node_structure() {
-        let mut asm = MMixAssembler::new("NODE: OCTA 42\n      OCTA 0");
+        let mut asm = MMixAssembler::new("NODE: OCTA 42\n      OCTA 0", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.labels.get("NODE"), Some(&0));
         assert_eq!(asm.instructions.len(), 2);
@@ -2309,7 +2433,7 @@ mod tests {
 
     #[test]
     fn test_parse_set() {
-        let mut asm = MMixAssembler::new("SET $2, 10");
+        let mut asm = MMixAssembler::new("SET $2, 10", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
     }
@@ -2317,63 +2441,63 @@ mod tests {
     // Bitwise operation tests
     #[test]
     fn test_parse_and() {
-        let mut asm = MMixAssembler::new("AND $1, $2, $3");
+        let mut asm = MMixAssembler::new("AND $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::AND(1, 2, 3));
     }
 
     #[test]
     fn test_parse_andi() {
-        let mut asm = MMixAssembler::new("ANDI $1, $2, #FF");
+        let mut asm = MMixAssembler::new("ANDI $1, $2, #FF", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 0xFF));
     }
 
     #[test]
     fn test_parse_or() {
-        let mut asm = MMixAssembler::new("OR $10, $20, $30");
+        let mut asm = MMixAssembler::new("OR $10, $20, $30", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::OR(10, 20, 30));
     }
 
     #[test]
     fn test_parse_xor() {
-        let mut asm = MMixAssembler::new("XOR $5, $6, $7");
+        let mut asm = MMixAssembler::new("XOR $5, $6, $7", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::XOR(5, 6, 7));
     }
 
     #[test]
     fn test_parse_andn() {
-        let mut asm = MMixAssembler::new("ANDN $1, $2, $3");
+        let mut asm = MMixAssembler::new("ANDN $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDN(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nand() {
-        let mut asm = MMixAssembler::new("NAND $1, $2, $3");
+        let mut asm = MMixAssembler::new("NAND $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NAND(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nor() {
-        let mut asm = MMixAssembler::new("NOR $1, $2, $3");
+        let mut asm = MMixAssembler::new("NOR $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_nxor() {
-        let mut asm = MMixAssembler::new("NXOR $1, $2, $3");
+        let mut asm = MMixAssembler::new("NXOR $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::NXOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mux() {
-        let mut asm = MMixAssembler::new("MUX $1, $2, $3");
+        let mut asm = MMixAssembler::new("MUX $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MUX(1, 2, 3));
     }
@@ -2381,98 +2505,98 @@ mod tests {
     // Bit fiddling operations tests (§11-12)
     #[test]
     fn test_parse_bdif() {
-        let mut asm = MMixAssembler::new("BDIF $1, $2, $3");
+        let mut asm = MMixAssembler::new("BDIF $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::BDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_bdifi() {
-        let mut asm = MMixAssembler::new("BDIFI $1, $2, #10");
+        let mut asm = MMixAssembler::new("BDIFI $1, $2, #10", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::BDIFI(1, 2, 0x10));
     }
 
     #[test]
     fn test_parse_wdif() {
-        let mut asm = MMixAssembler::new("WDIF $1, $2, $3");
+        let mut asm = MMixAssembler::new("WDIF $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::WDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_wdifi() {
-        let mut asm = MMixAssembler::new("WDIFI $1, $2, 100");
+        let mut asm = MMixAssembler::new("WDIFI $1, $2, 100", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::WDIFI(1, 2, 100));
     }
 
     #[test]
     fn test_parse_tdif() {
-        let mut asm = MMixAssembler::new("TDIF $1, $2, $3");
+        let mut asm = MMixAssembler::new("TDIF $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::TDIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_tdifi() {
-        let mut asm = MMixAssembler::new("TDIFI $1, $2, 50");
+        let mut asm = MMixAssembler::new("TDIFI $1, $2, 50", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::TDIFI(1, 2, 50));
     }
 
     #[test]
     fn test_parse_odif() {
-        let mut asm = MMixAssembler::new("ODIF $1, $2, $3");
+        let mut asm = MMixAssembler::new("ODIF $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ODIF(1, 2, 3));
     }
 
     #[test]
     fn test_parse_odifi() {
-        let mut asm = MMixAssembler::new("ODIFI $1, $2, 255");
+        let mut asm = MMixAssembler::new("ODIFI $1, $2, 255", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ODIFI(1, 2, 255));
     }
 
     #[test]
     fn test_parse_sadd() {
-        let mut asm = MMixAssembler::new("SADD $1, $2, $3");
+        let mut asm = MMixAssembler::new("SADD $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SADD(1, 2, 3));
     }
 
     #[test]
     fn test_parse_saddi() {
-        let mut asm = MMixAssembler::new("SADDI $1, $2, 0");
+        let mut asm = MMixAssembler::new("SADDI $1, $2, 0", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SADDI(1, 2, 0));
     }
 
     #[test]
     fn test_parse_mor() {
-        let mut asm = MMixAssembler::new("MOR $1, $2, $3");
+        let mut asm = MMixAssembler::new("MOR $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mori() {
-        let mut asm = MMixAssembler::new("MORI $1, $2, 128");
+        let mut asm = MMixAssembler::new("MORI $1, $2, 128", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MORI(1, 2, 128));
     }
 
     #[test]
     fn test_parse_mxor() {
-        let mut asm = MMixAssembler::new("MXOR $1, $2, $3");
+        let mut asm = MMixAssembler::new("MXOR $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MXOR(1, 2, 3));
     }
 
     #[test]
     fn test_parse_mxori() {
-        let mut asm = MMixAssembler::new("MXORI $1, $2, 64");
+        let mut asm = MMixAssembler::new("MXORI $1, $2, 64", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::MXORI(1, 2, 64));
     }
@@ -2480,56 +2604,56 @@ mod tests {
     // Shift instruction parsing tests (§14)
     #[test]
     fn test_parse_sl() {
-        let mut asm = MMixAssembler::new("SL $3, $1, $2");
+        let mut asm = MMixAssembler::new("SL $3, $1, $2", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SL(3, 1, 2));
     }
 
     #[test]
     fn test_parse_sli() {
-        let mut asm = MMixAssembler::new("SLI $3, $1, 8");
+        let mut asm = MMixAssembler::new("SLI $3, $1, 8", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLI(3, 1, 8));
     }
 
     #[test]
     fn test_parse_slu() {
-        let mut asm = MMixAssembler::new("SLU $10, $20, $30");
+        let mut asm = MMixAssembler::new("SLU $10, $20, $30", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLU(10, 20, 30));
     }
 
     #[test]
     fn test_parse_slui() {
-        let mut asm = MMixAssembler::new("SLUI $1, $2, 16");
+        let mut asm = MMixAssembler::new("SLUI $1, $2, 16", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SLUI(1, 2, 16));
     }
 
     #[test]
     fn test_parse_sr() {
-        let mut asm = MMixAssembler::new("SR $5, $6, $7");
+        let mut asm = MMixAssembler::new("SR $5, $6, $7", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SR(5, 6, 7));
     }
 
     #[test]
     fn test_parse_sri() {
-        let mut asm = MMixAssembler::new("SRI $3, $1, 4");
+        let mut asm = MMixAssembler::new("SRI $3, $1, 4", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRI(3, 1, 4));
     }
 
     #[test]
     fn test_parse_sru() {
-        let mut asm = MMixAssembler::new("SRU $8, $9, $10");
+        let mut asm = MMixAssembler::new("SRU $8, $9, $10", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRU(8, 9, 10));
     }
 
     #[test]
     fn test_parse_srui() {
-        let mut asm = MMixAssembler::new("SRUI $3, $1, 1");
+        let mut asm = MMixAssembler::new("SRUI $3, $1, 1", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRUI(3, 1, 1));
     }

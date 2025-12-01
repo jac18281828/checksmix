@@ -113,28 +113,28 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             bytes.extend_from_slice(&[0x37, *x, *y, *z]);
         }
         MMixInstruction::MUL(x, y, z) => {
-            bytes.extend_from_slice(&[0x10, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x18, *x, *y, *z]);
         }
         MMixInstruction::MULI(x, y, z) => {
-            bytes.extend_from_slice(&[0x11, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x19, *x, *y, *z]);
         }
         MMixInstruction::MULU(x, y, z) => {
-            bytes.extend_from_slice(&[0x12, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1A, *x, *y, *z]);
         }
         MMixInstruction::MULUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x13, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1B, *x, *y, *z]);
         }
         MMixInstruction::DIV(x, y, z) => {
-            bytes.extend_from_slice(&[0x14, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1C, *x, *y, *z]);
         }
         MMixInstruction::DIVI(x, y, z) => {
-            bytes.extend_from_slice(&[0x15, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1D, *x, *y, *z]);
         }
         MMixInstruction::DIVU(x, y, z) => {
-            bytes.extend_from_slice(&[0x16, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1E, *x, *y, *z]);
         }
         MMixInstruction::DIVUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x17, *x, *y, *z]);
+            bytes.extend_from_slice(&[0x1F, *x, *y, *z]);
         }
         // Comparison instructions
         MMixInstruction::CMP(x, y, z) => {
@@ -559,65 +559,105 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         }
         // Branch instructions
         MMixInstruction::BN(x, offset) => {
-            bytes.extend_from_slice(&[0x40, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x40, *x, y, z]);
         }
         MMixInstruction::BNB(x, offset) => {
-            bytes.extend_from_slice(&[0x41, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x41, *x, y, z]);
         }
         MMixInstruction::BZ(x, offset) => {
-            bytes.extend_from_slice(&[0x42, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x42, *x, y, z]);
         }
         MMixInstruction::BZB(x, offset) => {
-            bytes.extend_from_slice(&[0x43, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x43, *x, y, z]);
         }
         MMixInstruction::BP(x, offset) => {
-            bytes.extend_from_slice(&[0x44, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x44, *x, y, z]);
         }
         MMixInstruction::BPB(x, offset) => {
-            bytes.extend_from_slice(&[0x45, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x45, *x, y, z]);
         }
         MMixInstruction::BOD(x, offset) => {
-            bytes.extend_from_slice(&[0x46, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x46, *x, y, z]);
         }
         MMixInstruction::BODB(x, offset) => {
-            bytes.extend_from_slice(&[0x47, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x47, *x, y, z]);
         }
         MMixInstruction::BNN(x, offset) => {
-            bytes.extend_from_slice(&[0x48, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x48, *x, y, z]);
         }
         MMixInstruction::BNNB(x, offset) => {
-            bytes.extend_from_slice(&[0x49, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x49, *x, y, z]);
         }
         MMixInstruction::BNZ(x, offset) => {
-            bytes.extend_from_slice(&[0x4A, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4A, *x, y, z]);
         }
         MMixInstruction::BNZB(x, offset) => {
-            bytes.extend_from_slice(&[0x4B, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4B, *x, y, z]);
         }
         MMixInstruction::BNP(x, offset) => {
-            bytes.extend_from_slice(&[0x4C, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4C, *x, y, z]);
         }
         MMixInstruction::BNPB(x, offset) => {
-            bytes.extend_from_slice(&[0x4D, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4D, *x, y, z]);
         }
         MMixInstruction::BEV(x, offset) => {
-            bytes.extend_from_slice(&[0x4E, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4E, *x, y, z]);
         }
         MMixInstruction::BEVB(x, offset) => {
-            bytes.extend_from_slice(&[0x4F, *x, 0, *offset]);
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4F, *x, y, z]);
         }
         // Pseudo-branch instructions (map to conditional branches with inverted conditions)
         MMixInstruction::JE(x, offset) => {
-            bytes.extend_from_slice(&[0x42, *x, 0, *offset]); // BZ
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x42, *x, y, z]); // BZ
         }
         MMixInstruction::JNE(x, offset) => {
-            bytes.extend_from_slice(&[0x4A, *x, 0, *offset]); // BNZ
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x4A, *x, y, z]); // BNZ
         }
         MMixInstruction::JL(x, offset) => {
-            bytes.extend_from_slice(&[0x40, *x, 0, *offset]); // BN
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x40, *x, y, z]); // BN
         }
         MMixInstruction::JG(x, offset) => {
-            bytes.extend_from_slice(&[0x44, *x, 0, *offset]); // BP
+            let y = (offset >> 8) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0x44, *x, y, z]); // BP
         }
         // System control instructions
         MMixInstruction::TRIP(x, y, z) => {
@@ -683,6 +723,21 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         }
         MMixInstruction::SFLOTUI(x, y, z) => {
             bytes.extend_from_slice(&[0x0F, *x, *y, *z]);
+        }
+        MMixInstruction::FMUL(x, y, z) => {
+            bytes.extend_from_slice(&[0x10, *x, *y, *z]);
+        }
+        MMixInstruction::FDIV(x, y, z) => {
+            bytes.extend_from_slice(&[0x14, *x, *y, *z]);
+        }
+        MMixInstruction::FSQRT(x, y, z) => {
+            bytes.extend_from_slice(&[0x15, *x, *y, *z]);
+        }
+        MMixInstruction::FREM(x, y, z) => {
+            bytes.extend_from_slice(&[0x16, *x, *y, *z]);
+        }
+        MMixInstruction::FINT(x, y, z) => {
+            bytes.extend_from_slice(&[0x17, *x, *y, *z]);
         }
         // Conditional set instructions
         MMixInstruction::CSN(x, y, z) => {
@@ -2129,45 +2184,45 @@ mod tests {
 
     #[test]
     fn test_multiply_divide_encodings() {
-        // MUL - 0x10
+        // MUL - 0x18
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::MUL(1, 2, 3)),
-            vec![0x10, 1, 2, 3]
+            vec![0x18, 1, 2, 3]
         );
-        // MULI - 0x11
+        // MULI - 0x19
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::MULI(1, 2, 3)),
-            vec![0x11, 1, 2, 3]
+            vec![0x19, 1, 2, 3]
         );
-        // MULU - 0x12
+        // MULU - 0x1A
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::MULU(1, 2, 3)),
-            vec![0x12, 1, 2, 3]
+            vec![0x1A, 1, 2, 3]
         );
-        // MULUI - 0x13
+        // MULUI - 0x1B
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::MULUI(1, 2, 3)),
-            vec![0x13, 1, 2, 3]
+            vec![0x1B, 1, 2, 3]
         );
-        // DIV - 0x14
+        // DIV - 0x1C
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::DIV(1, 2, 3)),
-            vec![0x14, 1, 2, 3]
+            vec![0x1C, 1, 2, 3]
         );
-        // DIVI - 0x15
+        // DIVI - 0x1D
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::DIVI(1, 2, 3)),
-            vec![0x15, 1, 2, 3]
+            vec![0x1D, 1, 2, 3]
         );
-        // DIVU - 0x16
+        // DIVU - 0x1E
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::DIVU(1, 2, 3)),
-            vec![0x16, 1, 2, 3]
+            vec![0x1E, 1, 2, 3]
         );
-        // DIVUI - 0x17
+        // DIVUI - 0x1F
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::DIVUI(1, 2, 3)),
-            vec![0x17, 1, 2, 3]
+            vec![0x1F, 1, 2, 3]
         );
     }
 

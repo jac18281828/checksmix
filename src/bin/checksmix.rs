@@ -99,7 +99,7 @@ fn run_mms(filename: &str) {
     println!("=== Parsing assembly from: {} ===", filename);
     println!();
 
-    let mut assembler = MMixAssembler::new(&input);
+    let mut assembler = MMixAssembler::new(&input, filename);
 
     if let Err(e) = assembler.parse() {
         eprintln!("Error: {}", e);

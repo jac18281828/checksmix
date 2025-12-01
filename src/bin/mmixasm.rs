@@ -42,7 +42,7 @@ fn main() {
     println!("Assembling: {}", input_file);
 
     // Parse the assembly
-    let mut assembler = MMixAssembler::new(&source);
+    let mut assembler = MMixAssembler::new(&source, &input_file);
 
     if let Err(e) = assembler.parse() {
         // Format error in standard assembler format: filename:line:column: message
@@ -71,6 +71,12 @@ fn main() {
     eprintln!("Instructions ({}):", assembler.instructions.len());
     for (addr, inst) in &assembler.instructions {
         eprintln!("  0x{:X}: {:?}", addr, inst);
+    }
+
+    // Check if there are any instructions to assemble
+    if assembler.instructions.is_empty() {
+        eprintln!("Error: No instructions to assemble");
+        process::exit(1);
     }
 
     // Generate object code

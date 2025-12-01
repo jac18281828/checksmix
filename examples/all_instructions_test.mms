@@ -4,13 +4,15 @@
 
         LOC     #100
 
-% Special registers
-rM      IS      0       % Multiplication register
+% Special registers (MMIX standard numbering)
+rB      IS      0       % Bootstrap register
 rD      IS      1       % Dividend register  
 rE      IS      2       % Epsilon register
 rH      IS      3       % Himult register
 rJ      IS      4       % Jump register
+rM      IS      5       % Multiplex mask register
 rR      IS      6       % Remainder register
+rA      IS      21      % Arithmetic status register
 
 % Test counter and expected values
 Expect  IS      $1      % Expected value
@@ -540,7 +542,7 @@ Test43  ADDUI   TestNum,TestNum,1       % Increment test counter
         16ADDUI Result,$10,3
         SET     Expect,115      % 7*16 + 3 = 115
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test44
         JMP     TestFail
 
 % ========================================
@@ -616,7 +618,7 @@ Test50  ADDUI   TestNum,TestNum,1       % Increment test counter
         JMP     Test50Start
 Test50End       SET     Expect,#BABE
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test51
         JMP     TestFail
 Test50Start     SET     Result,#BABE
         JMP     Test50End
@@ -625,10 +627,10 @@ Test50Start     SET     Result,#BABE
 % Test 51: MUL - Multiply
 % ========================================
 Test51  ADDUI   TestNum,TestNum,1
-        SETL    $10,5
-        SETL    $11,7
+        SET     $10,5           % Clear and set to 5
+        SET     $11,7           % Clear and set to 7
         MUL     Result,$10,$11
-        SETL    Expect,35
+        SET    Expect,35
         CMP     Temp,Result,Expect
         PBZ     Temp,Test52
         JMP     TestFail
@@ -637,10 +639,10 @@ Test51  ADDUI   TestNum,TestNum,1
 % Test 52: MULU - Multiply unsigned
 % ========================================
 Test52  ADDUI   TestNum,TestNum,1
-        SETL    $10,100
-        SETL    $11,200
+        SET     $10,100
+        SET     $11,200
         MULU    Result,$10,$11
-        SETL    Expect,20000
+        SET     Expect,20000
         CMP     Temp,Result,Expect
         PBZ     Temp,Test53
         JMP     TestFail
@@ -649,10 +651,10 @@ Test52  ADDUI   TestNum,TestNum,1
 % Test 53: DIV - Divide
 % ========================================
 Test53  ADDUI   TestNum,TestNum,1
-        SETL    $10,100
-        SETL    $11,5
+        SET     $10,100
+        SET     $11,5
         DIV     Result,$10,$11
-        SETL    Expect,20
+        SET     Expect,20
         CMP     Temp,Result,Expect
         PBZ     Temp,Test54
         JMP     TestFail
@@ -661,10 +663,10 @@ Test53  ADDUI   TestNum,TestNum,1
 % Test 54: DIVU - Divide unsigned
 % ========================================
 Test54  ADDUI   TestNum,TestNum,1
-        SETL    $10,1000
-        SETL    $11,10
+        SET     $10,1000
+        SET     $11,10
         DIVU    Result,$10,$11
-        SETL    Expect,100
+        SET     Expect,100
         CMP     Temp,Result,Expect
         PBZ     Temp,Test55
         JMP     TestFail
@@ -673,9 +675,9 @@ Test54  ADDUI   TestNum,TestNum,1
 % Test 55: NEG - Negate
 % ========================================
 Test55  ADDUI   TestNum,TestNum,1
-        SETL    $10,42
+        SET     $10,42
         NEG     Result,0,$10
-        SETL    Expect,0
+        SET     Expect,0
         SUBU    Expect,Expect,$10
         CMP     Temp,Result,Expect
         PBZ     Temp,Test56
@@ -685,9 +687,9 @@ Test55  ADDUI   TestNum,TestNum,1
 % Test 56: NEGU - Negate unsigned
 % ========================================
 Test56  ADDUI   TestNum,TestNum,1
-        SETL    $10,100
+        SET     $10,100
         NEGU    Result,0,$10
-        SETL    Expect,0
+        SET     Expect,0
         SUBU    Expect,Expect,$10
         CMP     Temp,Result,Expect
         PBZ     Temp,Test57
@@ -700,7 +702,7 @@ Test57  ADDUI   TestNum,TestNum,1
         SET     $10,#FF00
         SET     $11,#0F0F
         ORN     Result,$10,$11
-        SET     Expect,#FFF0
+        SET     Expect,#FFFFFFFFFFFFFFF0     % ~0x0F0F = 0xFFFFFFFFFFFFF0F0, OR with 0xFF00
         CMP     Temp,Result,Expect
         PBZ     Temp,Test58
         JMP     TestFail
@@ -712,10 +714,9 @@ Test58  ADDUI   TestNum,TestNum,1
         SET     $10,#AAAA
         SET     $11,#5555
         SET     $12,#FFFF
-        MUX     Result,$10,$11
-        GET     $13,rM
-        MUX     Result,$12,$13
-        SET     Expect,#5555
+        PUT     rM,$12          % Set mask to 0xFFFF
+        MUX     Result,$10,$11  % Select from $10 where mask is 1, $11 where mask is 0
+        SET     Expect,#AAAA    % Mask is all 1s, so get $10
         CMP     Temp,Result,Expect
         PBZ     Temp,Test59
         JMP     TestFail
@@ -757,23 +758,23 @@ Test61  ADDUI   TestNum,TestNum,1
         JMP     TestFail
 
 % ========================================
-% Test 62: MOR - Multiple OR
+% Test 62: MOR - Mix and Match
 % ========================================
 Test62  ADDUI   TestNum,TestNum,1
-        SET     $10,#0101010101010101
-        MOR     Result,$10,Zero
-        SETL    Expect,#FF
+        SET     $10,#0101010101010101  % Each byte is 0x01
+        MORI    Result,$10,#FF         % OR all 8 bytes together
+        SET     Expect,#01             % Result: 0x01 OR 0x01 OR ... = 0x01
         CMP     Temp,Result,Expect
         PBZ     Temp,Test63
         JMP     TestFail
 
 % ========================================
-% Test 63: MXOR - Multiple XOR
+% Test 63: MXOR - Multiple XOR (Boolean matrix mult with XOR)
 % ========================================
 Test63  ADDUI   TestNum,TestNum,1
-        SET     $10,#FFFFFFFFFFFFFFFF
-        MXOR    Result,$10,Zero
-        SETL    Expect,0
+        SET     $10,#0101010101010101  % Each byte is 0x01
+        MXORI   Result,$10,#FF         % XOR all 8 bytes together
+        SET     Expect,0               % 0x01 XOR 0x01 XOR ... (8 times) = 0
         CMP     Temp,Result,Expect
         PBZ     Temp,Test64
         JMP     TestFail
@@ -782,10 +783,10 @@ Test63  ADDUI   TestNum,TestNum,1
 % Test 64: SLU - Shift left unsigned
 % ========================================
 Test64  ADDUI   TestNum,TestNum,1
-        SETL    $10,1
-        SETL    $11,8
+        SET     $10,1
+        SET     $11,8
         SLU     Result,$10,$11
-        SETL    Expect,256
+        SET    Expect,256
         CMP     Temp,Result,Expect
         PBZ     Temp,Test65
         JMP     TestFail
@@ -794,10 +795,10 @@ Test64  ADDUI   TestNum,TestNum,1
 % Test 65: SRU - Shift right unsigned
 % ========================================
 Test65  ADDUI   TestNum,TestNum,1
-        SETL    $10,256
-        SETL    $11,4
+        SET     $10,256
+        SET     $11,4
         SRU     Result,$10,$11
-        SETL    Expect,16
+        SET    Expect,16
         CMP     Temp,Result,Expect
         PBZ     Temp,Test66
         JMP     TestFail
@@ -872,9 +873,9 @@ Test71  ADDUI   TestNum,TestNum,1
 % Test 72: ORL - OR low wyde
 % ========================================
 Test72  ADDUI   TestNum,TestNum,1
-        SETL    Result,#DD00
+        SET     Result,#DD00
         ORL     Result,#00FF
-        SETL    Expect,#DDFF
+        SET     Expect,#DDFF
         CMP     Temp,Result,Expect
         PBZ     Temp,Test73
         JMP     TestFail
@@ -918,7 +919,8 @@ Test75  ADDUI   TestNum,TestNum,1
 Test76  ADDUI   TestNum,TestNum,1
         SET     Result,#FFFFFFFFFFFFFFFF
         ANDNL   Result,#00FF
-        SET     Expect,#FFFFFFFFFFFF00
+        SET     Expect,#FFFFFFFFFFFFFFFF
+        ANDNL   Expect,#00FF            % Same operation to get expected value
         CMP     Temp,Result,Expect
         PBZ     Temp,Test77
         JMP     TestFail
@@ -927,11 +929,11 @@ Test76  ADDUI   TestNum,TestNum,1
 % Test 77: BZ - Branch if zero (taken)
 % ========================================
 Test77  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    Result,99
+        SET     $10,0
+        SET     Result,99
         BZ      $10,Test77Skip
-        SETL    Result,#DEAD
-Test77Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test77Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test78
         JMP     TestFail
@@ -940,11 +942,11 @@ Test77Skip      SETL    Expect,99
 % Test 78: BNZ - Branch if non-zero (taken)
 % ========================================
 Test78  ADDUI   TestNum,TestNum,1
-        SETL    $10,1
-        SETL    Result,99
+        SET     $10,1
+        SET     Result,99
         BNZ     $10,Test78Skip
-        SETL    Result,#DEAD
-Test78Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test78Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test79
         JMP     TestFail
@@ -953,11 +955,11 @@ Test78Skip      SETL    Expect,99
 % Test 79: BP - Branch if positive (taken)
 % ========================================
 Test79  ADDUI   TestNum,TestNum,1
-        SETL    $10,42
-        SETL    Result,99
+        SET     $10,42
+        SET     Result,99
         BP      $10,Test79Skip
-        SETL    Result,#DEAD
-Test79Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test79Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test80
         JMP     TestFail
@@ -966,13 +968,13 @@ Test79Skip      SETL    Expect,99
 % Test 80: BN - Branch if negative (not taken, then taken)
 % ========================================
 Test80  ADDUI   TestNum,TestNum,1
-        SETL    $10,5
+        SET     $10,5
         BN      $10,TestFail
-        NEG     $10,Zero,$10
-        SETL    Result,99
+        NEG     $10,0,$10
+        SET     Result,99
         BN      $10,Test80Skip
-        SETL    Result,#DEAD
-Test80Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test80Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test81
         JMP     TestFail
@@ -981,11 +983,11 @@ Test80Skip      SETL    Expect,99
 % Test 81: BNN - Branch if non-negative (taken)
 % ========================================
 Test81  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    Result,99
+        SET     $10,0
+        SET     Result,99
         BNN     $10,Test81Skip
-        SETL    Result,#DEAD
-Test81Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test81Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test82
         JMP     TestFail
@@ -994,11 +996,11 @@ Test81Skip      SETL    Expect,99
 % Test 82: BNP - Branch if non-positive (taken)
 % ========================================
 Test82  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    Result,99
+        SET     $10,0
+        SET     Result,99
         BNP     $10,Test82Skip
-        SETL    Result,#DEAD
-Test82Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test82Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test83
         JMP     TestFail
@@ -1007,11 +1009,11 @@ Test82Skip      SETL    Expect,99
 % Test 83: BOD - Branch if odd (taken)
 % ========================================
 Test83  ADDUI   TestNum,TestNum,1
-        SETL    $10,7
-        SETL    Result,99
+        SET     $10,7
+        SET     Result,99
         BOD     $10,Test83Skip
-        SETL    Result,#DEAD
-Test83Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test83Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test84
         JMP     TestFail
@@ -1020,11 +1022,11 @@ Test83Skip      SETL    Expect,99
 % Test 84: BEV - Branch if even (taken)
 % ========================================
 Test84  ADDUI   TestNum,TestNum,1
-        SETL    $10,8
-        SETL    Result,99
+        SET     $10,8
+        SET     Result,99
         BEV     $10,Test84Skip
-        SETL    Result,#DEAD
-Test84Skip      SETL    Expect,99
+        SET     Result,#DEAD
+Test84Skip      SET    Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test85
         JMP     TestFail
@@ -1033,11 +1035,11 @@ Test84Skip      SETL    Expect,99
 % Test 85: PBZ - Probable branch if zero (taken)
 % ========================================
 Test85  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    Result,#CAFE
+        SET     $10,0
+        SET     Result,#CAFE
         PBZ     $10,Test85Skip
-        SETL    Result,#DEAD
-Test85Skip      SETL    Expect,#CAFE
+        SET     Result,#DEAD
+Test85Skip      SET    Expect,#CAFE
         CMP     Temp,Result,Expect
         PBZ     Temp,Test86
         JMP     TestFail
@@ -1046,11 +1048,11 @@ Test85Skip      SETL    Expect,#CAFE
 % Test 86: PBNZ - Probable branch if non-zero (taken)
 % ========================================
 Test86  ADDUI   TestNum,TestNum,1
-        SETL    $10,1
-        SETL    Result,#BABE
+        SET     $10,1
+        SET     Result,#BABE
         PBNZ    $10,Test86Skip
-        SETL    Result,#DEAD
-Test86Skip      SETL    Expect,#BABE
+        SET     Result,#DEAD
+Test86Skip      SET    Expect,#BABE
         CMP     Temp,Result,Expect
         PBZ     Temp,Test87
         JMP     TestFail
@@ -1059,12 +1061,12 @@ Test86Skip      SETL    Expect,#BABE
 % Test 87: CSN - Conditional set if negative
 % ========================================
 Test87  ADDUI   TestNum,TestNum,1
-        SETL    $10,5
+        SET     $10,5
         NEG     $10,Zero,$10
-        SETL    $11,42
-        SETL    $12,99
+        SET     $11,42
+        SET     $12,99
         CSN     Result,$10,$11
-        SETL    Expect,42
+        SET    Expect,42
         CMP     Temp,Result,Expect
         PBZ     Temp,Test88
         JMP     TestFail
@@ -1073,11 +1075,11 @@ Test87  ADDUI   TestNum,TestNum,1
 % Test 88: CSZ - Conditional set if zero
 % ========================================
 Test88  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    $11,0
-        SETL    $12,1
+        SET     $10,0
+        SET     $11,0
+        SET     $12,1
         CSZ     Result,$10,$11
-        SETL    Expect,0
+        SET    Expect,0
         CMP     Temp,Result,Expect
         PBZ     Temp,Test89
         JMP     TestFail
@@ -1086,12 +1088,12 @@ Test88  ADDUI   TestNum,TestNum,1
 % Test 89: CSP - Conditional set if positive
 % ========================================
 Test89  ADDUI   TestNum,TestNum,1
-        SETL    $10,42
-        SETL    $11,1
-        SETL    $12,1
+        SET     $10,42
+        SET     $11,1
+        SET     $12,1
         NEG     $12,Zero,$12
         CSP     Result,$10,$11
-        SETL    Expect,1
+        SET    Expect,1
         CMP     Temp,Result,Expect
         PBZ     Temp,Test90
         JMP     TestFail
@@ -1100,11 +1102,12 @@ Test89  ADDUI   TestNum,TestNum,1
 % Test 90: CSNN - Conditional set if non-negative
 % ========================================
 Test90  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    $11,7
-        SETL    $12,1; NEG     $12,0,$12
+        SET     $10,0
+        SET     $11,7
+        SET     $12,1
+        NEG     $12,Zero,$12
         CSNN    Result,$10,$11
-        SETL    Expect,7
+        SET    Expect,7
         CMP     Temp,Result,Expect
         PBZ     Temp,Test91
         JMP     TestFail
@@ -1113,11 +1116,11 @@ Test90  ADDUI   TestNum,TestNum,1
 % Test 91: CSNZ - Conditional set if non-zero
 % ========================================
 Test91  ADDUI   TestNum,TestNum,1
-        SETL    $10,7
-        SETL    $11,11
-        SETL    $12,0
+        SET     $10,7
+        SET     $11,11
+        SET     $12,0
         CSNZ    Result,$10,$11
-        SETL    Expect,11
+        SET    Expect,11
         CMP     Temp,Result,Expect
         PBZ     Temp,Test92
         JMP     TestFail
@@ -1126,11 +1129,11 @@ Test91  ADDUI   TestNum,TestNum,1
 % Test 92: CSOD - Conditional set if odd
 % ========================================
 Test92  ADDUI   TestNum,TestNum,1
-        SETL    $10,9
-        SETL    $11,3
-        SETL    $12,2
+        SET     $10,9
+        SET     $11,3
+        SET     $12,2
         CSOD    Result,$10,$11
-        SETL    Expect,3
+        SET    Expect,3
         CMP     Temp,Result,Expect
         PBZ     Temp,Test93
         JMP     TestFail
@@ -1139,11 +1142,11 @@ Test92  ADDUI   TestNum,TestNum,1
 % Test 93: CSEV - Conditional set if even
 % ========================================
 Test93  ADDUI   TestNum,TestNum,1
-        SETL    $10,10
-        SETL    $11,2
-        SETL    $12,3
+        SET     $10,10
+        SET     $11,2
+        SET     $12,3
         CSEV    Result,$10,$11
-        SETL    Expect,2
+        SET    Expect,2
         CMP     Temp,Result,Expect
         PBZ     Temp,Test94
         JMP     TestFail
@@ -1152,11 +1155,11 @@ Test93  ADDUI   TestNum,TestNum,1
 % Test 94: ZSN - Zero or set if negative
 % ========================================
 Test94  ADDUI   TestNum,TestNum,1
-        SETL    $10,5
+        SET     $10,5
         NEG     $10,Zero,$10
-        SETL    $11,17
+        SET     $11,17
         ZSN     Result,$10,$11
-        SETL    Expect,17
+        SET    Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test95
         JMP     TestFail
@@ -1165,10 +1168,10 @@ Test94  ADDUI   TestNum,TestNum,1
 % Test 95: ZSZ - Zero or set if zero
 % ========================================
 Test95  ADDUI   TestNum,TestNum,1
-        SETL    $10,0
-        SETL    $11,19
+        SET     $10,0
+        SET     $11,19
         ZSZ     Result,$10,$11
-        SETL    Expect,19
+        SET    Expect,19
         CMP     Temp,Result,Expect
         PBZ     Temp,Test96
         JMP     TestFail
@@ -1177,10 +1180,10 @@ Test95  ADDUI   TestNum,TestNum,1
 % Test 96: ZSP - Zero or set if positive
 % ========================================
 Test96  ADDUI   TestNum,TestNum,1
-        SETL    $10,42
-        SETL    $11,21
+        SET     $10,42
+        SET     $11,21
         ZSP     Result,$10,$11
-        SETL    Expect,21
+        SET    Expect,21
         CMP     Temp,Result,Expect
         PBZ     Temp,Test97
         JMP     TestFail
@@ -1189,10 +1192,10 @@ Test96  ADDUI   TestNum,TestNum,1
 % Test 97: ZSNN - Zero or set if non-negative
 % ========================================
 Test97  ADDUI   TestNum,TestNum,1
-        SETL    $10,1
-        SETL    $11,17
+        SET     $10,1
+        SET     $11,17
         ZSNN    Result,$10,$11
-        SETL    Expect,17
+        SET    Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test98
         JMP     TestFail
@@ -1201,10 +1204,10 @@ Test97  ADDUI   TestNum,TestNum,1
 % Test 98: ZSNZ - Zero or set if non-zero
 % ========================================
 Test98  ADDUI   TestNum,TestNum,1
-        SETL    $10,7
-        SETL    $11,17
+        SET     $10,7
+        SET     $11,17
         ZSNZ    Result,$10,$11
-        SETL    Expect,17
+        SET    Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test99
         JMP     TestFail
@@ -1213,10 +1216,10 @@ Test98  ADDUI   TestNum,TestNum,1
 % Test 99: ZSOD - Zero or set if odd
 % ========================================
 Test99  ADDUI   TestNum,TestNum,1
-        SETL    $10,13
-        SETL    $11,27
+        SET     $10,13
+        SET     $11,27
         ZSOD    Result,$10,$11
-        SETL    Expect,27
+        SET    Expect,27
         CMP     Temp,Result,Expect
         PBZ     Temp,Test100
         JMP     TestFail
@@ -1225,10 +1228,769 @@ Test99  ADDUI   TestNum,TestNum,1
 % Test 100: ZSEV - Zero or set if even
 % ========================================
 Test100 ADDUI   TestNum,TestNum,1
-        SETL    $10,14
-        SETL    $11,29
+        SET     $10,14
+        SET     $11,29
         ZSEV    Result,$10,$11
-        SETL    Expect,29
+        SET    Expect,29
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test101
+        JMP     TestFail
+
+% ========================================
+% FLOATING POINT TESTS
+% ========================================
+
+% ========================================
+% Test 101: FLOT - Float from integer
+% ========================================
+Test101 ADDUI   TestNum,TestNum,1
+        SET     $10,42
+        FLOT    Result,Zero,$10
+        FLOT    Expect,Zero,$10 % 42.0 in floating point
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test102
+        JMP     TestFail
+
+% ========================================
+% Test 102: FLOTI - Float from immediate
+% ========================================
+Test102 ADDUI   TestNum,TestNum,1
+        FLOTI   Result,Zero,100
+        FLOTI   Expect,Zero,100
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test103
+        JMP     TestFail
+
+% ========================================
+% Test 103: FLOTU - Float from unsigned integer
+% ========================================
+Test103 ADDUI   TestNum,TestNum,1
+        SET     $10,1000
+        FLOTU   Result,Zero,$10
+        FLOTU   Expect,Zero,$10
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test104
+        JMP     TestFail
+
+% ========================================
+% Test 104: FLOTUI - Float from unsigned immediate
+% ========================================
+Test104 ADDUI   TestNum,TestNum,1
+        FLOTUI  Result,Zero,255
+        FLOTUI  Expect,Zero,255
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test105
+        JMP     TestFail
+
+% ========================================
+% Test 105: SFLOT - Short float from integer
+% ========================================
+Test105 ADDUI   TestNum,TestNum,1
+        SET     $10,7
+        SFLOT   Result,Zero,$10
+        SFLOT   Expect,Zero,$10
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test106
+        JMP     TestFail
+
+% ========================================
+% Test 106: SFLOTI - Short float from immediate
+% ========================================
+Test106 ADDUI   TestNum,TestNum,1
+        SFLOTI  Result,Zero,13
+        SFLOTI  Expect,Zero,13
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test107
+        JMP     TestFail
+
+% ========================================
+% Test 107: SFLOTU - Short float from unsigned
+% ========================================
+Test107 ADDUI   TestNum,TestNum,1
+        SET     $10,99
+        SFLOTU  Result,Zero,$10
+        SFLOTU  Expect,Zero,$10
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test108
+        JMP     TestFail
+
+% ========================================
+% Test 108: SFLOTUI - Short float from unsigned immediate
+% ========================================
+Test108 ADDUI   TestNum,TestNum,1
+        SFLOTUI Result,Zero,77
+        SFLOTUI Expect,Zero,77
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test109
+        JMP     TestFail
+
+% ========================================
+% Test 109: FADD - Floating point add
+% ========================================
+Test109 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,10
+        FLOTI   $11,Zero,20
+        FADD    Result,$10,$11
+        FLOTI   Expect,Zero,30
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test110
+        JMP     TestFail
+
+% ========================================
+% Test 110: FSUB - Floating point subtract
+% ========================================
+Test110 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,100
+        FLOTI   $11,Zero,42
+        FSUB    Result,$10,$11
+        FLOTI   Expect,Zero,58
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test111
+        JMP     TestFail
+
+% ========================================
+% Test 111: FMUL - Floating point multiply
+% ========================================
+Test111 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,5
+        FLOTI   $11,Zero,7
+        FMUL    Result,$10,$11
+        FLOTI   Expect,Zero,35
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test112
+        JMP     TestFail
+
+% ========================================
+% Test 112: FDIV - Floating point divide
+% ========================================
+Test112 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,100
+        FLOTI   $11,Zero,4
+        FDIV    Result,$10,$11
+        FLOTI   Expect,Zero,25
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test113
+        JMP     TestFail
+
+% ========================================
+% Test 113: FCMP - Floating point compare
+% ========================================
+Test113 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,50
+        FLOTI   $11,Zero,50
+        FCMP    Result,$10,$11
+        SET    Expect,0        % Equal
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test114
+        JMP     TestFail
+
+% ========================================
+% Test 114: FEQL - Floating point equal
+% ========================================
+Test114 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,77
+        FLOTI   $11,Zero,77
+        FEQL    Result,$10,$11
+        SET    Expect,1        % True (equal)
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test115
+        JMP     TestFail
+
+% ========================================
+% Test 115: FUN - Floating point unordered
+% ========================================
+Test115 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,100
+        FLOTI   $11,Zero,200
+        FUN     Result,$10,$11
+        SET    Expect,0        % False (both are ordered numbers)
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test116
+        JMP     TestFail
+
+% ========================================
+% Test 116: FIX - Fix (float to int)
+% ========================================
+Test116 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,42
+        FIX     Result,Zero,$10
+        SET    Expect,42
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test117
+        JMP     TestFail
+
+% ========================================
+% Test 117: FIXU - Fix unsigned (float to unsigned int)
+% ========================================
+Test117 ADDUI   TestNum,TestNum,1
+        FLOTUI  $10,Zero,200
+        FIXU    Result,Zero,$10
+        SET    Expect,200
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test118
+        JMP     TestFail
+
+% ========================================
+% Test 118: FSQRT - Floating point square root
+% ========================================
+Test118 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,16
+        FSQRT   Result,Zero,$10
+        FLOTI   Expect,Zero,4
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test119
+        JMP     TestFail
+
+% ========================================
+% Test 119: FINT - Floating point integer part
+% ========================================
+Test119 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,42
+        FINT    Result,Zero,$10
+        FLOTI   Expect,Zero,42
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test120
+        JMP     TestFail
+
+% ========================================
+% Test 120: FREM - Floating point remainder
+% ========================================
+Test120 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,10
+        FLOTI   $11,Zero,3
+        FREM    Result,$10,$11
+        FLOTI   Expect,Zero,1
+        FCMP    Temp,Result,Expect
+        PBZ     Temp,Test121
+        JMP     TestFail
+
+% ========================================
+% SPECIAL INSTRUCTION TESTS
+% ========================================
+
+% ========================================
+% Test 121: PUT - Put to special register
+% ========================================
+Test121 ADDUI   TestNum,TestNum,1
+        SET     $10,#1234
+        PUT     rD,$10
+        GET     Result,rD
+        SET    Expect,#1234
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test122
+        JMP     TestFail
+
+% ========================================
+% Test 122: PUTI - Put immediate to special register
+% ========================================
+Test122 ADDUI   TestNum,TestNum,1
+        PUTI    rE,99
+        GET     Result,rE
+        SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test123
+        JMP     TestFail
+
+% ========================================
+% Test 123: NEGI - Negate immediate (both Y and Z are immediates)
+% ========================================
+Test123 ADDUI   TestNum,TestNum,1
+        NEGI    Result,10,5
+        SET    Expect,5        % Result should be 10-5=5
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test124
+        JMP     TestFail
+
+% ========================================
+% Test 124: NEGUI - Negate unsigned immediate
+% ========================================
+Test124 ADDUI   TestNum,TestNum,1
+        NEGUI   Result,20,8
+        SET    Expect,12       % Result should be 20-8=12
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test125
+        JMP     TestFail
+
+% ========================================
+% CONDITIONAL SET IMMEDIATE TESTS
+% ========================================
+
+% ========================================
+% Test 125: CSNI - Conditional set if negative (immediate)
+% ========================================
+Test125 ADDUI   TestNum,TestNum,1
+        SET     $10,5
+        NEG     $10,Zero,$10
+        CSNI    Result,$10,88
+        SET    Expect,88
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test126
+        JMP     TestFail
+
+% ========================================
+% Test 126: CSZI - Conditional set if zero (immediate)
+% ========================================
+Test126 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        CSZI    Result,$10,99
+        SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test127
+        JMP     TestFail
+
+% ========================================
+% Test 127: CSPI - Conditional set if positive (immediate)
+% ========================================
+Test127 ADDUI   TestNum,TestNum,1
+        SET     $10,42
+        CSPI    Result,$10,77
+        SET    Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test128
+        JMP     TestFail
+
+% ========================================
+% Test 128: CSODI - Conditional set if odd (immediate)
+% ========================================
+Test128 ADDUI   TestNum,TestNum,1
+        SET     $10,13
+        CSODI   Result,$10,55
+        SET    Expect,55
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test129
+        JMP     TestFail
+
+% ========================================
+% Test 129: CSNNI - Conditional set if non-negative (immediate)
+% ========================================
+Test129 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        CSNNI   Result,$10,66
+        SET    Expect,66
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test130
+        JMP     TestFail
+
+% ========================================
+% Test 130: CSNZI - Conditional set if non-zero (immediate)
+% ========================================
+Test130 ADDUI   TestNum,TestNum,1
+        SET     $10,1
+        CSNZI   Result,$10,44
+        SET    Expect,44
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test131
+        JMP     TestFail
+
+% ========================================
+% Test 131: CSNPI - Conditional set if non-positive (immediate)
+% ========================================
+Test131 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        CSNPI   Result,$10,33
+        SET    Expect,33
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test132
+        JMP     TestFail
+
+% ========================================
+% Test 132: CSEVI - Conditional set if even (immediate)
+% ========================================
+Test132 ADDUI   TestNum,TestNum,1
+        SET     $10,22
+        CSEVI   Result,$10,11
+        SET    Expect,11
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test133
+        JMP     TestFail
+
+% ========================================
+% ZERO-OR-SET IMMEDIATE TESTS
+% ========================================
+
+% ========================================
+% Test 133: ZSNI - Zero or set if negative (immediate)
+% ========================================
+Test133 ADDUI   TestNum,TestNum,1
+        SET     $10,5
+        NEG     $10,Zero,$10
+        ZSNI    Result,$10,88
+        SET    Expect,88
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test134
+        JMP     TestFail
+
+% ========================================
+% Test 134: ZSZI - Zero or set if zero (immediate)
+% ========================================
+Test134 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        ZSZI    Result,$10,99
+        SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test135
+        JMP     TestFail
+
+% ========================================
+% Test 135: ZSPI - Zero or set if positive (immediate)
+% ========================================
+Test135 ADDUI   TestNum,TestNum,1
+        SET     $10,42
+        ZSPI    Result,$10,77
+        SET    Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test136
+        JMP     TestFail
+
+% ========================================
+% Test 136: ZSODI - Zero or set if odd (immediate)
+% ========================================
+Test136 ADDUI   TestNum,TestNum,1
+        SET     $10,13
+        ZSODI   Result,$10,55
+        SET    Expect,55
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test137
+        JMP     TestFail
+
+% ========================================
+% Test 137: ZSNNI - Zero or set if non-negative (immediate)
+% ========================================
+Test137 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        ZSNNI   Result,$10,66
+        SET    Expect,66
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test138
+        JMP     TestFail
+
+% ========================================
+% Test 138: ZSNZI - Zero or set if non-zero (immediate)
+% ========================================
+Test138 ADDUI   TestNum,TestNum,1
+        SET     $10,1
+        ZSNZI   Result,$10,44
+        SET    Expect,44
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test139
+        JMP     TestFail
+
+% ========================================
+% Test 139: ZSNPI - Zero or set if non-positive (immediate)
+% ========================================
+Test139 ADDUI   TestNum,TestNum,1
+        SET     $10,0
+        ZSNPI   Result,$10,33
+        SET    Expect,33
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test140
+        JMP     TestFail
+
+% ========================================
+% Test 140: ZSEVI - Zero or set if even (immediate)
+% ========================================
+Test140 ADDUI   TestNum,TestNum,1
+        SET     $10,22
+        ZSEVI   Result,$10,11
+        SET    Expect,11
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test141
+        JMP     TestFail
+
+% ========================================
+% BACKWARD BRANCH TESTS
+% ========================================
+
+% ========================================
+% Test 141: BNB - Branch backward if negative
+% ========================================
+Test141 ADDUI   TestNum,TestNum,1
+        SET     Result,99
+        JMP     Test141Forward
+Test141Back     SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test142
+        JMP     TestFail
+Test141Forward  SET     $10,5
+        NEG     $10,Zero,$10
+        BNB     $10,Test141Back
+        JMP     TestFail
+
+% ========================================
+% Test 142: BZB - Branch backward if zero
+% ========================================
+Test142 ADDUI   TestNum,TestNum,1
+        SET     Result,88
+        JMP     Test142Forward
+Test142Back     SET    Expect,88
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test143
+        JMP     TestFail
+Test142Forward  SET     $10,0
+        BZB     $10,Test142Back
+        JMP     TestFail
+
+% ========================================
+% Test 143: BPB - Branch backward if positive
+% ========================================
+Test143 ADDUI   TestNum,TestNum,1
+        SET     Result,77
+        JMP     Test143Forward
+Test143Back     SET    Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test144
+        JMP     TestFail
+Test143Forward  SET     $10,1
+        BPB     $10,Test143Back
+        JMP     TestFail
+
+% ========================================
+% Test 144: BODB - Branch backward if odd
+% ========================================
+Test144 ADDUI   TestNum,TestNum,1
+        SET     Result,66
+        JMP     Test144Forward
+Test144Back     SET    Expect,66
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test145
+        JMP     TestFail
+Test144Forward  SET     $10,7
+        BODB    $10,Test144Back
+        JMP     TestFail
+
+% ========================================
+% Test 145: BNNB - Branch backward if non-negative
+% ========================================
+Test145 ADDUI   TestNum,TestNum,1
+        SET     Result,55
+        JMP     Test145Forward
+Test145Back     SET    Expect,55
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test146
+        JMP     TestFail
+Test145Forward  SET     $10,0
+        BNNB    $10,Test145Back
+        JMP     TestFail
+
+% ========================================
+% Test 146: BNZB - Branch backward if non-zero
+% ========================================
+Test146 ADDUI   TestNum,TestNum,1
+        SET     Result,44
+        JMP     Test146Forward
+Test146Back     SET    Expect,44
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test147
+        JMP     TestFail
+Test146Forward  SET     $10,1
+        BNZB    $10,Test146Back
+        JMP     TestFail
+
+% ========================================
+% Test 147: BNPB - Branch backward if non-positive
+% ========================================
+Test147 ADDUI   TestNum,TestNum,1
+        SET     Result,33
+        JMP     Test147Forward
+Test147Back     SET    Expect,33
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test148
+        JMP     TestFail
+Test147Forward  SET     $10,0
+        BNPB    $10,Test147Back
+        JMP     TestFail
+
+% ========================================
+% Test 148: BEVB - Branch backward if even
+% ========================================
+Test148 ADDUI   TestNum,TestNum,1
+        SET     Result,22
+        JMP     Test148Forward
+Test148Back     SET    Expect,22
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test149
+        JMP     TestFail
+Test148Forward  SET     $10,8
+        BEVB    $10,Test148Back
+        JMP     TestFail
+
+% ========================================
+% PROBABLE BACKWARD BRANCH TESTS
+% ========================================
+
+% ========================================
+% Test 149: PBNB - Probable branch backward if negative
+% ========================================
+Test149 ADDUI   TestNum,TestNum,1
+        SET     Result,99
+        JMP     Test149Forward
+Test149Back     SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test150
+        JMP     TestFail
+Test149Forward  SET     $10,5
+        NEG     $10,Zero,$10
+        PBNB    $10,Test149Back
+        JMP     TestFail
+
+% ========================================
+% Test 150: PBZB - Probable branch backward if zero
+% ========================================
+Test150 ADDUI   TestNum,TestNum,1
+        SET     Result,88
+        JMP     Test150Forward
+Test150Back     SET    Expect,88
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test151
+        JMP     TestFail
+Test150Forward  SET     $10,0
+        PBZB    $10,Test150Back
+        JMP     TestFail
+
+% ========================================
+% Test 151: PBPB - Probable branch backward if positive
+% ========================================
+Test151 ADDUI   TestNum,TestNum,1
+        SET     Result,77
+        JMP     Test151Forward
+Test151Back     SET    Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test152
+        JMP     TestFail
+Test151Forward  SET     $10,1
+        PBPB    $10,Test151Back
+        JMP     TestFail
+
+% ========================================
+% Test 152: PBODB - Probable branch backward if odd
+% ========================================
+Test152 ADDUI   TestNum,TestNum,1
+        SET     Result,66
+        JMP     Test152Forward
+Test152Back     SET    Expect,66
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test153
+        JMP     TestFail
+Test152Forward  SET     $10,7
+        PBODB   $10,Test152Back
+        JMP     TestFail
+
+% ========================================
+% Test 153: PBNNB - Probable branch backward if non-negative
+% ========================================
+Test153 ADDUI   TestNum,TestNum,1
+        SET     Result,55
+        JMP     Test153Forward
+Test153Back     SET    Expect,55
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test154
+        JMP     TestFail
+Test153Forward  SET     $10,0
+        PBNNB   $10,Test153Back
+        JMP     TestFail
+
+% ========================================
+% Test 154: PBNZB - Probable branch backward if non-zero
+% ========================================
+Test154 ADDUI   TestNum,TestNum,1
+        SET     Result,44
+        JMP     Test154Forward
+Test154Back     SET    Expect,44
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test155
+        JMP     TestFail
+Test154Forward  SET     $10,1
+        PBNZB   $10,Test154Back
+        JMP     TestFail
+
+% ========================================
+% Test 155: PBNPB - Probable branch backward if non-positive
+% ========================================
+Test155 ADDUI   TestNum,TestNum,1
+        SET     Result,33
+        JMP     Test155Forward
+Test155Back     SET    Expect,33
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test156
+        JMP     TestFail
+Test155Forward  SET     $10,0
+        PBNPB   $10,Test155Back
+        JMP     TestFail
+
+% ========================================
+% Test 156: PBEVB - Probable branch backward if even
+% ========================================
+Test156 ADDUI   TestNum,TestNum,1
+        SET     Result,22
+        JMP     Test156Forward
+Test156Back     SET    Expect,22
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test157
+        JMP     TestFail
+Test156Forward  SET     $10,8
+        PBEVB   $10,Test156Back
+        JMP     TestFail
+
+% ========================================
+% CONDITIONAL JUMP TESTS
+% ========================================
+
+% ========================================
+% Test 157: JE - Jump if equal (taken)
+% ========================================
+Test157 ADDUI   TestNum,TestNum,1
+        SET     $10,42
+        SET     $11,42
+        CMP     $10,$10,$11
+        SET     Result,99
+        JE      $10,Test157Skip
+        SET     Result,#DEAD
+Test157Skip     SET    Expect,99
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test158
+        JMP     TestFail
+
+% ========================================
+% Test 158: JNE - Jump if not equal (taken)
+% ========================================
+Test158 ADDUI   TestNum,TestNum,1
+        SET     $10,10
+        SET     $11,20
+        CMP     $10,$10,$11
+        SET     Result,88
+        JNE     $10,Test158Skip
+        SET     Result,#DEAD
+Test158Skip     SET    Expect,88
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test159
+        JMP     TestFail
+
+% ========================================
+% Test 159: JL - Jump if less (taken)
+% ========================================
+Test159 ADDUI   TestNum,TestNum,1
+        SET     $10,5
+        SET     $11,10
+        CMP     $10,$10,$11
+        SET     Result,77
+        JL      $10,Test159Skip
+        SET     Result,#DEAD
+Test159Skip     SET    Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test160
+        JMP     TestFail
+
+% ========================================
+% Test 160: JG - Jump if greater (taken)
+% ========================================
+Test160 ADDUI   TestNum,TestNum,1
+        SET     $10,100
+        SET     $11,50
+        CMP     $10,$10,$11
+        SET     Result,66
+        JG      $10,Test160Skip
+        SET     Result,#DEAD
+Test160Skip     SET    Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
@@ -1238,7 +2000,7 @@ Test100 ADDUI   TestNum,TestNum,1
 % ========================================
 TestPass        SET     $0,PassMsg
         TRAP    0,Fputs,StdOut
-        SETL    Result,#FFFF    % Success marker
+        SET     Result,#FFFF    % Success marker
         TRAP    0,Halt,0        % Halt successfully
 
 % ========================================

@@ -168,6 +168,28 @@ mnemonic_cmpu = { ^"CMPU" }
 mnemonic_cmpi = { ^"CMPI" }
 mnemonic_cmp = { ^"CMP" }
 
+// Floating point instructions - ordered longest first
+mnemonic_sflotui = { ^"SFLOTUI" }
+mnemonic_sflotu = { ^"SFLOTU" }
+mnemonic_sfloti = { ^"SFLOTI" }
+mnemonic_sflot = { ^"SFLOT" }
+mnemonic_flotui = { ^"FLOTUI" }
+mnemonic_flotu = { ^"FLOTU" }
+mnemonic_floti = { ^"FLOTI" }
+mnemonic_flot = { ^"FLOT" }
+mnemonic_fixu = { ^"FIXU" }
+mnemonic_fix = { ^"FIX" }
+mnemonic_fsqrt = { ^"FSQRT" }
+mnemonic_fint = { ^"FINT" }
+mnemonic_frem = { ^"FREM" }
+mnemonic_fmul = { ^"FMUL" }
+mnemonic_fdiv = { ^"FDIV" }
+mnemonic_fadd = { ^"FADD" }
+mnemonic_fsub = { ^"FSUB" }
+mnemonic_fcmp = { ^"FCMP" }
+mnemonic_feql = { ^"FEQL" }
+mnemonic_fun = { ^"FUN" }
+
 // Bitwise operations (§10) - ordered longest first for exact matching
 mnemonic_andni = { ^"ANDNI" }
 mnemonic_andn = { ^"ANDN" }
@@ -403,31 +425,46 @@ inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
 // Arithmetic (3 operands) - ordered longest first
 inst_arith_rrr = {
     (mnemonic_16addu | mnemonic_8addu | mnemonic_4addu | mnemonic_2addu |
-     mnemonic_addui | mnemonic_addu | mnemonic_addi | mnemonic_add |
-     mnemonic_subui | mnemonic_subu | mnemonic_subi | mnemonic_sub |
-     mnemonic_mului | mnemonic_mulu | mnemonic_muli | mnemonic_mul |
-     mnemonic_divui | mnemonic_divu | mnemonic_divi | mnemonic_div |
-     mnemonic_cmpui | mnemonic_cmpu | mnemonic_cmpi | mnemonic_cmp) ~
+     mnemonic_addui | mnemonic_subui | mnemonic_mului | mnemonic_divui | mnemonic_cmpui |
+     mnemonic_addu | mnemonic_addi | mnemonic_subu | mnemonic_subi |
+     mnemonic_mulu | mnemonic_muli | mnemonic_divu | mnemonic_divi |
+     mnemonic_cmpu | mnemonic_cmpi | mnemonic_add | mnemonic_sub | mnemonic_mul | mnemonic_div | mnemonic_cmp) ~
     operand_reg_reg_reg
 }
 
 inst_arith_rri = {
     (mnemonic_16addui | mnemonic_8addui | mnemonic_4addui | mnemonic_2addui |
-     mnemonic_addui | mnemonic_addi | mnemonic_subui | mnemonic_subi |
-     mnemonic_mului | mnemonic_muli | mnemonic_divui | mnemonic_divi |
-     mnemonic_cmpui | mnemonic_cmpi) ~
+     mnemonic_addui | mnemonic_subui | mnemonic_mului | mnemonic_divui | mnemonic_cmpui |
+     mnemonic_addi | mnemonic_subi | mnemonic_muli | mnemonic_divi | mnemonic_cmpi) ~
     operand_reg_reg_imm
 }
 
 // NEG is special: NEG $X, Y, $Z (Y is immediate/literal) - ordered longest first
 inst_neg_rrr = {
-    (mnemonic_negu | mnemonic_neg) ~
+    (mnemonic_negui | mnemonic_negi | mnemonic_negu | mnemonic_neg) ~
     register ~ comma ~ expr_value ~ comma ~ register
 }
 
 inst_neg_rri = {
     (mnemonic_negui | mnemonic_negi) ~
     register ~ comma ~ expr_value ~ comma ~ expr_value
+}
+
+// Floating point instructions (3 operands) - ordered longest first
+inst_float_rrr = {
+    (mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
+     mnemonic_fadd | mnemonic_fsub | mnemonic_fmul | mnemonic_fdiv |
+     mnemonic_frem | mnemonic_fsqrt | mnemonic_fint |
+     mnemonic_fixu | mnemonic_fix |
+     mnemonic_sflotu | mnemonic_sflot |
+     mnemonic_flotu | mnemonic_flot) ~
+    operand_reg_reg_reg
+}
+
+inst_float_rri = {
+    (mnemonic_sflotui | mnemonic_sfloti |
+     mnemonic_flotui | mnemonic_floti) ~
+    operand_reg_reg_imm
 }
 
 // Bitwise operations (3 operands) - ordered longest first
@@ -447,30 +484,28 @@ inst_bitwise_rri = {
     operand_reg_reg_imm
 }
 
-// Bit fiddling operations (3 operands) - ordered longest first
+// Bit fiddling operations (§11-12) - ordered longest first
 inst_bitfiddle_rrr = {
-    (mnemonic_bdifi | mnemonic_bdif | mnemonic_wdifi | mnemonic_wdif |
-     mnemonic_tdifi | mnemonic_tdif | mnemonic_odifi | mnemonic_odif |
-     mnemonic_saddi | mnemonic_sadd | mnemonic_mxori | mnemonic_mxor |
-     mnemonic_mori | mnemonic_mor) ~
+    (mnemonic_bdifi | mnemonic_wdifi | mnemonic_tdifi | mnemonic_odifi | mnemonic_saddi | mnemonic_mxori | mnemonic_mori |
+     mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
     operand_reg_reg_reg
 }
 
 inst_bitfiddle_rri = {
-    (mnemonic_bdifi | mnemonic_wdifi | mnemonic_tdifi | mnemonic_odifi |
-     mnemonic_saddi | mnemonic_mori | mnemonic_mxori) ~
+    (mnemonic_bdifi | mnemonic_wdifi | mnemonic_tdifi | mnemonic_odifi | mnemonic_saddi | mnemonic_mxori | mnemonic_mori) ~
     operand_reg_reg_imm
 }
 
-// Shift instructions (§14) - 3 operands - ordered longest first
+// Shift instructions (§14) - ordered longest first
 inst_shift_rrr = {
-    (mnemonic_slui | mnemonic_slu | mnemonic_sli | mnemonic_sl |
-     mnemonic_srui | mnemonic_sru | mnemonic_sri | mnemonic_sr) ~
+    (mnemonic_slui | mnemonic_srui |
+     mnemonic_slu | mnemonic_sli | mnemonic_sru | mnemonic_sri |
+     mnemonic_sl | mnemonic_sr) ~
     operand_reg_reg_reg
 }
 
 inst_shift_rri = {
-    (mnemonic_slui | mnemonic_sli | mnemonic_srui | mnemonic_sri) ~
+    (mnemonic_slui | mnemonic_srui | mnemonic_sli | mnemonic_sri) ~
     operand_reg_reg_imm
 }
 
@@ -607,6 +642,7 @@ instruction = {
     inst_stco_rrr | inst_stco_rri |
     inst_lda_rri | inst_lda_ri |
     inst_arith_rri | inst_arith_rrr |
+    inst_float_rri | inst_float_rrr |
     inst_neg_rri | inst_neg_rrr |
     inst_bitwise_rri | inst_bitwise_rrr |
     inst_bitfiddle_rri | inst_bitfiddle_rrr |
