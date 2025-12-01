@@ -45,7 +45,21 @@ fn main() {
     let mut assembler = MMixAssembler::new(&source);
 
     if let Err(e) = assembler.parse() {
-        eprintln!("Parse error: {}", e);
+        // Format error in standard assembler format: filename:line:column: message
+        // If error already has "Line X:Y:" prefix, reformat it
+        if e.starts_with("Line ") {
+            if let Some(rest) = e.strip_prefix("Line ") {
+                if let Some((line_col, msg)) = rest.split_once(": ") {
+                    eprintln!("{}:{}: {}", input_file, line_col, msg);
+                } else {
+                    eprintln!("{}: {}", input_file, e);
+                }
+            } else {
+                eprintln!("{}: {}", input_file, e);
+            }
+        } else {
+            eprintln!("{}: {}", input_file, e);
+        }
         process::exit(1);
     }
 

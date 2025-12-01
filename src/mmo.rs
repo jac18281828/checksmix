@@ -110,7 +110,7 @@ impl MmoGenerator {
 
         // Split into chunks of max 255 tetras (1020 bytes)
         for chunk in bytes.chunks(1020) {
-            let chunk_tetras = (chunk.len() + 3) / 4;
+            let chunk_tetras = chunk.len().div_ceil(4);
             let yz = chunk_tetras as u16;
 
             mmo.push(0x98); // lop_quote

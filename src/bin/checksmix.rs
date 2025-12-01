@@ -102,7 +102,7 @@ fn run_mms(filename: &str) {
     let mut assembler = MMixAssembler::new(&input);
 
     if let Err(e) = assembler.parse() {
-        eprintln!("Parse error: {}", e);
+        eprintln!("Error: {}", e);
         process::exit(1);
     }
 

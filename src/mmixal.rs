@@ -1210,11 +1210,10 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
-        parts.next(); // skip operand wrapper
-        let mut ops = parts;
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
-        let z = self.parse_register(ops.next().unwrap())?;
+        // No operand wrapper for inst_neg_rrr - operands are directly in the rule
+        let x = self.parse_register(parts.next().unwrap())?;
+        let y = self.parse_number(parts.next().unwrap())? as u8;
+        let z = self.parse_register(parts.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "NEG" => Ok(MMixInstruction::NEG(x, y, z)),
@@ -1229,11 +1228,10 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
-        parts.next(); // skip operand wrapper
-        let mut ops = parts;
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        // No operand wrapper for inst_neg_rri - operands are directly in the rule
+        let x = self.parse_register(parts.next().unwrap())?;
+        let y = self.parse_number(parts.next().unwrap())? as u8;
+        let z = self.parse_number(parts.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "NEGI" => Ok(MMixInstruction::NEGI(x, y, z)),
@@ -1783,7 +1781,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_register(parts.next().unwrap())?;
-        let _comma = parts.next();
+        // comma is silent in grammar, not in parts
         let z = self.parse_number(parts.next().unwrap())? as u8;
         Ok(MMixInstruction::GET(x, z))
     }
@@ -1792,7 +1790,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_number(parts.next().unwrap())? as u8;
-        let _comma = parts.next();
+        // comma is silent in grammar, not in parts
         let z = self.parse_register(parts.next().unwrap())?;
         Ok(MMixInstruction::PUT(x, z))
     }
@@ -1804,7 +1802,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_number(parts.next().unwrap())? as u8;
-        let _comma = parts.next();
+        // comma is silent in grammar, not in parts
         let z = self.parse_number(parts.next().unwrap())? as u8;
         Ok(MMixInstruction::PUTI(x, z))
     }
@@ -2169,6 +2167,7 @@ impl MMixAssembler {
 
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
         let text = pair.as_str();
+        let (line, col) = pair.line_col();
 
         // Check if it's a symbolic name from IS directive
         if !text.starts_with('$') {
@@ -2178,21 +2177,25 @@ impl MMixAssembler {
                     return Ok(value as u8);
                 } else {
                     return Err(format!(
-                        "Symbol '{}' value {} exceeds register range",
-                        text, value
+                        "Line {}:{}: Symbol '{}' value {} exceeds register range (max 255)",
+                        line, col, text, value
                     ));
                 }
             }
-            return Err(format!("Expected register or symbol, got: {}", text));
+            return Err(format!(
+                "Line {}:{}: Undefined symbol '{}' (expected register like $0 or defined symbol)",
+                line, col, text
+            ));
         }
 
         text[1..]
             .parse::<u8>()
-            .map_err(|e| format!("Invalid register number: {}", e))
+            .map_err(|e| format!("Line {}:{}: Invalid register number: {}", line, col, e))
     }
 
     fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let rule = pair.as_rule();
+        let (line, col) = pair.line_col();
 
         // Handle container rules that have children
         if rule == Rule::expr_value || rule == Rule::number_literal {
@@ -2219,20 +2222,21 @@ impl MMixAssembler {
                 } else {
                     text
                 };
-                u64::from_str_radix(hex_str, 16).map_err(|e| format!("Invalid hex number: {}", e))
+                u64::from_str_radix(hex_str, 16)
+                    .map_err(|e| format!("Line {}:{}: Invalid hex number: {}", line, col, e))
             }
             Rule::oct_literal => u64::from_str_radix(&text[1..], 8)
-                .map_err(|e| format!("Invalid octal number: {}", e)),
+                .map_err(|e| format!("Line {}:{}: Invalid octal number: {}", line, col, e)),
             Rule::dec_literal => text
                 .parse::<u64>()
-                .map_err(|e| format!("Invalid decimal number: {}", e)),
+                .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e)),
             Rule::symbol => {
                 // Try to resolve as symbol from IS directive or label
                 self.symbols
                     .get(text)
                     .or_else(|| self.labels.get(text))
                     .copied()
-                    .ok_or_else(|| format!("Undefined symbol: {}", text))
+                    .ok_or_else(|| format!("Line {}:{}: Undefined symbol: {}", line, col, text))
             }
             Rule::identifier => {
                 // Backward compatibility: identifier same as symbol
@@ -2240,9 +2244,12 @@ impl MMixAssembler {
                     .get(text)
                     .or_else(|| self.labels.get(text))
                     .copied()
-                    .ok_or_else(|| format!("Undefined symbol: {}", text))
+                    .ok_or_else(|| format!("Line {}:{}: Undefined symbol: {}", line, col, text))
             }
-            _ => Err(format!("Expected number, got: {:?}", rule)),
+            _ => Err(format!(
+                "Line {}:{}: Expected number, got: {:?}",
+                line, col, rule
+            )),
         }
     }
 

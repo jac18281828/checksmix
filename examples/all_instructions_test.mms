@@ -4,6 +4,14 @@
 
         LOC     #100
 
+% Special registers
+rM      IS      0       % Multiplication register
+rD      IS      1       % Dividend register  
+rE      IS      2       % Epsilon register
+rH      IS      3       % Himult register
+rJ      IS      4       % Jump register
+rR      IS      6       % Remainder register
+
 % Test counter and expected values
 Expect  IS      $1      % Expected value
 Result  IS      $2      % Actual result
@@ -960,7 +968,7 @@ Test79Skip      SETL    Expect,99
 Test80  ADDUI   TestNum,TestNum,1
         SETL    $10,5
         BN      $10,TestFail
-        NEG     $10,0,$10
+        NEG     $10,Zero,$10
         SETL    Result,99
         BN      $10,Test80Skip
         SETL    Result,#DEAD
@@ -1052,7 +1060,7 @@ Test86Skip      SETL    Expect,#BABE
 % ========================================
 Test87  ADDUI   TestNum,TestNum,1
         SETL    $10,5
-        NEG     $10,0,$10
+        NEG     $10,Zero,$10
         SETL    $11,42
         SETL    $12,99
         CSN     Result,$10,$11
@@ -1081,7 +1089,7 @@ Test89  ADDUI   TestNum,TestNum,1
         SETL    $10,42
         SETL    $11,1
         SETL    $12,1
-        NEG     $12,0,$12
+        NEG     $12,Zero,$12
         CSP     Result,$10,$11
         SETL    Expect,1
         CMP     Temp,Result,Expect
@@ -1145,7 +1153,7 @@ Test93  ADDUI   TestNum,TestNum,1
 % ========================================
 Test94  ADDUI   TestNum,TestNum,1
         SETL    $10,5
-        NEG     $10,0,$10
+        NEG     $10,Zero,$10
         SETL    $11,17
         ZSN     Result,$10,$11
         SETL    Expect,17
@@ -1182,9 +1190,9 @@ Test96  ADDUI   TestNum,TestNum,1
 % ========================================
 Test97  ADDUI   TestNum,TestNum,1
         SETL    $10,1
-        SETL    $11,17N
+        SETL    $11,17
         ZSNN    Result,$10,$11
-        SETL    Expect,17N
+        SETL    Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test98
         JMP     TestFail
@@ -1194,9 +1202,9 @@ Test97  ADDUI   TestNum,TestNum,1
 % ========================================
 Test98  ADDUI   TestNum,TestNum,1
         SETL    $10,7
-        SETL    $11,17Z
+        SETL    $11,17
         ZSNZ    Result,$10,$11
-        SETL    Expect,17Z
+        SETL    Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test99
         JMP     TestFail

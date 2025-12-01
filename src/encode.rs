@@ -51,24 +51,18 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::LDAI(x, y, z) => {
             bytes.extend_from_slice(&[0x23, *x, *y, *z]);
         }
-        MMixInstruction::STBU(x, y, z) => {
-            bytes.extend_from_slice(&[0xA2, *x, *y, *z]);
-        }
-        MMixInstruction::STBUI(x, y, z) => {
-            bytes.extend_from_slice(&[0xA3, *x, *y, *z]);
-        }
-        MMixInstruction::ADDU(x, y, z) => {
-            bytes.extend_from_slice(&[0x22, *x, *y, *z]);
-        }
-        MMixInstruction::ADDUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x23, *x, *y, *z]);
-        }
         // Arithmetic instructions
         MMixInstruction::ADD(x, y, z) => {
             bytes.extend_from_slice(&[0x20, *x, *y, *z]);
         }
         MMixInstruction::ADDI(x, y, z) => {
             bytes.extend_from_slice(&[0x21, *x, *y, *z]);
+        }
+        MMixInstruction::ADDU(x, y, z) => {
+            bytes.extend_from_slice(&[0x22, *x, *y, *z]); // Same as LDA
+        }
+        MMixInstruction::ADDUI(x, y, z) => {
+            bytes.extend_from_slice(&[0x23, *x, *y, *z]); // Same as LDAI
         }
         MMixInstruction::ADDU2(x, y, z) => {
             bytes.extend_from_slice(&[0x28, *x, *y, *z]);
@@ -339,150 +333,7 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::UNSAVE(x, z) => {
             bytes.extend_from_slice(&[0xFB, *x, 0, *z]);
         }
-        MMixInstruction::LDUNC(x, y, z) => {
-            bytes.extend_from_slice(&[0x96, *x, *y, *z]);
-        }
-        MMixInstruction::LDUNCI(x, y, z) => {
-            bytes.extend_from_slice(&[0x97, *x, *y, *z]);
-        }
-        MMixInstruction::STUNC(x, y, z) => {
-            bytes.extend_from_slice(&[0xB6, *x, *y, *z]);
-        }
-        MMixInstruction::STUNCI(x, y, z) => {
-            bytes.extend_from_slice(&[0xB7, *x, *y, *z]);
-        }
-        MMixInstruction::LDSF(x, y, z) => {
-            bytes.extend_from_slice(&[0x90, *x, *y, *z]);
-        }
-        MMixInstruction::LDSFI(x, y, z) => {
-            bytes.extend_from_slice(&[0x91, *x, *y, *z]);
-        }
-        MMixInstruction::STSF(x, y, z) => {
-            bytes.extend_from_slice(&[0xB0, *x, *y, *z]);
-        }
-        MMixInstruction::STSFI(x, y, z) => {
-            bytes.extend_from_slice(&[0xB1, *x, *y, *z]);
-        }
-        MMixInstruction::STHT(x, y, z) => {
-            bytes.extend_from_slice(&[0xB2, *x, *y, *z]);
-        }
-        MMixInstruction::STHTI(x, y, z) => {
-            bytes.extend_from_slice(&[0xB3, *x, *y, *z]);
-        }
-        MMixInstruction::STCO(x, y, z) => {
-            bytes.extend_from_slice(&[0xB4, *x, *y, *z]);
-        }
-        MMixInstruction::STCOI(x, y, z) => {
-            bytes.extend_from_slice(&[0xB5, *x, *y, *z]);
-        }
-        MMixInstruction::LDVTS(x, y, z) => {
-            bytes.extend_from_slice(&[0x98, *x, *y, *z]);
-        }
-        MMixInstruction::LDVTSI(x, y, z) => {
-            bytes.extend_from_slice(&[0x99, *x, *y, *z]);
-        }
-        MMixInstruction::CSWAP(x, y, z) => {
-            bytes.extend_from_slice(&[0x94, *x, *y, *z]);
-        }
-        MMixInstruction::CSWAPI(x, y, z) => {
-            bytes.extend_from_slice(&[0x95, *x, *y, *z]);
-        }
-        MMixInstruction::PRELD(x, y, z) => {
-            bytes.extend_from_slice(&[0x9A, *x, *y, *z]);
-        }
-        MMixInstruction::PRELDI(x, y, z) => {
-            bytes.extend_from_slice(&[0x9B, *x, *y, *z]);
-        }
-        MMixInstruction::PREGO(x, y, z) => {
-            bytes.extend_from_slice(&[0x9C, *x, *y, *z]);
-        }
-        MMixInstruction::PREGOI(x, y, z) => {
-            bytes.extend_from_slice(&[0x9D, *x, *y, *z]);
-        }
-        MMixInstruction::PREST(x, y, z) => {
-            bytes.extend_from_slice(&[0xBA, *x, *y, *z]);
-        }
-        MMixInstruction::PRESTI(x, y, z) => {
-            bytes.extend_from_slice(&[0xBB, *x, *y, *z]);
-        }
-        MMixInstruction::SYNCD(x, y, z) => {
-            bytes.extend_from_slice(&[0xB8, *x, *y, *z]);
-        }
-        MMixInstruction::SYNCDI(x, y, z) => {
-            bytes.extend_from_slice(&[0xB9, *x, *y, *z]);
-        }
-        MMixInstruction::SYNCID(x, y, z) => {
-            bytes.extend_from_slice(&[0xBC, *x, *y, *z]);
-        }
-        MMixInstruction::SYNCIDI(x, y, z) => {
-            bytes.extend_from_slice(&[0xBD, *x, *y, *z]);
-        }
-        MMixInstruction::RESUME(xyz) => {
-            bytes.extend_from_slice(&[0xF9, 0, 0, *xyz]);
-        }
-        MMixInstruction::TRIP(x, y, z) => {
-            bytes.extend_from_slice(&[0xFF, *x, *y, *z]);
-        }
-        MMixInstruction::SWYM => {
-            bytes.extend_from_slice(&[0xFD, 0, 0, 0]);
-        }
-        MMixInstruction::SYNC(xyz) => {
-            bytes.extend_from_slice(&[0xFC, 0, 0, *xyz]);
-        }
-        MMixInstruction::OR(x, y, z) => {
-            bytes.extend_from_slice(&[0xC0, *x, *y, *z]);
-        }
-        MMixInstruction::ORI(x, y, z) => {
-            bytes.extend_from_slice(&[0xC1, *x, *y, *z]);
-        }
-        MMixInstruction::TRAP(x, y, z) => {
-            bytes.extend_from_slice(&[0x00, *x, *y, *z]);
-        }
-        MMixInstruction::HALT => {
-            bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-        }
-        MMixInstruction::CMP(x, y, z) => {
-            bytes.extend_from_slice(&[0x30, *x, *y, *z]);
-        }
-        MMixInstruction::CMPI(x, y, z) => {
-            bytes.extend_from_slice(&[0x31, *x, *y, *z]);
-        }
-        MMixInstruction::CMPU(x, y, z) => {
-            bytes.extend_from_slice(&[0x32, *x, *y, *z]);
-        }
-        MMixInstruction::CMPUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x33, *x, *y, *z]);
-        }
-        MMixInstruction::PBN(x, y, z) => {
-            bytes.extend_from_slice(&[0x50, *x, *y, *z]);
-        }
-        MMixInstruction::PBZ(x, y, z) => {
-            bytes.extend_from_slice(&[0x52, *x, *y, *z]);
-        }
-        MMixInstruction::PBP(x, y, z) => {
-            bytes.extend_from_slice(&[0x54, *x, *y, *z]);
-        }
-        MMixInstruction::PBOD(x, y, z) => {
-            bytes.extend_from_slice(&[0x56, *x, *y, *z]);
-        }
-        MMixInstruction::PBNN(x, y, z) => {
-            bytes.extend_from_slice(&[0x58, *x, *y, *z]);
-        }
-        MMixInstruction::PBNZ(x, y, z) => {
-            bytes.extend_from_slice(&[0x5A, *x, *y, *z]);
-        }
-        MMixInstruction::PBNP(x, y, z) => {
-            bytes.extend_from_slice(&[0x5C, *x, *y, *z]);
-        }
-        MMixInstruction::PBEV(x, y, z) => {
-            bytes.extend_from_slice(&[0x5E, *x, *y, *z]);
-        }
-        MMixInstruction::JMP(offset) => {
-            let x = ((offset >> 16) & 0xFF) as u8;
-            let y = ((offset >> 8) & 0xFF) as u8;
-            let z = (offset & 0xFF) as u8;
-            bytes.extend_from_slice(&[0xF0, x, y, z]);
-        }
+        // Load instructions
         MMixInstruction::LDB(x, y, z) => {
             bytes.extend_from_slice(&[0x80, *x, *y, *z]);
         }
@@ -531,11 +382,24 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::LDOUI(x, y, z) => {
             bytes.extend_from_slice(&[0x8F, *x, *y, *z]);
         }
+        MMixInstruction::LDUNC(x, y, z) => {
+            bytes.extend_from_slice(&[0x96, *x, *y, *z]);
+        }
+        MMixInstruction::LDUNCI(x, y, z) => {
+            bytes.extend_from_slice(&[0x97, *x, *y, *z]);
+        }
+        // Store instructions
         MMixInstruction::STB(x, y, z) => {
             bytes.extend_from_slice(&[0xA0, *x, *y, *z]);
         }
         MMixInstruction::STBI(x, y, z) => {
             bytes.extend_from_slice(&[0xA1, *x, *y, *z]);
+        }
+        MMixInstruction::STBU(x, y, z) => {
+            bytes.extend_from_slice(&[0xA2, *x, *y, *z]);
+        }
+        MMixInstruction::STBUI(x, y, z) => {
+            bytes.extend_from_slice(&[0xA3, *x, *y, *z]);
         }
         MMixInstruction::STW(x, y, z) => {
             bytes.extend_from_slice(&[0xA4, *x, *y, *z]);
@@ -573,168 +437,125 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::STOUI(x, y, z) => {
             bytes.extend_from_slice(&[0xAF, *x, *y, *z]);
         }
-        MMixInstruction::ADD(x, y, z) => {
-            bytes.extend_from_slice(&[0x20, *x, *y, *z]);
+        MMixInstruction::STSF(x, y, z) => {
+            bytes.extend_from_slice(&[0xB0, *x, *y, *z]);
         }
-        MMixInstruction::ADDI(x, y, z) => {
-            bytes.extend_from_slice(&[0x21, *x, *y, *z]);
+        MMixInstruction::STSFI(x, y, z) => {
+            bytes.extend_from_slice(&[0xB1, *x, *y, *z]);
         }
-        MMixInstruction::SUB(x, y, z) => {
-            bytes.extend_from_slice(&[0x24, *x, *y, *z]);
+        MMixInstruction::STHT(x, y, z) => {
+            bytes.extend_from_slice(&[0xB2, *x, *y, *z]);
         }
-        MMixInstruction::SUBI(x, y, z) => {
-            bytes.extend_from_slice(&[0x25, *x, *y, *z]);
+        MMixInstruction::STHTI(x, y, z) => {
+            bytes.extend_from_slice(&[0xB3, *x, *y, *z]);
         }
-        MMixInstruction::SUBU(x, y, z) => {
-            bytes.extend_from_slice(&[0x26, *x, *y, *z]);
+        MMixInstruction::STUNC(x, y, z) => {
+            bytes.extend_from_slice(&[0xB6, *x, *y, *z]);
         }
-        MMixInstruction::SUBUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x27, *x, *y, *z]);
+        MMixInstruction::STUNCI(x, y, z) => {
+            bytes.extend_from_slice(&[0xB7, *x, *y, *z]);
         }
-        MMixInstruction::ADDU2(x, y, z) => {
-            bytes.extend_from_slice(&[0x28, *x, *y, *z]);
+        // Special load/store and system instructions
+        MMixInstruction::CSWAP(x, y, z) => {
+            bytes.extend_from_slice(&[0x94, *x, *y, *z]);
         }
-        MMixInstruction::ADDU2I(x, y, z) => {
-            bytes.extend_from_slice(&[0x29, *x, *y, *z]);
+        MMixInstruction::CSWAPI(x, y, z) => {
+            bytes.extend_from_slice(&[0x95, *x, *y, *z]);
         }
-        MMixInstruction::ADDU4(x, y, z) => {
-            bytes.extend_from_slice(&[0x2A, *x, *y, *z]);
+        MMixInstruction::STCO(x, y, z) => {
+            bytes.extend_from_slice(&[0xB4, *x, *y, *z]);
         }
-        MMixInstruction::ADDU4I(x, y, z) => {
-            bytes.extend_from_slice(&[0x2B, *x, *y, *z]);
+        MMixInstruction::STCOI(x, y, z) => {
+            bytes.extend_from_slice(&[0xB5, *x, *y, *z]);
         }
-        MMixInstruction::ADDU8(x, y, z) => {
-            bytes.extend_from_slice(&[0x2C, *x, *y, *z]);
+        MMixInstruction::PRELD(x, y, z) => {
+            bytes.extend_from_slice(&[0x9A, *x, *y, *z]);
         }
-        MMixInstruction::ADDU8I(x, y, z) => {
-            bytes.extend_from_slice(&[0x2D, *x, *y, *z]);
+        MMixInstruction::PRELDI(x, y, z) => {
+            bytes.extend_from_slice(&[0x9B, *x, *y, *z]);
         }
-        MMixInstruction::ADDU16(x, y, z) => {
-            bytes.extend_from_slice(&[0x2E, *x, *y, *z]);
+        MMixInstruction::PREGO(x, y, z) => {
+            bytes.extend_from_slice(&[0x9C, *x, *y, *z]);
         }
-        MMixInstruction::ADDU16I(x, y, z) => {
-            bytes.extend_from_slice(&[0x2F, *x, *y, *z]);
+        MMixInstruction::PREGOI(x, y, z) => {
+            bytes.extend_from_slice(&[0x9D, *x, *y, *z]);
         }
-        MMixInstruction::AND(x, y, z) => {
-            bytes.extend_from_slice(&[0xC8, *x, *y, *z]);
+        MMixInstruction::PREST(x, y, z) => {
+            bytes.extend_from_slice(&[0xBA, *x, *y, *z]);
         }
-        MMixInstruction::ANDI(x, y, z) => {
-            bytes.extend_from_slice(&[0xC9, *x, *y, *z]);
+        MMixInstruction::PRESTI(x, y, z) => {
+            bytes.extend_from_slice(&[0xBB, *x, *y, *z]);
         }
-        MMixInstruction::XOR(x, y, z) => {
-            bytes.extend_from_slice(&[0xC6, *x, *y, *z]);
+        MMixInstruction::SYNCD(x, y, z) => {
+            bytes.extend_from_slice(&[0xB8, *x, *y, *z]);
         }
-        MMixInstruction::XORI(x, y, z) => {
-            bytes.extend_from_slice(&[0xC7, *x, *y, *z]);
+        MMixInstruction::SYNCDI(x, y, z) => {
+            bytes.extend_from_slice(&[0xB9, *x, *y, *z]);
         }
-        MMixInstruction::ANDN(x, y, z) => {
-            bytes.extend_from_slice(&[0xCA, *x, *y, *z]);
+        MMixInstruction::SYNCID(x, y, z) => {
+            bytes.extend_from_slice(&[0xBC, *x, *y, *z]);
         }
-        MMixInstruction::ANDNI(x, y, z) => {
-            bytes.extend_from_slice(&[0xCB, *x, *y, *z]);
+        MMixInstruction::SYNCIDI(x, y, z) => {
+            bytes.extend_from_slice(&[0xBD, *x, *y, *z]);
         }
-        MMixInstruction::NOR(x, y, z) => {
-            bytes.extend_from_slice(&[0xC2, *x, *y, *z]);
+        // Control flow
+        MMixInstruction::TRAP(x, y, z) => {
+            bytes.extend_from_slice(&[0x00, *x, *y, *z]);
         }
-        MMixInstruction::NORI(x, y, z) => {
-            bytes.extend_from_slice(&[0xC3, *x, *y, *z]);
+        MMixInstruction::JMP(offset) => {
+            let x = ((offset >> 16) & 0xFF) as u8;
+            let y = ((offset >> 8) & 0xFF) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0xF0, x, y, z]);
         }
-        MMixInstruction::NAND(x, y, z) => {
-            bytes.extend_from_slice(&[0xCC, *x, *y, *z]);
+        // Probable branch instructions
+        MMixInstruction::PBN(x, y, z) => {
+            bytes.extend_from_slice(&[0x50, *x, *y, *z]);
         }
-        MMixInstruction::NANDI(x, y, z) => {
-            bytes.extend_from_slice(&[0xCD, *x, *y, *z]);
+        MMixInstruction::PBNB(x, y, z) => {
+            bytes.extend_from_slice(&[0x51, *x, *y, *z]);
         }
-        MMixInstruction::NXOR(x, y, z) => {
-            bytes.extend_from_slice(&[0xCE, *x, *y, *z]);
+        MMixInstruction::PBZ(x, y, z) => {
+            bytes.extend_from_slice(&[0x52, *x, *y, *z]);
         }
-        MMixInstruction::NXORI(x, y, z) => {
-            bytes.extend_from_slice(&[0xCF, *x, *y, *z]);
+        MMixInstruction::PBZB(x, y, z) => {
+            bytes.extend_from_slice(&[0x53, *x, *y, *z]);
         }
-        MMixInstruction::ODIF(x, y, z) => {
-            bytes.extend_from_slice(&[0xD6, *x, *y, *z]);
+        MMixInstruction::PBP(x, y, z) => {
+            bytes.extend_from_slice(&[0x54, *x, *y, *z]);
         }
-        MMixInstruction::ODIFI(x, y, z) => {
-            bytes.extend_from_slice(&[0xD7, *x, *y, *z]);
+        MMixInstruction::PBPB(x, y, z) => {
+            bytes.extend_from_slice(&[0x55, *x, *y, *z]);
         }
-        MMixInstruction::SADD(x, y, z) => {
-            bytes.extend_from_slice(&[0xDA, *x, *y, *z]);
+        MMixInstruction::PBOD(x, y, z) => {
+            bytes.extend_from_slice(&[0x56, *x, *y, *z]);
         }
-        MMixInstruction::SADDI(x, y, z) => {
-            bytes.extend_from_slice(&[0xDB, *x, *y, *z]);
+        MMixInstruction::PBODB(x, y, z) => {
+            bytes.extend_from_slice(&[0x57, *x, *y, *z]);
         }
-        MMixInstruction::SL(x, y, z) => {
-            bytes.extend_from_slice(&[0x38, *x, *y, *z]);
+        MMixInstruction::PBNN(x, y, z) => {
+            bytes.extend_from_slice(&[0x58, *x, *y, *z]);
         }
-        MMixInstruction::SLI(x, y, z) => {
-            bytes.extend_from_slice(&[0x39, *x, *y, *z]);
+        MMixInstruction::PBNNB(x, y, z) => {
+            bytes.extend_from_slice(&[0x59, *x, *y, *z]);
         }
-        MMixInstruction::SLU(x, y, z) => {
-            bytes.extend_from_slice(&[0x3A, *x, *y, *z]);
+        MMixInstruction::PBNZ(x, y, z) => {
+            bytes.extend_from_slice(&[0x5A, *x, *y, *z]);
         }
-        MMixInstruction::SLUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x3B, *x, *y, *z]);
+        MMixInstruction::PBNZB(x, y, z) => {
+            bytes.extend_from_slice(&[0x5B, *x, *y, *z]);
         }
-        MMixInstruction::SR(x, y, z) => {
-            bytes.extend_from_slice(&[0x3C, *x, *y, *z]);
+        MMixInstruction::PBNP(x, y, z) => {
+            bytes.extend_from_slice(&[0x5C, *x, *y, *z]);
         }
-        MMixInstruction::SRI(x, y, z) => {
-            bytes.extend_from_slice(&[0x3D, *x, *y, *z]);
+        MMixInstruction::PBNPB(x, y, z) => {
+            bytes.extend_from_slice(&[0x5D, *x, *y, *z]);
         }
-        MMixInstruction::SRU(x, y, z) => {
-            bytes.extend_from_slice(&[0x3E, *x, *y, *z]);
+        MMixInstruction::PBEV(x, y, z) => {
+            bytes.extend_from_slice(&[0x5E, *x, *y, *z]);
         }
-        MMixInstruction::SRUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x3F, *x, *y, *z]);
-        }
-        MMixInstruction::INCL(x, y, z) => {
-            bytes.extend_from_slice(&[0xE7, *x, *y, *z]);
-        }
-        // Floating point instructions
-        MMixInstruction::FCMP(x, y, z) => {
-            bytes.extend_from_slice(&[0x01, *x, *y, *z]);
-        }
-        MMixInstruction::FUN(x, y, z) => {
-            bytes.extend_from_slice(&[0x02, *x, *y, *z]);
-        }
-        MMixInstruction::FEQL(x, y, z) => {
-            bytes.extend_from_slice(&[0x03, *x, *y, *z]);
-        }
-        MMixInstruction::FADD(x, y, z) => {
-            bytes.extend_from_slice(&[0x04, *x, *y, *z]);
-        }
-        MMixInstruction::FIX(x, y, z) => {
-            bytes.extend_from_slice(&[0x05, *x, *y, *z]);
-        }
-        MMixInstruction::FSUB(x, y, z) => {
-            bytes.extend_from_slice(&[0x06, *x, *y, *z]);
-        }
-        MMixInstruction::FIXU(x, y, z) => {
-            bytes.extend_from_slice(&[0x07, *x, *y, *z]);
-        }
-        MMixInstruction::FLOT(x, y, z) => {
-            bytes.extend_from_slice(&[0x08, *x, *y, *z]);
-        }
-        MMixInstruction::FLOTI(x, y, z) => {
-            bytes.extend_from_slice(&[0x09, *x, *y, *z]);
-        }
-        MMixInstruction::FLOTU(x, y, z) => {
-            bytes.extend_from_slice(&[0x0A, *x, *y, *z]);
-        }
-        MMixInstruction::FLOTUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x0B, *x, *y, *z]);
-        }
-        MMixInstruction::SFLOT(x, y, z) => {
-            bytes.extend_from_slice(&[0x0C, *x, *y, *z]);
-        }
-        MMixInstruction::SFLOTI(x, y, z) => {
-            bytes.extend_from_slice(&[0x0D, *x, *y, *z]);
-        }
-        MMixInstruction::SFLOTU(x, y, z) => {
-            bytes.extend_from_slice(&[0x0E, *x, *y, *z]);
-        }
-        MMixInstruction::SFLOTUI(x, y, z) => {
-            bytes.extend_from_slice(&[0x0F, *x, *y, *z]);
+        MMixInstruction::PBEVB(x, y, z) => {
+            bytes.extend_from_slice(&[0x5F, *x, *y, *z]);
         }
         // Branch instructions
         MMixInstruction::BN(x, offset) => {
@@ -785,30 +606,83 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::BEVB(x, offset) => {
             bytes.extend_from_slice(&[0x4F, *x, 0, *offset]);
         }
-        // Probable branch backward variants
-        MMixInstruction::PBNB(x, y, z) => {
-            bytes.extend_from_slice(&[0x51, *x, *y, *z]);
+        // Pseudo-branch instructions (map to conditional branches with inverted conditions)
+        MMixInstruction::JE(x, offset) => {
+            bytes.extend_from_slice(&[0x42, *x, 0, *offset]); // BZ
         }
-        MMixInstruction::PBZB(x, y, z) => {
-            bytes.extend_from_slice(&[0x53, *x, *y, *z]);
+        MMixInstruction::JNE(x, offset) => {
+            bytes.extend_from_slice(&[0x4A, *x, 0, *offset]); // BNZ
         }
-        MMixInstruction::PBPB(x, y, z) => {
-            bytes.extend_from_slice(&[0x55, *x, *y, *z]);
+        MMixInstruction::JL(x, offset) => {
+            bytes.extend_from_slice(&[0x40, *x, 0, *offset]); // BN
         }
-        MMixInstruction::PBODB(x, y, z) => {
-            bytes.extend_from_slice(&[0x57, *x, *y, *z]);
+        MMixInstruction::JG(x, offset) => {
+            bytes.extend_from_slice(&[0x44, *x, 0, *offset]); // BP
         }
-        MMixInstruction::PBNNB(x, y, z) => {
-            bytes.extend_from_slice(&[0x59, *x, *y, *z]);
+        // System control instructions
+        MMixInstruction::TRIP(x, y, z) => {
+            bytes.extend_from_slice(&[0xFF, *x, *y, *z]);
         }
-        MMixInstruction::PBNZB(x, y, z) => {
-            bytes.extend_from_slice(&[0x5B, *x, *y, *z]);
+        MMixInstruction::RESUME(xyz) => {
+            bytes.extend_from_slice(&[0xF9, 0, 0, *xyz]);
         }
-        MMixInstruction::PBNPB(x, y, z) => {
-            bytes.extend_from_slice(&[0x5D, *x, *y, *z]);
+        MMixInstruction::SYNC(xyz) => {
+            bytes.extend_from_slice(&[0xFC, 0, 0, *xyz]);
         }
-        MMixInstruction::PBEVB(x, y, z) => {
-            bytes.extend_from_slice(&[0x5F, *x, *y, *z]);
+        MMixInstruction::SWYM => {
+            bytes.extend_from_slice(&[0xFD, 0, 0, 0]);
+        }
+        MMixInstruction::HALT => {
+            bytes.extend_from_slice(&[0x00, 0, 0, 0]); // TRAP 0,Halt,0
+        }
+        MMixInstruction::INCL(x, y, z) => {
+            bytes.extend_from_slice(&[0xE7, *x, *y, *z]);
+        }
+        // Floating point instructions
+        MMixInstruction::FCMP(x, y, z) => {
+            bytes.extend_from_slice(&[0x01, *x, *y, *z]);
+        }
+        MMixInstruction::FUN(x, y, z) => {
+            bytes.extend_from_slice(&[0x02, *x, *y, *z]);
+        }
+        MMixInstruction::FEQL(x, y, z) => {
+            bytes.extend_from_slice(&[0x03, *x, *y, *z]);
+        }
+        MMixInstruction::FADD(x, y, z) => {
+            bytes.extend_from_slice(&[0x04, *x, *y, *z]);
+        }
+        MMixInstruction::FIX(x, y, z) => {
+            bytes.extend_from_slice(&[0x05, *x, *y, *z]);
+        }
+        MMixInstruction::FSUB(x, y, z) => {
+            bytes.extend_from_slice(&[0x06, *x, *y, *z]);
+        }
+        MMixInstruction::FIXU(x, y, z) => {
+            bytes.extend_from_slice(&[0x07, *x, *y, *z]);
+        }
+        MMixInstruction::FLOT(x, y, z) => {
+            bytes.extend_from_slice(&[0x08, *x, *y, *z]);
+        }
+        MMixInstruction::FLOTI(x, y, z) => {
+            bytes.extend_from_slice(&[0x09, *x, *y, *z]);
+        }
+        MMixInstruction::FLOTU(x, y, z) => {
+            bytes.extend_from_slice(&[0x0A, *x, *y, *z]);
+        }
+        MMixInstruction::FLOTUI(x, y, z) => {
+            bytes.extend_from_slice(&[0x0B, *x, *y, *z]);
+        }
+        MMixInstruction::SFLOT(x, y, z) => {
+            bytes.extend_from_slice(&[0x0C, *x, *y, *z]);
+        }
+        MMixInstruction::SFLOTI(x, y, z) => {
+            bytes.extend_from_slice(&[0x0D, *x, *y, *z]);
+        }
+        MMixInstruction::SFLOTU(x, y, z) => {
+            bytes.extend_from_slice(&[0x0E, *x, *y, *z]);
+        }
+        MMixInstruction::SFLOTUI(x, y, z) => {
+            bytes.extend_from_slice(&[0x0F, *x, *y, *z]);
         }
         // Conditional set instructions
         MMixInstruction::CSN(x, y, z) => {
@@ -941,13 +815,6 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         }
         MMixInstruction::ANDNL(x, yz) => {
             bytes.extend_from_slice(&encode_instruction(0xEF, *x, *yz));
-        }
-        _ => {
-            eprintln!(
-                "Warning: Unhandled instruction in encode_instruction_bytes: {:?}",
-                instruction
-            );
-            bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
         }
     }
 
