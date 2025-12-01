@@ -83,6 +83,17 @@ mnemonic_setl = { ^"SETL" }
 mnemonic_seth = { ^"SETH" }
 mnemonic_set = { ^"SET" }
 mnemonic_incl = { ^"INCL" }
+mnemonic_inch = { ^"INCH" }
+mnemonic_incmh = { ^"INCMH" }
+mnemonic_incml = { ^"INCML" }
+mnemonic_orh = { ^"ORH" }
+mnemonic_ormh = { ^"ORMH" }
+mnemonic_orml = { ^"ORML" }
+mnemonic_orl = { ^"ORL" }
+mnemonic_andnh = { ^"ANDNH" }
+mnemonic_andnmh = { ^"ANDNMH" }
+mnemonic_andnml = { ^"ANDNML" }
+mnemonic_andnl = { ^"ANDNL" }
 
 // Load/Store instructions - ordered longest first
 mnemonic_ldbui = { ^"LDBUI" }
@@ -177,6 +188,42 @@ mnemonic_nor = { ^"NOR" }
 mnemonic_muxi = { ^"MUXI" }
 mnemonic_mux = { ^"MUX" }
 
+// Conditional set instructions - ordered longest first
+mnemonic_csnni = { ^"CSNNI" }
+mnemonic_csnzi = { ^"CSNZI" }
+mnemonic_csnpi = { ^"CSNPI" }
+mnemonic_csodi = { ^"CSODI" }
+mnemonic_csevi = { ^"CSEVI" }
+mnemonic_csni = { ^"CSNI" }
+mnemonic_cszi = { ^"CSZI" }
+mnemonic_cspi = { ^"CSPI" }
+mnemonic_csnn = { ^"CSNN" }
+mnemonic_csnz = { ^"CSNZ" }
+mnemonic_csnp = { ^"CSNP" }
+mnemonic_csod = { ^"CSOD" }
+mnemonic_csev = { ^"CSEV" }
+mnemonic_csn = { ^"CSN" }
+mnemonic_csz = { ^"CSZ" }
+mnemonic_csp = { ^"CSP" }
+
+// Zero or set instructions - ordered longest first
+mnemonic_zsnni = { ^"ZSNNI" }
+mnemonic_zsnzi = { ^"ZSNZI" }
+mnemonic_zsnpi = { ^"ZSNPI" }
+mnemonic_zsodi = { ^"ZSODI" }
+mnemonic_zsevi = { ^"ZSEVI" }
+mnemonic_zsni = { ^"ZSNI" }
+mnemonic_zszi = { ^"ZSZI" }
+mnemonic_zspi = { ^"ZSPI" }
+mnemonic_zsnn = { ^"ZSNN" }
+mnemonic_zsnz = { ^"ZSNZ" }
+mnemonic_zsnp = { ^"ZSNP" }
+mnemonic_zsod = { ^"ZSOD" }
+mnemonic_zsev = { ^"ZSEV" }
+mnemonic_zsn = { ^"ZSN" }
+mnemonic_zsz = { ^"ZSZ" }
+mnemonic_zsp = { ^"ZSP" }
+
 // Bit fiddling operations (§11-12) - ordered longest first
 mnemonic_bdifi = { ^"BDIFI" }
 mnemonic_bdif = { ^"BDIF" }
@@ -204,6 +251,14 @@ mnemonic_sri = { ^"SRI" }
 mnemonic_sr = { ^"SR" }
 
 // Branch/Jump instructions - ordered longest first
+mnemonic_pbodb = { ^"PBODB" }
+mnemonic_pbnnb = { ^"PBNNB" }
+mnemonic_pbnzb = { ^"PBNZB" }
+mnemonic_pbnpb = { ^"PBNPB" }
+mnemonic_pbevb = { ^"PBEVB" }
+mnemonic_pbnb = { ^"PBNB" }
+mnemonic_pbzb = { ^"PBZB" }
+mnemonic_pbpb = { ^"PBPB" }
 mnemonic_pbod = { ^"PBOD" }
 mnemonic_pbnn = { ^"PBNN" }
 mnemonic_pbnz = { ^"PBNZ" }
@@ -212,6 +267,22 @@ mnemonic_pbev = { ^"PBEV" }
 mnemonic_pbn = { ^"PBN" }
 mnemonic_pbz = { ^"PBZ" }
 mnemonic_pbp = { ^"PBP" }
+mnemonic_bodb = { ^"BODB" }
+mnemonic_bnnb = { ^"BNNB" }
+mnemonic_bnzb = { ^"BNZB" }
+mnemonic_bnpb = { ^"BNPB" }
+mnemonic_bevb = { ^"BEVB" }
+mnemonic_bnb = { ^"BNB" }
+mnemonic_bzb = { ^"BZB" }
+mnemonic_bpb = { ^"BPB" }
+mnemonic_bod = { ^"BOD" }
+mnemonic_bnn = { ^"BNN" }
+mnemonic_bnz = { ^"BNZ" }
+mnemonic_bnp = { ^"BNP" }
+mnemonic_bev = { ^"BEV" }
+mnemonic_bn = { ^"BN" }
+mnemonic_bz = { ^"BZ" }
+mnemonic_bp = { ^"BP" }
 mnemonic_jne = { ^"JNE" }
 mnemonic_jmp = { ^"JMP" }
 mnemonic_je = { ^"JE" }
@@ -292,6 +363,17 @@ inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
 inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
 inst_setml_ri = { mnemonic_setml ~ operand_reg_imm }
 inst_incl_rrr = { mnemonic_incl ~ operand_reg_reg_reg }
+inst_inch_ri = { mnemonic_inch ~ operand_reg_imm }
+inst_incmh_ri = { mnemonic_incmh ~ operand_reg_imm }
+inst_incml_ri = { mnemonic_incml ~ operand_reg_imm }
+inst_orh_ri = { mnemonic_orh ~ operand_reg_imm }
+inst_ormh_ri = { mnemonic_ormh ~ operand_reg_imm }
+inst_orml_ri = { mnemonic_orml ~ operand_reg_imm }
+inst_orl_ri = { mnemonic_orl ~ operand_reg_imm }
+inst_andnh_ri = { mnemonic_andnh ~ operand_reg_imm }
+inst_andnmh_ri = { mnemonic_andnmh ~ operand_reg_imm }
+inst_andnml_ri = { mnemonic_andnml ~ operand_reg_imm }
+inst_andnl_ri = { mnemonic_andnl ~ operand_reg_imm }
 
 // Load/Store (can take reg+reg or reg+imm) - ordered longest first
 inst_load_store_rrr = {
@@ -392,14 +474,50 @@ inst_shift_rri = {
     operand_reg_reg_imm
 }
 
+// Conditional set instructions - 3 operands - ordered longest first
+inst_conditional_set_rrr = {
+    (mnemonic_csnni | mnemonic_csnzi | mnemonic_csnpi | mnemonic_csodi | mnemonic_csevi |
+     mnemonic_csni | mnemonic_cszi | mnemonic_cspi |
+     mnemonic_csnn | mnemonic_csnz | mnemonic_csnp | mnemonic_csod | mnemonic_csev |
+     mnemonic_csn | mnemonic_csz | mnemonic_csp) ~
+    operand_reg_reg_reg
+}
+
+inst_conditional_set_rri = {
+    (mnemonic_csnni | mnemonic_csnzi | mnemonic_csnpi | mnemonic_csodi | mnemonic_csevi |
+     mnemonic_csni | mnemonic_cszi | mnemonic_cspi) ~
+    operand_reg_reg_imm
+}
+
+// Zero or set instructions - 3 operands - ordered longest first
+inst_zero_or_set_rrr = {
+    (mnemonic_zsnni | mnemonic_zsnzi | mnemonic_zsnpi | mnemonic_zsodi | mnemonic_zsevi |
+     mnemonic_zsni | mnemonic_zszi | mnemonic_zspi |
+     mnemonic_zsnn | mnemonic_zsnz | mnemonic_zsnp | mnemonic_zsod | mnemonic_zsev |
+     mnemonic_zsn | mnemonic_zsz | mnemonic_zsp) ~
+    operand_reg_reg_reg
+}
+
+inst_zero_or_set_rri = {
+    (mnemonic_zsnni | mnemonic_zsnzi | mnemonic_zsnpi | mnemonic_zsodi | mnemonic_zsevi |
+     mnemonic_zsni | mnemonic_zszi | mnemonic_zspi) ~
+    operand_reg_reg_imm
+}
+
 // Branch instructions - ordered longest first
 inst_branch = {
-    (mnemonic_jne | mnemonic_je | mnemonic_jl | mnemonic_jg) ~
+    (mnemonic_bnnb | mnemonic_bnzb | mnemonic_bnpb | mnemonic_bevb |
+     mnemonic_bnn | mnemonic_bnz | mnemonic_bnp | mnemonic_bev |
+     mnemonic_bnb | mnemonic_bzb | mnemonic_bpb | mnemonic_bodb |
+     mnemonic_bn | mnemonic_bz | mnemonic_bp | mnemonic_bod |
+     mnemonic_jne | mnemonic_je | mnemonic_jl | mnemonic_jg) ~
     operand_reg_imm
 }
 
 inst_pbranch = {
-    (mnemonic_pbod | mnemonic_pbnn | mnemonic_pbnz | mnemonic_pbnp |
+    (mnemonic_pbnnb | mnemonic_pbnzb | mnemonic_pbnpb | mnemonic_pbevb |
+     mnemonic_pbodb | mnemonic_pbnb | mnemonic_pbzb | mnemonic_pbpb |
+     mnemonic_pbod | mnemonic_pbnn | mnemonic_pbnz | mnemonic_pbnp |
      mnemonic_pbev | mnemonic_pbn | mnemonic_pbz | mnemonic_pbp) ~
     operand_reg_imm
 }
@@ -478,6 +596,9 @@ inst_halt = { mnemonic_halt }
 // Combined instruction rule
 instruction = {
     inst_set_ri | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
+    inst_inch_ri | inst_incmh_ri | inst_incml_ri |
+    inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
+    inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |
     inst_load_store_rri | inst_load_store_rrr |
     inst_ldunc_rrr | inst_ldunc_rri | inst_stunc_rrr | inst_stunc_rri |
     inst_ldht_rrr | inst_ldht_rri | inst_stht_rrr | inst_stht_rri |
@@ -490,6 +611,8 @@ instruction = {
     inst_bitwise_rri | inst_bitwise_rrr |
     inst_bitfiddle_rri | inst_bitfiddle_rrr |
     inst_shift_rri | inst_shift_rrr |
+    inst_conditional_set_rri | inst_conditional_set_rrr |
+    inst_zero_or_set_rri | inst_zero_or_set_rrr |
     inst_pbranch | inst_branch | inst_jmp |
     inst_pushj | inst_pushjb | inst_pushgo_rrr | inst_pushgo_rri | inst_pop |
     inst_go_rrr | inst_go_rri |

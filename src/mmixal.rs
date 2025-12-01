@@ -721,6 +721,17 @@ impl MMixAssembler {
             Rule::inst_setmh_ri => self.parse_inst_setmh(inner),
             Rule::inst_setml_ri => self.parse_inst_setml(inner),
             Rule::inst_incl_rrr => self.parse_inst_incl(inner),
+            Rule::inst_inch_ri => self.parse_inst_inch(inner),
+            Rule::inst_incmh_ri => self.parse_inst_incmh(inner),
+            Rule::inst_incml_ri => self.parse_inst_incml(inner),
+            Rule::inst_orh_ri => self.parse_inst_orh(inner),
+            Rule::inst_ormh_ri => self.parse_inst_ormh(inner),
+            Rule::inst_orml_ri => self.parse_inst_orml(inner),
+            Rule::inst_orl_ri => self.parse_inst_orl(inner),
+            Rule::inst_andnh_ri => self.parse_inst_andnh(inner),
+            Rule::inst_andnmh_ri => self.parse_inst_andnmh(inner),
+            Rule::inst_andnml_ri => self.parse_inst_andnml(inner),
+            Rule::inst_andnl_ri => self.parse_inst_andnl(inner),
             Rule::inst_load_store_rrr => self.parse_inst_load_store_rrr(inner),
             Rule::inst_load_store_rri => self.parse_inst_load_store_rri(inner),
             Rule::inst_lda_rri => self.parse_inst_lda_rri(inner),
@@ -735,6 +746,10 @@ impl MMixAssembler {
             Rule::inst_bitfiddle_rri => self.parse_inst_bitfiddle_rri(inner),
             Rule::inst_shift_rrr => self.parse_inst_shift_rrr(inner),
             Rule::inst_shift_rri => self.parse_inst_shift_rri(inner),
+            Rule::inst_conditional_set_rrr => self.parse_inst_conditional_set_rrr(inner),
+            Rule::inst_conditional_set_rri => self.parse_inst_conditional_set_rri(inner),
+            Rule::inst_zero_or_set_rrr => self.parse_inst_zero_or_set_rrr(inner),
+            Rule::inst_zero_or_set_rri => self.parse_inst_zero_or_set_rri(inner),
             Rule::inst_pbranch => self.parse_inst_pbranch(inner),
             Rule::inst_branch => self.parse_inst_branch(inner),
             Rule::inst_jmp => self.parse_inst_jmp(inner),
@@ -786,7 +801,10 @@ impl MMixAssembler {
             Rule::inst_sync => self.parse_inst_sync(inner),
             Rule::inst_trap => self.parse_inst_trap(inner),
             Rule::inst_halt => Ok(MMixInstruction::HALT),
-            _ => Err(format!("Unhandled instruction: {:?}", inner.as_rule())),
+            _ => Err(format!(
+                "Unsupported instruction rule: {:?}",
+                inner.as_rule()
+            )),
         }
     }
 
@@ -864,6 +882,143 @@ impl MMixAssembler {
         let y = self.parse_register(ops.next().unwrap())?;
         let z = self.parse_register(ops.next().unwrap())?;
         Ok(MMixInstruction::INCL(x, y, z))
+    }
+
+    fn parse_inst_inch(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::INCH(reg, val))
+    }
+
+    fn parse_inst_incmh(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::INCMH(reg, val))
+    }
+
+    fn parse_inst_incml(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::INCML(reg, val))
+    }
+
+    fn parse_inst_orh(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ORH(reg, val))
+    }
+
+    fn parse_inst_ormh(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ORMH(reg, val))
+    }
+
+    fn parse_inst_orml(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ORML(reg, val))
+    }
+
+    fn parse_inst_orl(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ORL(reg, val))
+    }
+
+    fn parse_inst_andnh(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ANDNH(reg, val))
+    }
+
+    fn parse_inst_andnmh(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ANDNMH(reg, val))
+    }
+
+    fn parse_inst_andnml(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ANDNML(reg, val))
+    }
+
+    fn parse_inst_andnl(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::ANDNL(reg, val))
     }
 
     fn parse_inst_load_store_rrr(
@@ -1235,6 +1390,118 @@ impl MMixAssembler {
         }
     }
 
+    fn parse_inst_conditional_set_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "CSN" => Ok(MMixInstruction::CSN(x, y, z)),
+            "CSZ" => Ok(MMixInstruction::CSZ(x, y, z)),
+            "CSP" => Ok(MMixInstruction::CSP(x, y, z)),
+            "CSOD" => Ok(MMixInstruction::CSOD(x, y, z)),
+            "CSNN" => Ok(MMixInstruction::CSNN(x, y, z)),
+            "CSNZ" => Ok(MMixInstruction::CSNZ(x, y, z)),
+            "CSNP" => Ok(MMixInstruction::CSNP(x, y, z)),
+            "CSEV" => Ok(MMixInstruction::CSEV(x, y, z)),
+            _ => Err(format!(
+                "Unknown conditional set instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_conditional_set_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "CSNI" => Ok(MMixInstruction::CSNI(x, y, z)),
+            "CSZI" => Ok(MMixInstruction::CSZI(x, y, z)),
+            "CSPI" => Ok(MMixInstruction::CSPI(x, y, z)),
+            "CSODI" => Ok(MMixInstruction::CSODI(x, y, z)),
+            "CSNNI" => Ok(MMixInstruction::CSNNI(x, y, z)),
+            "CSNZI" => Ok(MMixInstruction::CSNZI(x, y, z)),
+            "CSNPI" => Ok(MMixInstruction::CSNPI(x, y, z)),
+            "CSEVI" => Ok(MMixInstruction::CSEVI(x, y, z)),
+            _ => Err(format!(
+                "Unknown conditional set immediate instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_zero_or_set_rrr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "ZSN" => Ok(MMixInstruction::ZSN(x, y, z)),
+            "ZSZ" => Ok(MMixInstruction::ZSZ(x, y, z)),
+            "ZSP" => Ok(MMixInstruction::ZSP(x, y, z)),
+            "ZSOD" => Ok(MMixInstruction::ZSOD(x, y, z)),
+            "ZSNN" => Ok(MMixInstruction::ZSNN(x, y, z)),
+            "ZSNZ" => Ok(MMixInstruction::ZSNZ(x, y, z)),
+            "ZSNP" => Ok(MMixInstruction::ZSNP(x, y, z)),
+            "ZSEV" => Ok(MMixInstruction::ZSEV(x, y, z)),
+            _ => Err(format!(
+                "Unknown zero or set instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    fn parse_inst_zero_or_set_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "ZSNI" => Ok(MMixInstruction::ZSNI(x, y, z)),
+            "ZSZI" => Ok(MMixInstruction::ZSZI(x, y, z)),
+            "ZSPI" => Ok(MMixInstruction::ZSPI(x, y, z)),
+            "ZSODI" => Ok(MMixInstruction::ZSODI(x, y, z)),
+            "ZSNNI" => Ok(MMixInstruction::ZSNNI(x, y, z)),
+            "ZSNZI" => Ok(MMixInstruction::ZSNZI(x, y, z)),
+            "ZSNPI" => Ok(MMixInstruction::ZSNPI(x, y, z)),
+            "ZSEVI" => Ok(MMixInstruction::ZSEVI(x, y, z)),
+            _ => Err(format!(
+                "Unknown zero or set immediate instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
     fn parse_inst_branch(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -1251,6 +1518,22 @@ impl MMixAssembler {
             "JNE" => Ok(MMixInstruction::JNE(x, offset)),
             "JL" => Ok(MMixInstruction::JL(x, offset)),
             "JG" => Ok(MMixInstruction::JG(x, offset)),
+            "BN" => Ok(MMixInstruction::BN(x, offset)),
+            "BNB" => Ok(MMixInstruction::BNB(x, offset)),
+            "BZ" => Ok(MMixInstruction::BZ(x, offset)),
+            "BZB" => Ok(MMixInstruction::BZB(x, offset)),
+            "BP" => Ok(MMixInstruction::BP(x, offset)),
+            "BPB" => Ok(MMixInstruction::BPB(x, offset)),
+            "BOD" => Ok(MMixInstruction::BOD(x, offset)),
+            "BODB" => Ok(MMixInstruction::BODB(x, offset)),
+            "BNN" => Ok(MMixInstruction::BNN(x, offset)),
+            "BNNB" => Ok(MMixInstruction::BNNB(x, offset)),
+            "BNZ" => Ok(MMixInstruction::BNZ(x, offset)),
+            "BNZB" => Ok(MMixInstruction::BNZB(x, offset)),
+            "BNP" => Ok(MMixInstruction::BNP(x, offset)),
+            "BNPB" => Ok(MMixInstruction::BNPB(x, offset)),
+            "BEV" => Ok(MMixInstruction::BEV(x, offset)),
+            "BEVB" => Ok(MMixInstruction::BEVB(x, offset)),
             _ => Err(format!("Unknown branch instruction: {}", mnem.as_str())),
         }
     }
@@ -1299,6 +1582,14 @@ impl MMixAssembler {
             "PBNZ" => Ok(MMixInstruction::PBNZ(x, y, z)),
             "PBNP" => Ok(MMixInstruction::PBNP(x, y, z)),
             "PBEV" => Ok(MMixInstruction::PBEV(x, y, z)),
+            "PBNB" => Ok(MMixInstruction::PBNB(x, y, z)),
+            "PBZB" => Ok(MMixInstruction::PBZB(x, y, z)),
+            "PBPB" => Ok(MMixInstruction::PBPB(x, y, z)),
+            "PBODB" => Ok(MMixInstruction::PBODB(x, y, z)),
+            "PBNNB" => Ok(MMixInstruction::PBNNB(x, y, z)),
+            "PBNZB" => Ok(MMixInstruction::PBNZB(x, y, z)),
+            "PBNPB" => Ok(MMixInstruction::PBNPB(x, y, z)),
+            "PBEVB" => Ok(MMixInstruction::PBEVB(x, y, z)),
             _ => Err(format!(
                 "Unknown probable branch instruction: {}",
                 mnem.as_str()
