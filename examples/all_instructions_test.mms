@@ -630,7 +630,7 @@ Test51  ADDUI   TestNum,TestNum,1
         SET     $10,5           % Clear and set to 5
         SET     $11,7           % Clear and set to 7
         MUL     Result,$10,$11
-        SET    Expect,35
+        SET     Expect,35
         CMP     Temp,Result,Expect
         PBZ     Temp,Test52
         JMP     TestFail
@@ -786,7 +786,7 @@ Test64  ADDUI   TestNum,TestNum,1
         SET     $10,1
         SET     $11,8
         SLU     Result,$10,$11
-        SET    Expect,256
+        SET     Expect,256
         CMP     Temp,Result,Expect
         PBZ     Temp,Test65
         JMP     TestFail
@@ -798,7 +798,7 @@ Test65  ADDUI   TestNum,TestNum,1
         SET     $10,256
         SET     $11,4
         SRU     Result,$10,$11
-        SET    Expect,16
+        SET     Expect,16
         CMP     Temp,Result,Expect
         PBZ     Temp,Test66
         JMP     TestFail
@@ -946,7 +946,7 @@ Test78  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BNZ     $10,Test78Skip
         SET     Result,#DEAD
-Test78Skip      SET    Expect,99
+Test78Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test79
         JMP     TestFail
@@ -959,7 +959,7 @@ Test79  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BP      $10,Test79Skip
         SET     Result,#DEAD
-Test79Skip      SET    Expect,99
+Test79Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test80
         JMP     TestFail
@@ -974,7 +974,7 @@ Test80  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BN      $10,Test80Skip
         SET     Result,#DEAD
-Test80Skip      SET    Expect,99
+Test80Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test81
         JMP     TestFail
@@ -987,7 +987,7 @@ Test81  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BNN     $10,Test81Skip
         SET     Result,#DEAD
-Test81Skip      SET    Expect,99
+Test81Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test82
         JMP     TestFail
@@ -1000,7 +1000,7 @@ Test82  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BNP     $10,Test82Skip
         SET     Result,#DEAD
-Test82Skip      SET    Expect,99
+Test82Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test83
         JMP     TestFail
@@ -1013,7 +1013,7 @@ Test83  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BOD     $10,Test83Skip
         SET     Result,#DEAD
-Test83Skip      SET    Expect,99
+Test83Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test84
         JMP     TestFail
@@ -1026,7 +1026,7 @@ Test84  ADDUI   TestNum,TestNum,1
         SET     Result,99
         BEV     $10,Test84Skip
         SET     Result,#DEAD
-Test84Skip      SET    Expect,99
+Test84Skip      SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test85
         JMP     TestFail
@@ -1039,7 +1039,7 @@ Test85  ADDUI   TestNum,TestNum,1
         SET     Result,#CAFE
         PBZ     $10,Test85Skip
         SET     Result,#DEAD
-Test85Skip      SET    Expect,#CAFE
+Test85Skip      SET     Expect,#CAFE
         CMP     Temp,Result,Expect
         PBZ     Temp,Test86
         JMP     TestFail
@@ -1052,7 +1052,7 @@ Test86  ADDUI   TestNum,TestNum,1
         SET     Result,#BABE
         PBNZ    $10,Test86Skip
         SET     Result,#DEAD
-Test86Skip      SET    Expect,#BABE
+Test86Skip      SET     Expect,#BABE
         CMP     Temp,Result,Expect
         PBZ     Temp,Test87
         JMP     TestFail
@@ -1062,11 +1062,11 @@ Test86Skip      SET    Expect,#BABE
 % ========================================
 Test87  ADDUI   TestNum,TestNum,1
         SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         SET     $11,42
         SET     $12,99
         CSN     Result,$10,$11
-        SET    Expect,42
+        SET     Expect,42
         CMP     Temp,Result,Expect
         PBZ     Temp,Test88
         JMP     TestFail
@@ -1079,7 +1079,7 @@ Test88  ADDUI   TestNum,TestNum,1
         SET     $11,0
         SET     $12,1
         CSZ     Result,$10,$11
-        SET    Expect,0
+        SET     Expect,0
         CMP     Temp,Result,Expect
         PBZ     Temp,Test89
         JMP     TestFail
@@ -1091,9 +1091,9 @@ Test89  ADDUI   TestNum,TestNum,1
         SET     $10,42
         SET     $11,1
         SET     $12,1
-        NEG     $12,Zero,$12
+        NEG     $12,0,$12
         CSP     Result,$10,$11
-        SET    Expect,1
+        SET     Expect,1
         CMP     Temp,Result,Expect
         PBZ     Temp,Test90
         JMP     TestFail
@@ -1105,9 +1105,9 @@ Test90  ADDUI   TestNum,TestNum,1
         SET     $10,0
         SET     $11,7
         SET     $12,1
-        NEG     $12,Zero,$12
+        NEG     $12,0,$12
         CSNN    Result,$10,$11
-        SET    Expect,7
+        SET     Expect,7
         CMP     Temp,Result,Expect
         PBZ     Temp,Test91
         JMP     TestFail
@@ -1120,7 +1120,7 @@ Test91  ADDUI   TestNum,TestNum,1
         SET     $11,11
         SET     $12,0
         CSNZ    Result,$10,$11
-        SET    Expect,11
+        SET     Expect,11
         CMP     Temp,Result,Expect
         PBZ     Temp,Test92
         JMP     TestFail
@@ -1133,7 +1133,7 @@ Test92  ADDUI   TestNum,TestNum,1
         SET     $11,3
         SET     $12,2
         CSOD    Result,$10,$11
-        SET    Expect,3
+        SET     Expect,3
         CMP     Temp,Result,Expect
         PBZ     Temp,Test93
         JMP     TestFail
@@ -1146,7 +1146,7 @@ Test93  ADDUI   TestNum,TestNum,1
         SET     $11,2
         SET     $12,3
         CSEV    Result,$10,$11
-        SET    Expect,2
+        SET     Expect,2
         CMP     Temp,Result,Expect
         PBZ     Temp,Test94
         JMP     TestFail
@@ -1156,10 +1156,10 @@ Test93  ADDUI   TestNum,TestNum,1
 % ========================================
 Test94  ADDUI   TestNum,TestNum,1
         SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         SET     $11,17
         ZSN     Result,$10,$11
-        SET    Expect,17
+        SET     Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test95
         JMP     TestFail
@@ -1171,7 +1171,7 @@ Test95  ADDUI   TestNum,TestNum,1
         SET     $10,0
         SET     $11,19
         ZSZ     Result,$10,$11
-        SET    Expect,19
+        SET     Expect,19
         CMP     Temp,Result,Expect
         PBZ     Temp,Test96
         JMP     TestFail
@@ -1183,7 +1183,7 @@ Test96  ADDUI   TestNum,TestNum,1
         SET     $10,42
         SET     $11,21
         ZSP     Result,$10,$11
-        SET    Expect,21
+        SET     Expect,21
         CMP     Temp,Result,Expect
         PBZ     Temp,Test97
         JMP     TestFail
@@ -1195,7 +1195,7 @@ Test97  ADDUI   TestNum,TestNum,1
         SET     $10,1
         SET     $11,17
         ZSNN    Result,$10,$11
-        SET    Expect,17
+        SET     Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test98
         JMP     TestFail
@@ -1207,7 +1207,7 @@ Test98  ADDUI   TestNum,TestNum,1
         SET     $10,7
         SET     $11,17
         ZSNZ    Result,$10,$11
-        SET    Expect,17
+        SET     Expect,17
         CMP     Temp,Result,Expect
         PBZ     Temp,Test99
         JMP     TestFail
@@ -1219,7 +1219,7 @@ Test99  ADDUI   TestNum,TestNum,1
         SET     $10,13
         SET     $11,27
         ZSOD    Result,$10,$11
-        SET    Expect,27
+        SET     Expect,27
         CMP     Temp,Result,Expect
         PBZ     Temp,Test100
         JMP     TestFail
@@ -1231,7 +1231,7 @@ Test100 ADDUI   TestNum,TestNum,1
         SET     $10,14
         SET     $11,29
         ZSEV    Result,$10,$11
-        SET    Expect,29
+        SET     Expect,29
         CMP     Temp,Result,Expect
         PBZ     Temp,Test101
         JMP     TestFail
@@ -1379,7 +1379,7 @@ Test113 ADDUI   TestNum,TestNum,1
         FLOTI   $10,Zero,50
         FLOTI   $11,Zero,50
         FCMP    Result,$10,$11
-        SET    Expect,0        % Equal
+        SET     Expect,0        % Equal
         CMP     Temp,Result,Expect
         PBZ     Temp,Test114
         JMP     TestFail
@@ -1391,7 +1391,7 @@ Test114 ADDUI   TestNum,TestNum,1
         FLOTI   $10,Zero,77
         FLOTI   $11,Zero,77
         FEQL    Result,$10,$11
-        SET    Expect,1        % True (equal)
+        SET     Expect,1        % True (equal)
         CMP     Temp,Result,Expect
         PBZ     Temp,Test115
         JMP     TestFail
@@ -1403,7 +1403,7 @@ Test115 ADDUI   TestNum,TestNum,1
         FLOTI   $10,Zero,100
         FLOTI   $11,Zero,200
         FUN     Result,$10,$11
-        SET    Expect,0        % False (both are ordered numbers)
+        SET     Expect,0        % False (both are ordered numbers)
         CMP     Temp,Result,Expect
         PBZ     Temp,Test116
         JMP     TestFail
@@ -1414,7 +1414,7 @@ Test115 ADDUI   TestNum,TestNum,1
 Test116 ADDUI   TestNum,TestNum,1
         FLOTI   $10,Zero,42
         FIX     Result,Zero,$10
-        SET    Expect,42
+        SET     Expect,42
         CMP     Temp,Result,Expect
         PBZ     Temp,Test117
         JMP     TestFail
@@ -1425,7 +1425,7 @@ Test116 ADDUI   TestNum,TestNum,1
 Test117 ADDUI   TestNum,TestNum,1
         FLOTUI  $10,Zero,200
         FIXU    Result,Zero,$10
-        SET    Expect,200
+        SET     Expect,200
         CMP     Temp,Result,Expect
         PBZ     Temp,Test118
         JMP     TestFail
@@ -1475,7 +1475,7 @@ Test121 ADDUI   TestNum,TestNum,1
         SET     $10,#1234
         PUT     rD,$10
         GET     Result,rD
-        SET    Expect,#1234
+        SET     Expect,#1234
         CMP     Temp,Result,Expect
         PBZ     Temp,Test122
         JMP     TestFail
@@ -1486,7 +1486,7 @@ Test121 ADDUI   TestNum,TestNum,1
 Test122 ADDUI   TestNum,TestNum,1
         PUTI    rE,99
         GET     Result,rE
-        SET    Expect,99
+        SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test123
         JMP     TestFail
@@ -1496,7 +1496,7 @@ Test122 ADDUI   TestNum,TestNum,1
 % ========================================
 Test123 ADDUI   TestNum,TestNum,1
         NEGI    Result,10,5
-        SET    Expect,5        % Result should be 10-5=5
+        SET     Expect,5        % Result should be 10-5=5
         CMP     Temp,Result,Expect
         PBZ     Temp,Test124
         JMP     TestFail
@@ -1506,7 +1506,7 @@ Test123 ADDUI   TestNum,TestNum,1
 % ========================================
 Test124 ADDUI   TestNum,TestNum,1
         NEGUI   Result,20,8
-        SET    Expect,12       % Result should be 20-8=12
+        SET     Expect,12       % Result should be 20-8=12
         CMP     Temp,Result,Expect
         PBZ     Temp,Test125
         JMP     TestFail
@@ -1520,9 +1520,9 @@ Test124 ADDUI   TestNum,TestNum,1
 % ========================================
 Test125 ADDUI   TestNum,TestNum,1
         SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         CSNI    Result,$10,88
-        SET    Expect,88
+        SET     Expect,88
         CMP     Temp,Result,Expect
         PBZ     Temp,Test126
         JMP     TestFail
@@ -1533,7 +1533,7 @@ Test125 ADDUI   TestNum,TestNum,1
 Test126 ADDUI   TestNum,TestNum,1
         SET     $10,0
         CSZI    Result,$10,99
-        SET    Expect,99
+        SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test127
         JMP     TestFail
@@ -1544,7 +1544,7 @@ Test126 ADDUI   TestNum,TestNum,1
 Test127 ADDUI   TestNum,TestNum,1
         SET     $10,42
         CSPI    Result,$10,77
-        SET    Expect,77
+        SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test128
         JMP     TestFail
@@ -1555,7 +1555,7 @@ Test127 ADDUI   TestNum,TestNum,1
 Test128 ADDUI   TestNum,TestNum,1
         SET     $10,13
         CSODI   Result,$10,55
-        SET    Expect,55
+        SET     Expect,55
         CMP     Temp,Result,Expect
         PBZ     Temp,Test129
         JMP     TestFail
@@ -1566,7 +1566,7 @@ Test128 ADDUI   TestNum,TestNum,1
 Test129 ADDUI   TestNum,TestNum,1
         SET     $10,0
         CSNNI   Result,$10,66
-        SET    Expect,66
+        SET     Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,Test130
         JMP     TestFail
@@ -1577,7 +1577,7 @@ Test129 ADDUI   TestNum,TestNum,1
 Test130 ADDUI   TestNum,TestNum,1
         SET     $10,1
         CSNZI   Result,$10,44
-        SET    Expect,44
+        SET     Expect,44
         CMP     Temp,Result,Expect
         PBZ     Temp,Test131
         JMP     TestFail
@@ -1588,7 +1588,7 @@ Test130 ADDUI   TestNum,TestNum,1
 Test131 ADDUI   TestNum,TestNum,1
         SET     $10,0
         CSNPI   Result,$10,33
-        SET    Expect,33
+        SET     Expect,33
         CMP     Temp,Result,Expect
         PBZ     Temp,Test132
         JMP     TestFail
@@ -1599,7 +1599,7 @@ Test131 ADDUI   TestNum,TestNum,1
 Test132 ADDUI   TestNum,TestNum,1
         SET     $10,22
         CSEVI   Result,$10,11
-        SET    Expect,11
+        SET     Expect,11
         CMP     Temp,Result,Expect
         PBZ     Temp,Test133
         JMP     TestFail
@@ -1613,9 +1613,9 @@ Test132 ADDUI   TestNum,TestNum,1
 % ========================================
 Test133 ADDUI   TestNum,TestNum,1
         SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         ZSNI    Result,$10,88
-        SET    Expect,88
+        SET     Expect,88
         CMP     Temp,Result,Expect
         PBZ     Temp,Test134
         JMP     TestFail
@@ -1626,7 +1626,7 @@ Test133 ADDUI   TestNum,TestNum,1
 Test134 ADDUI   TestNum,TestNum,1
         SET     $10,0
         ZSZI    Result,$10,99
-        SET    Expect,99
+        SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test135
         JMP     TestFail
@@ -1637,7 +1637,7 @@ Test134 ADDUI   TestNum,TestNum,1
 Test135 ADDUI   TestNum,TestNum,1
         SET     $10,42
         ZSPI    Result,$10,77
-        SET    Expect,77
+        SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test136
         JMP     TestFail
@@ -1648,7 +1648,7 @@ Test135 ADDUI   TestNum,TestNum,1
 Test136 ADDUI   TestNum,TestNum,1
         SET     $10,13
         ZSODI   Result,$10,55
-        SET    Expect,55
+        SET     Expect,55
         CMP     Temp,Result,Expect
         PBZ     Temp,Test137
         JMP     TestFail
@@ -1659,7 +1659,7 @@ Test136 ADDUI   TestNum,TestNum,1
 Test137 ADDUI   TestNum,TestNum,1
         SET     $10,0
         ZSNNI   Result,$10,66
-        SET    Expect,66
+        SET     Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,Test138
         JMP     TestFail
@@ -1670,7 +1670,7 @@ Test137 ADDUI   TestNum,TestNum,1
 Test138 ADDUI   TestNum,TestNum,1
         SET     $10,1
         ZSNZI   Result,$10,44
-        SET    Expect,44
+        SET     Expect,44
         CMP     Temp,Result,Expect
         PBZ     Temp,Test139
         JMP     TestFail
@@ -1681,7 +1681,7 @@ Test138 ADDUI   TestNum,TestNum,1
 Test139 ADDUI   TestNum,TestNum,1
         SET     $10,0
         ZSNPI   Result,$10,33
-        SET    Expect,33
+        SET     Expect,33
         CMP     Temp,Result,Expect
         PBZ     Temp,Test140
         JMP     TestFail
@@ -1692,7 +1692,7 @@ Test139 ADDUI   TestNum,TestNum,1
 Test140 ADDUI   TestNum,TestNum,1
         SET     $10,22
         ZSEVI   Result,$10,11
-        SET    Expect,11
+        SET     Expect,11
         CMP     Temp,Result,Expect
         PBZ     Temp,Test141
         JMP     TestFail
@@ -1707,12 +1707,12 @@ Test140 ADDUI   TestNum,TestNum,1
 Test141 ADDUI   TestNum,TestNum,1
         SET     Result,99
         JMP     Test141Forward
-Test141Back     SET    Expect,99
+Test141Back     SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test142
         JMP     TestFail
 Test141Forward  SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         BNB     $10,Test141Back
         JMP     TestFail
 
@@ -1722,7 +1722,7 @@ Test141Forward  SET     $10,5
 Test142 ADDUI   TestNum,TestNum,1
         SET     Result,88
         JMP     Test142Forward
-Test142Back     SET    Expect,88
+Test142Back     SET     Expect,88
         CMP     Temp,Result,Expect
         PBZ     Temp,Test143
         JMP     TestFail
@@ -1736,7 +1736,7 @@ Test142Forward  SET     $10,0
 Test143 ADDUI   TestNum,TestNum,1
         SET     Result,77
         JMP     Test143Forward
-Test143Back     SET    Expect,77
+Test143Back     SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test144
         JMP     TestFail
@@ -1750,7 +1750,7 @@ Test143Forward  SET     $10,1
 Test144 ADDUI   TestNum,TestNum,1
         SET     Result,66
         JMP     Test144Forward
-Test144Back     SET    Expect,66
+Test144Back     SET     Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,Test145
         JMP     TestFail
@@ -1764,7 +1764,7 @@ Test144Forward  SET     $10,7
 Test145 ADDUI   TestNum,TestNum,1
         SET     Result,55
         JMP     Test145Forward
-Test145Back     SET    Expect,55
+Test145Back     SET     Expect,55
         CMP     Temp,Result,Expect
         PBZ     Temp,Test146
         JMP     TestFail
@@ -1778,7 +1778,7 @@ Test145Forward  SET     $10,0
 Test146 ADDUI   TestNum,TestNum,1
         SET     Result,44
         JMP     Test146Forward
-Test146Back     SET    Expect,44
+Test146Back     SET     Expect,44
         CMP     Temp,Result,Expect
         PBZ     Temp,Test147
         JMP     TestFail
@@ -1792,7 +1792,7 @@ Test146Forward  SET     $10,1
 Test147 ADDUI   TestNum,TestNum,1
         SET     Result,33
         JMP     Test147Forward
-Test147Back     SET    Expect,33
+Test147Back     SET     Expect,33
         CMP     Temp,Result,Expect
         PBZ     Temp,Test148
         JMP     TestFail
@@ -1806,7 +1806,7 @@ Test147Forward  SET     $10,0
 Test148 ADDUI   TestNum,TestNum,1
         SET     Result,22
         JMP     Test148Forward
-Test148Back     SET    Expect,22
+Test148Back     SET     Expect,22
         CMP     Temp,Result,Expect
         PBZ     Temp,Test149
         JMP     TestFail
@@ -1824,12 +1824,12 @@ Test148Forward  SET     $10,8
 Test149 ADDUI   TestNum,TestNum,1
         SET     Result,99
         JMP     Test149Forward
-Test149Back     SET    Expect,99
+Test149Back     SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test150
         JMP     TestFail
 Test149Forward  SET     $10,5
-        NEG     $10,Zero,$10
+        NEG     $10,0,$10
         PBNB    $10,Test149Back
         JMP     TestFail
 
@@ -1839,7 +1839,7 @@ Test149Forward  SET     $10,5
 Test150 ADDUI   TestNum,TestNum,1
         SET     Result,88
         JMP     Test150Forward
-Test150Back     SET    Expect,88
+Test150Back     SET     Expect,88
         CMP     Temp,Result,Expect
         PBZ     Temp,Test151
         JMP     TestFail
@@ -1853,7 +1853,7 @@ Test150Forward  SET     $10,0
 Test151 ADDUI   TestNum,TestNum,1
         SET     Result,77
         JMP     Test151Forward
-Test151Back     SET    Expect,77
+Test151Back     SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test152
         JMP     TestFail
@@ -1867,7 +1867,7 @@ Test151Forward  SET     $10,1
 Test152 ADDUI   TestNum,TestNum,1
         SET     Result,66
         JMP     Test152Forward
-Test152Back     SET    Expect,66
+Test152Back     SET     Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,Test153
         JMP     TestFail
@@ -1881,7 +1881,7 @@ Test152Forward  SET     $10,7
 Test153 ADDUI   TestNum,TestNum,1
         SET     Result,55
         JMP     Test153Forward
-Test153Back     SET    Expect,55
+Test153Back     SET     Expect,55
         CMP     Temp,Result,Expect
         PBZ     Temp,Test154
         JMP     TestFail
@@ -1895,7 +1895,7 @@ Test153Forward  SET     $10,0
 Test154 ADDUI   TestNum,TestNum,1
         SET     Result,44
         JMP     Test154Forward
-Test154Back     SET    Expect,44
+Test154Back     SET     Expect,44
         CMP     Temp,Result,Expect
         PBZ     Temp,Test155
         JMP     TestFail
@@ -1909,7 +1909,7 @@ Test154Forward  SET     $10,1
 Test155 ADDUI   TestNum,TestNum,1
         SET     Result,33
         JMP     Test155Forward
-Test155Back     SET    Expect,33
+Test155Back     SET     Expect,33
         CMP     Temp,Result,Expect
         PBZ     Temp,Test156
         JMP     TestFail
@@ -1923,7 +1923,7 @@ Test155Forward  SET     $10,0
 Test156 ADDUI   TestNum,TestNum,1
         SET     Result,22
         JMP     Test156Forward
-Test156Back     SET    Expect,22
+Test156Back     SET     Expect,22
         CMP     Temp,Result,Expect
         PBZ     Temp,Test157
         JMP     TestFail
@@ -1945,7 +1945,7 @@ Test157 ADDUI   TestNum,TestNum,1
         SET     Result,99
         JE      $10,Test157Skip
         SET     Result,#DEAD
-Test157Skip     SET    Expect,99
+Test157Skip     SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test158
         JMP     TestFail
@@ -1960,7 +1960,7 @@ Test158 ADDUI   TestNum,TestNum,1
         SET     Result,88
         JNE     $10,Test158Skip
         SET     Result,#DEAD
-Test158Skip     SET    Expect,88
+Test158Skip     SET     Expect,88
         CMP     Temp,Result,Expect
         PBZ     Temp,Test159
         JMP     TestFail
@@ -1975,7 +1975,7 @@ Test159 ADDUI   TestNum,TestNum,1
         SET     Result,77
         JL      $10,Test159Skip
         SET     Result,#DEAD
-Test159Skip     SET    Expect,77
+Test159Skip     SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test160
         JMP     TestFail
@@ -1990,7 +1990,7 @@ Test160 ADDUI   TestNum,TestNum,1
         SET     Result,66
         JG      $10,Test160Skip
         SET     Result,#DEAD
-Test160Skip     SET    Expect,66
+Test160Skip     SET     Expect,66
         CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail

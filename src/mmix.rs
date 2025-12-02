@@ -123,7 +123,8 @@ macro_rules! f2i_conv {
 
 /// Macro for int-to-float conversions (register)
 macro_rules! i2f_conv_rr {
-    ($cpu:expr, $x:expr, $z:expr, $conv:expr) => {{
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $conv:expr) => {{
+        // Y is rounding mode register (currently unused)
         let z_val = $cpu.get_register($z);
         let result = $conv(z_val);
         $cpu.set_register($x, MMix::f64_to_u64(result));
@@ -135,8 +136,9 @@ macro_rules! i2f_conv_rr {
 /// Macro for int-to-float conversions (immediate)
 macro_rules! i2f_conv_ri {
     ($cpu:expr, $x:expr, $y:expr, $z:expr, $conv:expr) => {{
-        let yz = ($y as u16) << 8 | $z as u16;
-        let result = $conv(yz);
+        // Y is rounding mode register (currently unused)
+        // Z is 8-bit immediate value to convert
+        let result = $conv($z);
         $cpu.set_register($x, MMix::f64_to_u64(result));
         $cpu.advance_pc();
         true
@@ -668,30 +670,22 @@ impl MMix {
         }
     }
 
-    /// Conditional set: if cond($X), $X = $Y + $Z, else $X = $Y
+    /// Conditional set: if cond($Y), $X = $Z, else do nothing
     #[inline]
     fn cond_set_rr(&mut self, x: u8, y: u8, z: u8, cond: bool) {
-        let val_y = self.get_register(y);
-        let val_z = self.get_register(z);
-        let result = if cond {
-            val_y.wrapping_add(val_z)
-        } else {
-            val_y
-        };
-        self.set_register(x, result);
+        if cond {
+            let val_z = self.get_register(z);
+            self.set_register(x, val_z);
+        }
         self.advance_pc();
     }
 
-    /// Conditional set with immediate: if cond($X), $X = $Y + Z, else $X = $Y
+    /// Conditional set with immediate: if cond($Y), $X = Z, else do nothing
     #[inline]
     fn cond_set_ri(&mut self, x: u8, y: u8, z: u8, cond: bool) {
-        let val_y = self.get_register(y);
-        let result = if cond {
-            val_y.wrapping_add(z as u64)
-        } else {
-            val_y
-        };
-        self.set_register(x, result);
+        if cond {
+            self.set_register(x, z as u64);
+        }
         self.advance_pc();
     }
 
@@ -721,26 +715,18 @@ impl MMix {
         }
     }
 
-    /// Zero or set with register: if cond($X), $X = $Y + $Z, else $X = 0
+    /// Zero or set with register: if cond($Y), $X = $Z, else $X = 0
     #[inline]
     fn zero_set_rr(&mut self, x: u8, y: u8, z: u8, cond: bool) {
-        let result = if cond {
-            self.get_register(y).wrapping_add(self.get_register(z))
-        } else {
-            0
-        };
+        let result = if cond { self.get_register(z) } else { 0 };
         self.set_register(x, result);
         self.advance_pc();
     }
 
-    /// Zero or set with immediate: if cond($X), $X = $Y + Z, else $X = 0
+    /// Zero or set with immediate: if cond($Y), $X = Z, else $X = 0
     #[inline]
     fn zero_set_ri(&mut self, x: u8, y: u8, z: u8, cond: bool) {
-        let result = if cond {
-            self.get_register(y).wrapping_add(z as u64)
-        } else {
-            0
-        };
+        let result = if cond { z as u64 } else { 0 };
         self.set_register(x, result);
         self.advance_pc();
     }
@@ -878,36 +864,76 @@ impl MMix {
                 f2i_conv!(self, x, z, |f: f64| f as u64)
             }
             0x08 => {
-                // FLOT $X, $Z - Convert fixed to floating (signed)
-                i2f_conv_rr!(self, x, z, |v: u64| (v as i64) as f64)
+                // FLOT $X, $Y, $Z - Convert fixed to floating (signed)
+                // $Y is rounding mode (from register), $Z is source value
+                let value = self.get_register(z) as i64;
+                let result = value as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x09 => {
-                // FLOTI $X, YZ - Convert fixed to floating immediate (signed)
-                i2f_conv_ri!(self, x, y, z, |yz: u16| (yz as i16 as i64) as f64)
+                // FLOTI $X, $Y, Z - Convert fixed to floating immediate (signed)
+                // $Y is rounding mode (from register), Z is immediate value to convert
+                let value = z as i8; // Sign extend from byte
+                let result = (value as i64) as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0A => {
-                // FLOTU $X, $Z - Convert fixed unsigned to floating
-                i2f_conv_rr!(self, x, z, |v: u64| v as f64)
+                // FLOTU $X, $Y, $Z - Convert fixed unsigned to floating
+                // $Y is rounding mode (from register), $Z is source value
+                let value = self.get_register(z);
+                let result = value as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0B => {
-                // FLOTUI $X, YZ - Convert fixed unsigned to floating immediate
-                i2f_conv_ri!(self, x, y, z, |yz: u16| yz as f64)
+                // FLOTUI $X, $Y, Z - Convert fixed unsigned to floating immediate
+                // $Y is rounding mode (from register), Z is immediate value
+                let value = z as u64;
+                let result = value as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0C => {
-                // SFLOT $X, $Z - Convert fixed to short float (signed, 32-bit)
-                i2f_conv_rr!(self, x, z, |v: u64| ((v as i64) as f32) as f64)
+                // SFLOT $X, $Y, $Z - Convert fixed to short float (signed, 32-bit)
+                // $Y is rounding mode (from register), $Z is source value
+                let value = self.get_register(z) as i64;
+                let result = (value as f32) as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0D => {
-                // SFLOTI $X, YZ - Convert fixed to short float immediate (signed)
-                i2f_conv_ri!(self, x, y, z, |yz: u16| ((yz as i16 as i64) as f32) as f64)
+                // SFLOTI $X, $Y, Z - Convert fixed to short float immediate (signed)
+                // $Y is rounding mode (from register), Z is immediate value
+                let value = z as i8; // Sign extend
+                let result = ((value as i64) as f32) as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0E => {
-                // SFLOTU $X, $Z - Convert fixed unsigned to short float
-                i2f_conv_rr!(self, x, z, |v: u64| (v as f32) as f64)
+                // SFLOTU $X, $Y, $Z - Convert fixed unsigned to short float
+                // $Y is rounding mode (from register), $Z is source value
+                let value = self.get_register(z);
+                let result = (value as f32) as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x0F => {
-                // SFLOTUI $X, YZ - Convert fixed unsigned to short float immediate
-                i2f_conv_ri!(self, x, y, z, |yz: u16| (yz as f32) as f64)
+                // SFLOTUI $X, $Y, Z - Convert fixed unsigned to short float immediate
+                // $Y is rounding mode (from register), Z is immediate value
+                let value = z as u64;
+                let result = (value as f32) as f64;
+                self.set_register(x, Self::f64_to_u64(result));
+                self.advance_pc();
+                true
             }
             0x10 => {
                 // FMUL $X, $Y, $Z
@@ -2163,196 +2189,196 @@ impl MMix {
             }
             // Conditional Set instructions (§16) - opcodes 0x60-0x6F
             0x60 => {
-                // CSN $X, $Y, $Z - Conditional Set if Negative
-                let cond = (self.get_register(x) as i64) < 0;
+                // CSN $X, $Y, $Z - Conditional Set if Negative (checks $Y)
+                let cond = (self.get_register(y) as i64) < 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x61 => {
-                // CSNI $X, $Y, Z - Conditional Set if Negative (immediate)
-                let cond = (self.get_register(x) as i64) < 0;
+                // CSNI $X, $Y, Z - Conditional Set if Negative (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) < 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x62 => {
-                // CSZ $X, $Y, $Z - Conditional Set if Zero
-                let cond = self.get_register(x) == 0;
+                // CSZ $X, $Y, $Z - Conditional Set if Zero (checks $Y)
+                let cond = self.get_register(y) == 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x63 => {
-                // CSZI $X, $Y, Z - Conditional Set if Zero (immediate)
-                let cond = self.get_register(x) == 0;
+                // CSZI $X, $Y, Z - Conditional Set if Zero (immediate, checks $Y)
+                let cond = self.get_register(y) == 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x64 => {
-                // CSP $X, $Y, $Z - Conditional Set if Positive
-                let cond = (self.get_register(x) as i64) > 0;
+                // CSP $X, $Y, $Z - Conditional Set if Positive (checks $Y)
+                let cond = (self.get_register(y) as i64) > 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x65 => {
-                // CSPI $X, $Y, Z - Conditional Set if Positive (immediate)
-                let cond = (self.get_register(x) as i64) > 0;
+                // CSPI $X, $Y, Z - Conditional Set if Positive (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) > 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x66 => {
-                // CSOD $X, $Y, $Z - Conditional Set if Odd
-                let cond = (self.get_register(x) & 1) != 0;
+                // CSOD $X, $Y, $Z - Conditional Set if Odd (checks $Y)
+                let cond = (self.get_register(y) & 1) != 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x67 => {
-                // CSODI $X, $Y, Z - Conditional Set if Odd (immediate)
-                let cond = (self.get_register(x) & 1) != 0;
+                // CSODI $X, $Y, Z - Conditional Set if Odd (immediate, checks $Y)
+                let cond = (self.get_register(y) & 1) != 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x68 => {
-                // CSNN $X, $Y, $Z - Conditional Set if Non-Negative
-                let cond = (self.get_register(x) as i64) >= 0;
+                // CSNN $X, $Y, $Z - Conditional Set if Non-Negative (checks $Y)
+                let cond = (self.get_register(y) as i64) >= 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x69 => {
-                // CSNNI $X, $Y, Z - Conditional Set if Non-Negative (immediate)
-                let cond = (self.get_register(x) as i64) >= 0;
+                // CSNNI $X, $Y, Z - Conditional Set if Non-Negative (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) >= 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x6A => {
-                // CSNZ $X, $Y, $Z - Conditional Set if Non-Zero
-                let cond = self.get_register(x) != 0;
+                // CSNZ $X, $Y, $Z - Conditional Set if Non-Zero (checks $Y)
+                let cond = self.get_register(y) != 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x6B => {
-                // CSNZI $X, $Y, Z - Conditional Set if Non-Zero (immediate)
-                let cond = self.get_register(x) != 0;
+                // CSNZI $X, $Y, Z - Conditional Set if Non-Zero (immediate, checks $Y)
+                let cond = self.get_register(y) != 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x6C => {
-                // CSNP $X, $Y, $Z - Conditional Set if Non-Positive
-                let cond = (self.get_register(x) as i64) <= 0;
+                // CSNP $X, $Y, $Z - Conditional Set if Non-Positive (checks $Y)
+                let cond = (self.get_register(y) as i64) <= 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x6D => {
-                // CSNPI $X, $Y, Z - Conditional Set if Non-Positive (immediate)
-                let cond = (self.get_register(x) as i64) <= 0;
+                // CSNPI $X, $Y, Z - Conditional Set if Non-Positive (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) <= 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
             0x6E => {
-                // CSEV $X, $Y, $Z - Conditional Set if Even
-                let cond = (self.get_register(x) & 1) == 0;
+                // CSEV $X, $Y, $Z - Conditional Set if Even (checks $Y)
+                let cond = (self.get_register(y) & 1) == 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
             0x6F => {
-                // CSEVI $X, $Y, Z - Conditional Set if Even (immediate)
-                let cond = (self.get_register(x) & 1) == 0;
+                // CSEVI $X, $Y, Z - Conditional Set if Even (immediate, checks $Y)
+                let cond = (self.get_register(y) & 1) == 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
 
             // Zero or Set instructions (0x70-0x7F)
             0x70 => {
-                // ZSN $X, $Y, $Z - Zero or Set if Negative
-                let cond = (self.get_register(x) as i64) < 0;
+                // ZSN $X, $Y, $Z - Zero or Set if Negative (checks $Y)
+                let cond = (self.get_register(y) as i64) < 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x71 => {
-                // ZSNI $X, $Y, Z - Zero or Set if Negative (immediate)
-                let cond = (self.get_register(x) as i64) < 0;
+                // ZSNI $X, $Y, Z - Zero or Set if Negative (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) < 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x72 => {
-                // ZSZ $X, $Y, $Z - Zero or Set if Zero
-                let cond = self.get_register(x) == 0;
+                // ZSZ $X, $Y, $Z - Zero or Set if Zero (checks $Y)
+                let cond = self.get_register(y) == 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x73 => {
-                // ZSZI $X, $Y, Z - Zero or Set if Zero (immediate)
-                let cond = self.get_register(x) == 0;
+                // ZSZI $X, $Y, Z - Zero or Set if Zero (immediate, checks $Y)
+                let cond = self.get_register(y) == 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x74 => {
-                // ZSP $X, $Y, $Z - Zero or Set if Positive
-                let cond = self.get_register(x) != 0 && (self.get_register(x) as i64) > 0;
+                // ZSP $X, $Y, $Z - Zero or Set if Positive (checks $Y)
+                let cond = (self.get_register(y) as i64) > 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x75 => {
-                // ZSPI $X, $Y, Z - Zero or Set if Positive (immediate)
-                let cond = self.get_register(x) != 0 && (self.get_register(x) as i64) > 0;
+                // ZSPI $X, $Y, Z - Zero or Set if Positive (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) > 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x76 => {
-                // ZSOD $X, $Y, $Z - Zero or Set if Odd
-                let cond = (self.get_register(x) & 1) != 0;
+                // ZSOD $X, $Y, $Z - Zero or Set if Odd (checks $Y)
+                let cond = (self.get_register(y) & 1) != 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x77 => {
-                // ZSODI $X, $Y, Z - Zero or Set if Odd (immediate)
-                let cond = (self.get_register(x) & 1) != 0;
+                // ZSODI $X, $Y, Z - Zero or Set if Odd (immediate, checks $Y)
+                let cond = (self.get_register(y) & 1) != 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x78 => {
-                // ZSNN $X, $Y, $Z - Zero or Set if Non-Negative
-                let cond = (self.get_register(x) as i64) >= 0;
+                // ZSNN $X, $Y, $Z - Zero or Set if Non-Negative (checks $Y)
+                let cond = (self.get_register(y) as i64) >= 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x79 => {
-                // ZSNNI $X, $Y, Z - Zero or Set if Non-Negative (immediate)
-                let cond = (self.get_register(x) as i64) >= 0;
+                // ZSNNI $X, $Y, Z - Zero or Set if Non-Negative (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) >= 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x7A => {
-                // ZSNZ $X, $Y, $Z - Zero or Set if Non-Zero
-                let cond = self.get_register(x) != 0;
+                // ZSNZ $X, $Y, $Z - Zero or Set if Non-Zero (checks $Y)
+                let cond = self.get_register(y) != 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x7B => {
-                // ZSNZI $X, $Y, Z - Zero or Set if Non-Zero (immediate)
-                let cond = self.get_register(x) != 0;
+                // ZSNZI $X, $Y, Z - Zero or Set if Non-Zero (immediate, checks $Y)
+                let cond = self.get_register(y) != 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x7C => {
-                // ZSNP $X, $Y, $Z - Zero or Set if Non-Positive
-                let cond = (self.get_register(x) as i64) <= 0;
+                // ZSNP $X, $Y, $Z - Zero or Set if Non-Positive (checks $Y)
+                let cond = (self.get_register(y) as i64) <= 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x7D => {
-                // ZSNPI $X, $Y, Z - Zero or Set if Non-Positive (immediate)
-                let cond = (self.get_register(x) as i64) <= 0;
+                // ZSNPI $X, $Y, Z - Zero or Set if Non-Positive (immediate, checks $Y)
+                let cond = (self.get_register(y) as i64) <= 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
             0x7E => {
-                // ZSEV $X, $Y, $Z - Zero or Set if Even
-                let cond = (self.get_register(x) & 1) == 0;
+                // ZSEV $X, $Y, $Z - Zero or Set if Even (checks $Y)
+                let cond = (self.get_register(y) & 1) == 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
             0x7F => {
-                // ZSEVI $X, $Y, Z - Zero or Set if Even (immediate)
-                let cond = (self.get_register(x) & 1) == 0;
+                // ZSEVI $X, $Y, Z - Zero or Set if Even (immediate, checks $Y)
+                let cond = (self.get_register(y) & 1) == 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
@@ -5201,305 +5227,287 @@ mod tests {
     #[test]
     fn test_csn_condition_true() {
         let mut mmix = MMix::new();
-        // CSN $1, $2, $3 - Set $1 = $2 + $3 if $1 is negative
-        mmix.set_register(1, (-10i64) as u64);
-        mmix.set_register(2, 100);
+        // CSN $1, $2, $3 - If $2 < 0, set $1 = $3, else $1 = $2
+        mmix.set_register(2, (-10i64) as u64);
         mmix.set_register(3, 50);
         mmix.write_tetra(0, 0x60010203); // CSN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 150); // Condition true: 100 + 50
+        assert_eq!(mmix.get_register(1), 50); // Condition true: $3
     }
 
     #[test]
     fn test_csn_condition_false() {
         let mut mmix = MMix::new();
-        // CSN $1, $2, $3 - Set $1 = $2 if $1 is not negative
-        mmix.set_register(1, 5);
+        // CSN $1, $2, $3 - If $2 >= 0, do nothing
+        mmix.set_register(1, 99); // Initial value
         mmix.set_register(2, 100);
         mmix.set_register(3, 50);
         mmix.write_tetra(0, 0x60010203); // CSN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 99); // Condition false: unchanged
     }
 
     #[test]
     fn test_csni() {
         let mut mmix = MMix::new();
-        // CSNI $1, $2, 50 - Set $1 = $2 + 50 if $1 is negative
-        mmix.set_register(1, (-1i64) as u64);
-        mmix.set_register(2, 200);
+        // CSNI $1, $2, 50 - If $2 < 0, set $1 = 50, else $1 = $2
+        mmix.set_register(2, (-1i64) as u64);
         mmix.write_tetra(0, 0x61010232); // CSNI $1,$2,50
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 250); // 200 + 50
+        assert_eq!(mmix.get_register(1), 50); // Condition true: 50
     }
 
     #[test]
     fn test_csz_condition_true() {
         let mut mmix = MMix::new();
-        // CSZ $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 10);
+        // CSZ $1, $2, $3 - If $2 == 0, set $1 = $3, else $1 = $2
+        mmix.set_register(2, 0);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x62010203); // CSZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 30); // Condition true: 10 + 20
+        assert_eq!(mmix.get_register(1), 20); // Condition true: $3
     }
 
     #[test]
     fn test_csz_condition_false() {
         let mut mmix = MMix::new();
-        // CSZ $1, $2, $3 - Set $1 = $2 if $1 is not zero
-        mmix.set_register(1, 1);
+        // CSZ $1, $2, $3 - If $2 != 0, do nothing
+        mmix.set_register(1, 88); // Initial value
         mmix.set_register(2, 10);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x62010203); // CSZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 10); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 88); // Condition false: unchanged
     }
 
     #[test]
     fn test_cszi() {
         let mut mmix = MMix::new();
-        // CSZI $1, $2, 15 - Set $1 = $2 + 15 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 100);
+        // CSZI $1, $2, 15 - If $2 == 0, set $1 = 15, else $1 = $2
+        mmix.set_register(2, 0);
         mmix.write_tetra(0, 0x6301020F); // CSZI $1,$2,15
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 115);
+        assert_eq!(mmix.get_register(1), 15); // Condition true: 15
     }
 
     #[test]
     fn test_csp_condition_true() {
         let mut mmix = MMix::new();
-        // CSP $1, $2, $3 - Set $1 = $2 + $3 if $1 is positive
-        mmix.set_register(1, 42);
+        // CSP $1, $2, $3 - If $2 > 0, set $1 = $3, else $1 = $2
         mmix.set_register(2, 5);
         mmix.set_register(3, 7);
         mmix.write_tetra(0, 0x64010203); // CSP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 12); // Condition true: 5 + 7
+        assert_eq!(mmix.get_register(1), 7); // Condition true: $3
     }
 
     #[test]
     fn test_csp_condition_false_zero() {
         let mut mmix = MMix::new();
-        // CSP $1, $2, $3 - Set $1 = $2 if $1 is zero (not positive)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 5);
+        // CSP $1, $2, $3 - If $2 <= 0, do nothing
+        mmix.set_register(1, 77); // Initial value
+        mmix.set_register(2, 0);
         mmix.set_register(3, 7);
         mmix.write_tetra(0, 0x64010203); // CSP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 5); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 77); // Condition false: unchanged
     }
 
     #[test]
     fn test_cspi() {
         let mut mmix = MMix::new();
-        // CSPI $1, $2, 25 - Set $1 = $2 + 25 if $1 is positive
-        mmix.set_register(1, 100);
+        // CSPI $1, $2, 25 - If $2 > 0, set $1 = 25, else $1 = $2
         mmix.set_register(2, 50);
         mmix.write_tetra(0, 0x65010219); // CSPI $1,$2,25
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: 25
     }
 
     #[test]
     fn test_csod_condition_true() {
         let mut mmix = MMix::new();
-        // CSOD $1, $2, $3 - Set $1 = $2 + $3 if $1 is odd
-        mmix.set_register(1, 7);
-        mmix.set_register(2, 10);
+        // CSOD $1, $2, $3 - If $2 is odd, set $1 = $3, else $1 = $2
+        mmix.set_register(2, 7);
         mmix.set_register(3, 15);
         mmix.write_tetra(0, 0x66010203); // CSOD $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 25); // Condition true: 10 + 15
+        assert_eq!(mmix.get_register(1), 15); // Condition true: $3
     }
 
     #[test]
     fn test_csod_condition_false() {
         let mut mmix = MMix::new();
-        // CSOD $1, $2, $3 - Set $1 = $2 if $1 is even
-        mmix.set_register(1, 8);
-        mmix.set_register(2, 10);
+        // CSOD $1, $2, $3 - If $2 is even, do nothing
+        mmix.set_register(1, 66); // Initial value
+        mmix.set_register(2, 8);
         mmix.set_register(3, 15);
         mmix.write_tetra(0, 0x66010203); // CSOD $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 10); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 66); // Condition false: unchanged
     }
 
     #[test]
     fn test_csodi() {
         let mut mmix = MMix::new();
-        // CSODI $1, $2, 11 - Set $1 = $2 + 11 if $1 is odd
-        mmix.set_register(1, 99);
-        mmix.set_register(2, 20);
+        // CSODI $1, $2, 11 - If $2 is odd, set $1 = 11, else $1 = $2
+        mmix.set_register(2, 99);
         mmix.write_tetra(0, 0x6701020B); // CSODI $1,$2,11
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 31); // 20 + 11
+        assert_eq!(mmix.get_register(1), 11); // Condition true: 11
     }
 
     #[test]
     fn test_csnn_condition_true_positive() {
         let mut mmix = MMix::new();
-        // CSNN $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-negative
-        mmix.set_register(1, 10);
+        // CSNN $1, $2, $3 - If $2 >= 0, set $1 = $3, else $1 = $2
         mmix.set_register(2, 30);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x68010203); // CSNN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 70); // Condition true: 30 + 40
+        assert_eq!(mmix.get_register(1), 40); // Condition true: $3
     }
 
     #[test]
     fn test_csnn_condition_true_zero() {
         let mut mmix = MMix::new();
-        // CSNN $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero (non-negative)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 30);
+        // CSNN $1, $2, $3 - If $2 >= 0, set $1 = $3, else $1 = $2
+        mmix.set_register(2, 0);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x68010203); // CSNN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 70); // Condition true: 30 + 40
+        assert_eq!(mmix.get_register(1), 40); // Condition true: $3
     }
 
     #[test]
     fn test_csnn_condition_false() {
         let mut mmix = MMix::new();
-        // CSNN $1, $2, $3 - Set $1 = $2 if $1 is negative
-        mmix.set_register(1, (-5i64) as u64);
-        mmix.set_register(2, 30);
+        // CSNN $1, $2, $3 - If $2 < 0, do nothing
+        mmix.set_register(1, 55); // Initial value
+        mmix.set_register(2, (-5i64) as u64);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x68010203); // CSNN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 30); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 55); // Condition false: unchanged
     }
 
     #[test]
     fn test_csnni() {
         let mut mmix = MMix::new();
-        // CSNNI $1, $2, 8 - Set $1 = $2 + 8 if $1 is non-negative
-        mmix.set_register(1, 0);
+        // CSNNI $1, $2, 8 - If $2 >= 0, set $1 = 8, else $1 = $2
         mmix.set_register(2, 92);
         mmix.write_tetra(0, 0x69010208); // CSNNI $1,$2,8
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 92 + 8
+        assert_eq!(mmix.get_register(1), 8); // Condition true: 8
     }
 
     #[test]
     fn test_csnz_condition_true() {
         let mut mmix = MMix::new();
-        // CSNZ $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-zero
-        mmix.set_register(1, 1);
+        // CSNZ $1, $2, $3 - If $2 != 0, set $1 = $3, else $1 = $2
         mmix.set_register(2, 100);
         mmix.set_register(3, 200);
         mmix.write_tetra(0, 0x6A010203); // CSNZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 300); // Condition true: 100 + 200
+        assert_eq!(mmix.get_register(1), 200); // Condition true: $3
     }
 
     #[test]
     fn test_csnz_condition_false() {
         let mut mmix = MMix::new();
-        // CSNZ $1, $2, $3 - Set $1 = $2 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 100);
+        // CSNZ $1, $2, $3 - If $2 == 0, do nothing
+        mmix.set_register(1, 44); // Initial value
+        mmix.set_register(2, 0);
         mmix.set_register(3, 200);
         mmix.write_tetra(0, 0x6A010203); // CSNZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 44); // Condition false: unchanged
     }
 
     #[test]
     fn test_csnzi() {
         let mut mmix = MMix::new();
-        // CSNZI $1, $2, 33 - Set $1 = $2 + 33 if $1 is non-zero
-        mmix.set_register(1, 42);
+        // CSNZI $1, $2, 33 - If $2 != 0, set $1 = 33, else $1 = $2
         mmix.set_register(2, 67);
         mmix.write_tetra(0, 0x6B010221); // CSNZI $1,$2,33
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 67 + 33
+        assert_eq!(mmix.get_register(1), 33); // Condition true: 33
     }
 
     #[test]
     fn test_csnp_condition_true_negative() {
         let mut mmix = MMix::new();
-        // CSNP $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-positive
-        mmix.set_register(1, (-100i64) as u64);
-        mmix.set_register(2, 50);
+        // CSNP $1, $2, $3 - If $2 <= 0, set $1 = $3, else $1 = $2
+        mmix.set_register(2, (-100i64) as u64);
         mmix.set_register(3, 25);
         mmix.write_tetra(0, 0x6C010203); // CSNP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // Condition true: 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: $3
     }
 
     #[test]
     fn test_csnp_condition_true_zero() {
         let mut mmix = MMix::new();
-        // CSNP $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero (non-positive)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 50);
+        // CSNP $1, $2, $3 - If $2 == 0, set $1 = $3, else $1 = $2
+        mmix.set_register(2, 0);
         mmix.set_register(3, 25);
         mmix.write_tetra(0, 0x6C010203); // CSNP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // Condition true: 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: $3
     }
 
     #[test]
     fn test_csnp_condition_false() {
         let mut mmix = MMix::new();
-        // CSNP $1, $2, $3 - Set $1 = $2 if $1 is positive
-        mmix.set_register(1, 1);
+        // CSNP $1, $2, $3 - If $2 > 0, do nothing
+        mmix.set_register(1, 33); // Initial value
         mmix.set_register(2, 50);
         mmix.set_register(3, 25);
         mmix.write_tetra(0, 0x6C010203); // CSNP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 50); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 33); // Condition false: unchanged
     }
 
     #[test]
     fn test_csnpi() {
         let mut mmix = MMix::new();
-        // CSNPI $1, $2, 44 - Set $1 = $2 + 44 if $1 is non-positive
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 56);
+        // CSNPI $1, $2, 44 - If $2 <= 0, set $1 = 44, else $1 = $2
+        mmix.set_register(2, 0);
         mmix.write_tetra(0, 0x6D01022C); // CSNPI $1,$2,44
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 56 + 44
+        assert_eq!(mmix.get_register(1), 44); // Condition true: 44
     }
 
     #[test]
     fn test_csev_condition_true() {
         let mut mmix = MMix::new();
-        // CSEV $1, $2, $3 - Set $1 = $2 + $3 if $1 is even
-        mmix.set_register(1, 100);
+        // CSEV $1, $2, $3 - If $2 is even, set $1 = $3, else $1 = $2
         mmix.set_register(2, 80);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x6E010203); // CSEV $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // Condition true: 80 + 20
+        assert_eq!(mmix.get_register(1), 20); // Condition true: $3
     }
 
     #[test]
     fn test_csev_condition_false() {
         let mut mmix = MMix::new();
-        // CSEV $1, $2, $3 - Set $1 = $2 if $1 is odd
-        mmix.set_register(1, 7);
-        mmix.set_register(2, 80);
+        // CSEV $1, $2, $3 - If $2 is odd, do nothing
+        mmix.set_register(1, 22); // Initial value
+        mmix.set_register(2, 7);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x6E010203); // CSEV $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 80); // Condition false: just $2
+        assert_eq!(mmix.get_register(1), 22); // Condition false: unchanged
     }
 
     #[test]
     fn test_csevi() {
         let mut mmix = MMix::new();
-        // CSEVI $1, $2, 12 - Set $1 = $2 + 12 if $1 is even
-        mmix.set_register(1, 0);
+        // CSEVI $1, $2, 12 - If $2 is even, set $1 = 12, else $1 = $2
         mmix.set_register(2, 88);
         mmix.write_tetra(0, 0x6F01020C); // CSEVI $1,$2,12
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 88 + 12
+        assert_eq!(mmix.get_register(1), 12); // Condition true: 12
     }
 
     // ========== Floating Point Tests ==========
@@ -5765,18 +5773,18 @@ mod tests {
     #[test]
     fn test_floti() {
         let mut mmix = MMix::new();
-        // FLOTI $1, 256 - Convert immediate signed 256 to float
-        mmix.write_tetra(0, 0x09010100); // FLOTI $1,256 (YZ=0x0100)
+        // FLOTI $1, $0, 100 - Convert immediate signed 100 to float (Y=$0 is rounding mode, Z=100 is value)
+        mmix.write_tetra(0, 0x09010064); // FLOTI $1,$0,100 (X=01, Y=00, Z=64)
         assert!(mmix.execute_instruction());
         let result = f64::from_bits(mmix.get_register(1));
-        assert!((result - 256.0).abs() < 1e-10);
+        assert!((result - 100.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_floti_negative() {
         let mut mmix = MMix::new();
-        // FLOTI $1, -1 - Convert immediate signed -1 to float
-        mmix.write_tetra(0, 0x0901FFFF); // FLOTI $1,-1 (YZ=0xFFFF)
+        // FLOTI $1, $0, -1 - Convert immediate signed -1 to float (Y=$0, Z=0xFF=-1 as signed byte)
+        mmix.write_tetra(0, 0x090100FF); // FLOTI $1,$0,255 (X=01, Y=00, Z=FF which is -1 signed)
         assert!(mmix.execute_instruction());
         let result = f64::from_bits(mmix.get_register(1));
         assert!((result - (-1.0)).abs() < 1e-10);
@@ -5796,11 +5804,11 @@ mod tests {
     #[test]
     fn test_flotui() {
         let mut mmix = MMix::new();
-        // FLOTUI $1, 500 - Convert immediate unsigned 500 to float
-        mmix.write_tetra(0, 0x0B0101F4); // FLOTUI $1,500 (YZ=0x01F4)
+        // FLOTUI $1, $0, 244 - Convert immediate unsigned 244 to float (Y=$0, Z=244)
+        mmix.write_tetra(0, 0x0B0100F4); // FLOTUI $1,$0,244 (X=01, Y=00, Z=F4=244)
         assert!(mmix.execute_instruction());
         let result = f64::from_bits(mmix.get_register(1));
-        assert!((result - 500.0).abs() < 1e-10);
+        assert!((result - 244.0).abs() < 1e-10);
     }
 
     #[test]
@@ -5898,20 +5906,18 @@ mod tests {
     #[test]
     fn test_zsn_condition_true() {
         let mut mmix = MMix::new();
-        // ZSN $1, $2, $3 - Set $1 = $2 + $3 if $1 is negative
-        mmix.set_register(1, (-10i64) as u64);
-        mmix.set_register(2, 100);
+        // ZSN $1, $2, $3 - If $2 < 0, set $1 = $3, else $1 = 0
+        mmix.set_register(2, (-10i64) as u64);
         mmix.set_register(3, 50);
         mmix.write_tetra(0, 0x70010203); // ZSN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 150); // Condition true: 100 + 50
+        assert_eq!(mmix.get_register(1), 50); // Condition true: $3
     }
 
     #[test]
     fn test_zsn_condition_false() {
         let mut mmix = MMix::new();
-        // ZSN $1, $2, $3 - Set $1 = 0 if $1 is not negative
-        mmix.set_register(1, 5);
+        // ZSN $1, $2, $3 - If $2 >= 0, set $1 = 0
         mmix.set_register(2, 100);
         mmix.set_register(3, 50);
         mmix.write_tetra(0, 0x70010203); // ZSN $1,$2,$3
@@ -5922,24 +5928,22 @@ mod tests {
     #[test]
     fn test_zsni() {
         let mut mmix = MMix::new();
-        // ZSNI $1, $2, 50 - Set $1 = $2 + 50 if $1 is negative
-        mmix.set_register(1, (-1i64) as u64);
-        mmix.set_register(2, 200);
+        // ZSNI $1, $2, 50 - If $2 < 0, set $1 = 50, else $1 = 0
+        mmix.set_register(2, (-1i64) as u64);
         mmix.write_tetra(0, 0x71010232); // ZSNI $1,$2,50
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 250); // 200 + 50
+        assert_eq!(mmix.get_register(1), 50); // Condition true: 50
     }
 
     #[test]
     fn test_zsz_condition_true() {
         let mut mmix = MMix::new();
-        // ZSZ $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 10);
+        // ZSZ $1, $2, $3 - If $2 == 0, set $1 = $3, else $1 = 0
+        mmix.set_register(2, 0);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x72010203); // ZSZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 30); // Condition true: 10 + 20
+        assert_eq!(mmix.get_register(1), 20); // Condition true: $3
     }
 
     #[test]
@@ -5957,32 +5961,29 @@ mod tests {
     #[test]
     fn test_zszi() {
         let mut mmix = MMix::new();
-        // ZSZI $1, $2, 15 - Set $1 = $2 + 15 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 100);
+        // ZSZI $1, $2, 15 - If $2 == 0, set $1 = 15, else $1 = 0
+        mmix.set_register(2, 0);
         mmix.write_tetra(0, 0x7301020F); // ZSZI $1,$2,15
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 115);
+        assert_eq!(mmix.get_register(1), 15); // Condition true: 15
     }
 
     #[test]
     fn test_zsp_condition_true() {
         let mut mmix = MMix::new();
-        // ZSP $1, $2, $3 - Set $1 = $2 + $3 if $1 is positive
-        mmix.set_register(1, 42);
+        // ZSP $1, $2, $3 - If $2 > 0, set $1 = $3, else $1 = 0
         mmix.set_register(2, 5);
         mmix.set_register(3, 7);
         mmix.write_tetra(0, 0x74010203); // ZSP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 12); // Condition true: 5 + 7
+        assert_eq!(mmix.get_register(1), 7); // Condition true: $3
     }
 
     #[test]
     fn test_zsp_condition_false_zero() {
         let mut mmix = MMix::new();
-        // ZSP $1, $2, $3 - Set $1 = 0 if $1 is zero (not positive)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 5);
+        // ZSP $1, $2, $3 - If $2 <= 0, set $1 = 0
+        mmix.set_register(2, 0);
         mmix.set_register(3, 7);
         mmix.write_tetra(0, 0x74010203); // ZSP $1,$2,$3
         assert!(mmix.execute_instruction());
@@ -5992,24 +5993,22 @@ mod tests {
     #[test]
     fn test_zspi() {
         let mut mmix = MMix::new();
-        // ZSPI $1, $2, 25 - Set $1 = $2 + 25 if $1 is positive
-        mmix.set_register(1, 100);
+        // ZSPI $1, $2, 25 - If $2 > 0, set $1 = 25, else $1 = 0
         mmix.set_register(2, 50);
         mmix.write_tetra(0, 0x75010219); // ZSPI $1,$2,25
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: 25
     }
 
     #[test]
     fn test_zsod_condition_true() {
         let mut mmix = MMix::new();
-        // ZSOD $1, $2, $3 - Set $1 = $2 + $3 if $1 is odd
-        mmix.set_register(1, 7);
-        mmix.set_register(2, 10);
+        // ZSOD $1, $2, $3 - If $2 is odd, set $1 = $3, else $1 = 0
+        mmix.set_register(2, 7);
         mmix.set_register(3, 15);
         mmix.write_tetra(0, 0x76010203); // ZSOD $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 25); // Condition true: 10 + 15
+        assert_eq!(mmix.get_register(1), 15); // Condition true: $3
     }
 
     #[test]
@@ -6027,44 +6026,40 @@ mod tests {
     #[test]
     fn test_zsodi() {
         let mut mmix = MMix::new();
-        // ZSODI $1, $2, 11 - Set $1 = $2 + 11 if $1 is odd
-        mmix.set_register(1, 99);
-        mmix.set_register(2, 20);
+        // ZSODI $1, $2, 11 - If $2 is odd, set $1 = 11, else $1 = 0
+        mmix.set_register(2, 99);
         mmix.write_tetra(0, 0x7701020B); // ZSODI $1,$2,11
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 31); // 20 + 11
+        assert_eq!(mmix.get_register(1), 11); // Condition true: 11
     }
 
     #[test]
     fn test_zsnn_condition_true_positive() {
         let mut mmix = MMix::new();
-        // ZSNN $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-negative
-        mmix.set_register(1, 10);
+        // ZSNN $1, $2, $3 - If $2 >= 0, set $1 = $3, else $1 = 0
         mmix.set_register(2, 30);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x78010203); // ZSNN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 70); // Condition true: 30 + 40
+        assert_eq!(mmix.get_register(1), 40); // Condition true: $3
     }
 
     #[test]
     fn test_zsnn_condition_true_zero() {
         let mut mmix = MMix::new();
-        // ZSNN $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero (non-negative)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 30);
+        // ZSNN $1, $2, $3 - If $2 >= 0, set $1 = $3, else $1 = 0
+        mmix.set_register(2, 0);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x78010203); // ZSNN $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 70); // Condition true: 30 + 40
+        assert_eq!(mmix.get_register(1), 40); // Condition true: $3
     }
 
     #[test]
     fn test_zsnn_condition_false() {
         let mut mmix = MMix::new();
-        // ZSNN $1, $2, $3 - Set $1 = 0 if $1 is negative
-        mmix.set_register(1, (-5i64) as u64);
-        mmix.set_register(2, 30);
+        // ZSNN $1, $2, $3 - If $2 < 0, set $1 = 0
+        mmix.set_register(2, (-5i64) as u64);
         mmix.set_register(3, 40);
         mmix.write_tetra(0, 0x78010203); // ZSNN $1,$2,$3
         assert!(mmix.execute_instruction());
@@ -6074,32 +6069,29 @@ mod tests {
     #[test]
     fn test_zsnni() {
         let mut mmix = MMix::new();
-        // ZSNNI $1, $2, 8 - Set $1 = $2 + 8 if $1 is non-negative
-        mmix.set_register(1, 0);
+        // ZSNNI $1, $2, 8 - If $2 >= 0, set $1 = 8, else $1 = 0
         mmix.set_register(2, 92);
         mmix.write_tetra(0, 0x79010208); // ZSNNI $1,$2,8
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 92 + 8
+        assert_eq!(mmix.get_register(1), 8); // Condition true: 8
     }
 
     #[test]
     fn test_zsnz_condition_true() {
         let mut mmix = MMix::new();
-        // ZSNZ $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-zero
-        mmix.set_register(1, 1);
+        // ZSNZ $1, $2, $3 - If $2 != 0, set $1 = $3, else $1 = 0
         mmix.set_register(2, 100);
         mmix.set_register(3, 200);
         mmix.write_tetra(0, 0x7A010203); // ZSNZ $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 300); // Condition true: 100 + 200
+        assert_eq!(mmix.get_register(1), 200); // Condition true: $3
     }
 
     #[test]
     fn test_zsnz_condition_false() {
         let mut mmix = MMix::new();
-        // ZSNZ $1, $2, $3 - Set $1 = 0 if $1 is zero
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 100);
+        // ZSNZ $1, $2, $3 - If $2 == 0, set $1 = 0
+        mmix.set_register(2, 0);
         mmix.set_register(3, 200);
         mmix.write_tetra(0, 0x7A010203); // ZSNZ $1,$2,$3
         assert!(mmix.execute_instruction());
@@ -6109,36 +6101,33 @@ mod tests {
     #[test]
     fn test_zsnzi() {
         let mut mmix = MMix::new();
-        // ZSNZI $1, $2, 33 - Set $1 = $2 + 33 if $1 is non-zero
-        mmix.set_register(1, 42);
+        // ZSNZI $1, $2, 33 - If $2 != 0, set $1 = 33, else $1 = 0
         mmix.set_register(2, 67);
         mmix.write_tetra(0, 0x7B010221); // ZSNZI $1,$2,33
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 67 + 33
+        assert_eq!(mmix.get_register(1), 33); // Condition true: 33
     }
 
     #[test]
     fn test_zsnp_condition_true_negative() {
         let mut mmix = MMix::new();
-        // ZSNP $1, $2, $3 - Set $1 = $2 + $3 if $1 is non-positive
-        mmix.set_register(1, (-100i64) as u64);
-        mmix.set_register(2, 50);
+        // ZSNP $1, $2, $3 - If $2 <= 0, set $1 = $3, else $1 = 0
+        mmix.set_register(2, (-100i64) as u64);
         mmix.set_register(3, 25);
         mmix.write_tetra(0, 0x7C010203); // ZSNP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // Condition true: 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: $3
     }
 
     #[test]
     fn test_zsnp_condition_true_zero() {
         let mut mmix = MMix::new();
-        // ZSNP $1, $2, $3 - Set $1 = $2 + $3 if $1 is zero (non-positive)
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 50);
+        // ZSNP $1, $2, $3 - If $2 == 0, set $1 = $3, else $1 = 0
+        mmix.set_register(2, 0);
         mmix.set_register(3, 25);
         mmix.write_tetra(0, 0x7C010203); // ZSNP $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 75); // Condition true: 50 + 25
+        assert_eq!(mmix.get_register(1), 25); // Condition true: $3
     }
 
     #[test]
@@ -6156,32 +6145,29 @@ mod tests {
     #[test]
     fn test_zsnpi() {
         let mut mmix = MMix::new();
-        // ZSNPI $1, $2, 44 - Set $1 = $2 + 44 if $1 is non-positive
-        mmix.set_register(1, 0);
-        mmix.set_register(2, 56);
+        // ZSNPI $1, $2, 44 - If $2 <= 0, set $1 = 44, else $1 = 0
+        mmix.set_register(2, 0);
         mmix.write_tetra(0, 0x7D01022C); // ZSNPI $1,$2,44
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 56 + 44
+        assert_eq!(mmix.get_register(1), 44); // Condition true: 44
     }
 
     #[test]
     fn test_zsev_condition_true() {
         let mut mmix = MMix::new();
-        // ZSEV $1, $2, $3 - Set $1 = $2 + $3 if $1 is even
-        mmix.set_register(1, 100);
+        // ZSEV $1, $2, $3 - If $2 is even, set $1 = $3, else $1 = 0
         mmix.set_register(2, 80);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x7E010203); // ZSEV $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // Condition true: 80 + 20
+        assert_eq!(mmix.get_register(1), 20); // Condition true: $3
     }
 
     #[test]
     fn test_zsev_condition_false() {
         let mut mmix = MMix::new();
-        // ZSEV $1, $2, $3 - Set $1 = 0 if $1 is odd
-        mmix.set_register(1, 7);
-        mmix.set_register(2, 80);
+        // ZSEV $1, $2, $3 - If $2 is odd, set $1 = 0
+        mmix.set_register(2, 7);
         mmix.set_register(3, 20);
         mmix.write_tetra(0, 0x7E010203); // ZSEV $1,$2,$3
         assert!(mmix.execute_instruction());
@@ -6191,12 +6177,11 @@ mod tests {
     #[test]
     fn test_zsevi() {
         let mut mmix = MMix::new();
-        // ZSEVI $1, $2, 12 - Set $1 = $2 + 12 if $1 is even
-        mmix.set_register(1, 0);
+        // ZSEVI $1, $2, 12 - If $2 is even, set $1 = 12, else $1 = 0
         mmix.set_register(2, 88);
         mmix.write_tetra(0, 0x7F01020C); // ZSEVI $1,$2,12
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 100); // 88 + 12
+        assert_eq!(mmix.get_register(1), 12); // Condition true: 12
     }
 
     // ========== Special Load/Store Tests ==========
