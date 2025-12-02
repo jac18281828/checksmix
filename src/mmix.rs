@@ -499,12 +499,16 @@ impl Default for MMix {
 impl MMix {
     /// Create a new MMIX computer with all registers and memory initialized to zero.
     pub fn new() -> Self {
-        Self {
+        let mut mmix = Self {
             general_regs: [0; 256],
             special_regs: [0; 32],
             memory: HashMap::new(),
             pc: 0,
-        }
+        };
+        // Initialize rN (serial number register) to a default value
+        // The MMIX specification says this should be a unique machine serial number
+        mmix.set_special(SpecialReg::RN, 2009);
+        mmix
     }
 
     /// Get the value of a general-purpose register.
@@ -662,9 +666,13 @@ impl MMix {
     #[inline]
     fn branch_backward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
-            let offset = (y as u16) << 8 | z as u16;
-            // Backward branch is relative to current PC (not PC+4)
-            self.pc = self.pc.wrapping_sub((offset as u64) * 4);
+            // YZ is a signed 16-bit offset in tetras (4-byte units)
+            // For backward branches, this is typically negative (e.g., 0xFFF4 = -12)
+            let yz = ((y as u16) << 8) | (z as u16);
+            let offset = yz as i16; // Interpret as signed
+            // Backward branch: PC = PC + (offset * 4)
+            // Note: offset is negative for backward branches
+            self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
         } else {
             self.advance_pc();
         }
@@ -672,7 +680,7 @@ impl MMix {
 
     /// Conditional set: if cond($Y), $X = $Z, else do nothing
     #[inline]
-    fn cond_set_rr(&mut self, x: u8, y: u8, z: u8, cond: bool) {
+    fn cond_set_rr(&mut self, x: u8, _y: u8, z: u8, cond: bool) {
         if cond {
             let val_z = self.get_register(z);
             self.set_register(x, val_z);
@@ -682,7 +690,7 @@ impl MMix {
 
     /// Conditional set with immediate: if cond($Y), $X = Z, else do nothing
     #[inline]
-    fn cond_set_ri(&mut self, x: u8, y: u8, z: u8, cond: bool) {
+    fn cond_set_ri(&mut self, x: u8, _y: u8, z: u8, cond: bool) {
         if cond {
             self.set_register(x, z as u64);
         }
@@ -717,7 +725,7 @@ impl MMix {
 
     /// Zero or set with register: if cond($Y), $X = $Z, else $X = 0
     #[inline]
-    fn zero_set_rr(&mut self, x: u8, y: u8, z: u8, cond: bool) {
+    fn zero_set_rr(&mut self, x: u8, _y: u8, z: u8, cond: bool) {
         let result = if cond { self.get_register(z) } else { 0 };
         self.set_register(x, result);
         self.advance_pc();
@@ -725,7 +733,7 @@ impl MMix {
 
     /// Zero or set with immediate: if cond($Y), $X = Z, else $X = 0
     #[inline]
-    fn zero_set_ri(&mut self, x: u8, y: u8, z: u8, cond: bool) {
+    fn zero_set_ri(&mut self, x: u8, _y: u8, z: u8, cond: bool) {
         let result = if cond { z as u64 } else { 0 };
         self.set_register(x, result);
         self.advance_pc();

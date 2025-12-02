@@ -283,9 +283,9 @@ impl MmoDecoder {
             }
 
             if self.data[i] != MM {
-                // Not an MM record - skip
+                // All records should start with MM in our MMO files
                 debug!(
-                    "Expected MM escape code at offset {}, got 0x{:02X}",
+                    "Unexpected byte (not MM escape) at offset 0x{:X}: 0x{:02X}",
                     i, self.data[i]
                 );
                 i += 1;
@@ -313,6 +313,10 @@ impl MmoDecoder {
 
                     // Load yz tetras (4*yz bytes) at current_addr
                     let byte_count = yz * 4;
+                    debug!(
+                        "lop_quote: loading {} bytes at 0x{:X}",
+                        byte_count, current_addr
+                    );
                     for offset in 0..byte_count {
                         if i + offset < self.data.len() {
                             write_byte(current_addr + offset as u64, self.data[i + offset]);
@@ -348,6 +352,7 @@ impl MmoDecoder {
                         self.data[i + 7],
                     ]);
                     current_addr = ((high as u64) << 32) | (low as u64);
+                    debug!("lop_loc: set address to 0x{:X}", current_addr);
                     i += 8;
                 }
                 Ok(MmoRecordType::LopPre) => {
