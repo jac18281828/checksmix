@@ -806,15 +806,20 @@ impl MMix {
     /// Returns true if execution should continue, false if halted.
     #[instrument(skip(self), fields(pc = format!("0x{:X}", self.pc)))]
     pub fn execute_instruction(&mut self) -> bool {
-        let (op, x, y, z) = self.fetch_instruction();
+        let (op_byte, x, y, z) = self.fetch_instruction();
         debug!(
-            op = format!("0x{:02X}", op),
+            op = format!("0x{:02X}", op_byte),
             x, y, z, "Executing instruction"
         );
 
-        match op {
+        use crate::mmixal::Opcode;
+        let opcode = Opcode::try_from(op_byte).unwrap_or_else(|_| {
+            panic!("Invalid opcode {:#04x} at PC {:#018x}", op_byte, self.pc);
+        });
+
+        match opcode {
             // Floating Point instructions
-            0x00 => {
+            Opcode::TRAP => {
                 // TRAP X, YZ or TRAP X, Y, Z - Force trap interrupt
                 // X = 0 for immediate (YZ), X > 0 for register ($Y, $Z)
                 // For immediate form: Y is the trap number, Z is an argument
@@ -833,7 +838,7 @@ impl MMix {
                     false // Halt by default for unhandled register traps
                 }
             }
-            0x01 => {
+            Opcode::FCMP => {
                 // FCMP $X, $Y, $Z - Floating compare
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
@@ -841,7 +846,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x02 => {
+            Opcode::FUN => {
                 // FUN $X, $Y, $Z - Floating unordered
                 fcmp_rr!(
                     self,
@@ -851,63 +856,63 @@ impl MMix {
                     |y: f64, z: f64| if y.is_nan() || z.is_nan() { 1 } else { 0 }
                 )
             }
-            0x03 => {
+            Opcode::FEQL => {
                 // FEQL $X, $Y, $Z - Floating equal to
                 fcmp_rr!(self, x, y, z, |y: f64, z: f64| if y == z { 1 } else { 0 })
             }
-            0x04 => {
+            Opcode::FADD => {
                 // FADD $X, $Y, $Z
                 fbinop_rr!(self, x, y, z, |a, b| a + b)
             }
-            0x05 => {
+            Opcode::FIX => {
                 // FIX $X, $Z - Convert floating to fixed (signed)
                 f2i_conv!(self, x, z, |f: f64| f as i64 as u64)
             }
-            0x06 => {
+            Opcode::FSUB => {
                 // FSUB $X, $Y, $Z
                 fbinop_rr!(self, x, y, z, |a, b| a - b)
             }
-            0x07 => {
+            Opcode::FIXU => {
                 // FIXU $X, $Z - Convert floating to fixed unsigned
                 f2i_conv!(self, x, z, |f: f64| f as u64)
             }
-            0x08 => {
+            Opcode::FLOT => {
                 // FLOT $X, $Y, $Z - Convert fixed to floating (signed)
                 i2f_conv_rr!(self, x, y, z, |v: u64| (v as i64) as f64)
             }
-            0x09 => {
+            Opcode::FLOTI => {
                 // FLOTI $X, $Y, Z - Convert fixed to floating immediate (signed)
                 i2f_conv_ri!(self, x, y, z, |v: u8| ((v as i8) as i64) as f64)
             }
-            0x0A => {
+            Opcode::FLOTU => {
                 // FLOTU $X, $Y, $Z - Convert fixed unsigned to floating
                 i2f_conv_rr!(self, x, y, z, |v: u64| v as f64)
             }
-            0x0B => {
+            Opcode::FLOTUI => {
                 // FLOTUI $X, $Y, Z - Convert fixed unsigned to floating immediate
                 i2f_conv_ri!(self, x, y, z, |v: u8| v as f64)
             }
-            0x0C => {
+            Opcode::SFLOT => {
                 // SFLOT $X, $Y, $Z - Convert fixed to short float (signed, 32-bit)
                 i2f_conv_rr!(self, x, y, z, |v: u64| ((v as i64) as f32) as f64)
             }
-            0x0D => {
+            Opcode::SFLOTI => {
                 // SFLOTI $X, $Y, Z - Convert fixed to short float immediate (signed)
                 i2f_conv_ri!(self, x, y, z, |v: u8| (((v as i8) as i64) as f32) as f64)
             }
-            0x0E => {
+            Opcode::SFLOTU => {
                 // SFLOTU $X, $Y, $Z - Convert fixed unsigned to short float
                 i2f_conv_rr!(self, x, y, z, |v: u64| (v as f32) as f64)
             }
-            0x0F => {
+            Opcode::SFLOTUI => {
                 // SFLOTUI $X, $Y, Z - Convert fixed unsigned to short float immediate
                 i2f_conv_ri!(self, x, y, z, |v: u8| (v as f32) as f64)
             }
-            0x10 => {
+            Opcode::FMUL => {
                 // FMUL $X, $Y, $Z
                 fbinop_rr!(self, x, y, z, |a, b| a * b)
             }
-            0x11 => {
+            Opcode::FCMPE => {
                 // FCMPE $X, $Y, $Z - Floating compare with epsilon
                 // Epsilon from rE register
                 let y_val = Self::u64_to_f64(self.get_register(y));
@@ -925,7 +930,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x12 => {
+            Opcode::FUNE => {
                 // FUNE $X, $Y, $Z - Floating unordered with epsilon
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
@@ -940,7 +945,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x13 => {
+            Opcode::FEQLE => {
                 // FEQLE $X, $Y, $Z - Floating equivalent with epsilon
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
@@ -951,19 +956,19 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x14 => {
+            Opcode::FDIV => {
                 // FDIV $X, $Y, $Z
                 fbinop_rr!(self, x, y, z, |a, b| a / b)
             }
-            0x15 => {
+            Opcode::FSQRT => {
                 // FSQRT $X, $Z
                 funop!(self, x, z, |v: f64| v.sqrt())
             }
-            0x16 => {
+            Opcode::FREM => {
                 // FREM $X, $Y, $Z
                 fbinop_rr!(self, x, y, z, |a, b| a % b)
             }
-            0x17 => {
+            Opcode::FINT => {
                 // FINT $X, $Y, $Z - Floating integerize with rounding mode from rA
                 // Y field must be 0, Z field contains operand
                 let z_val = Self::u64_to_f64(self.get_register(z));
@@ -985,7 +990,7 @@ impl MMix {
             }
 
             // Load instructions
-            0x80 => {
+            Opcode::LDB => {
                 // LDB $X, $Y, $Z - Load byte signed
                 // s($X) <- s(M[$Y + $Z])
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -995,7 +1000,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x81 => {
+            Opcode::LDBI => {
                 // LDB $X, $Y, Z - Load byte signed (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let byte = self.read_byte(addr);
@@ -1004,7 +1009,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x82 => {
+            Opcode::LDBU => {
                 // LDBU $X, $Y, $Z - Load byte unsigned
                 // u($X) <- M[$Y + $Z]
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1013,7 +1018,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x83 => {
+            Opcode::LDBUI => {
                 // LDBU $X, $Y, Z - Load byte unsigned (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let byte = self.read_byte(addr);
@@ -1021,7 +1026,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x84 => {
+            Opcode::LDW => {
                 // LDW $X, $Y, $Z - Load wyde signed
                 // s($X) <- s(M2[$Y + $Z])
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1031,7 +1036,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x85 => {
+            Opcode::LDWI => {
                 // LDW $X, $Y, Z - Load wyde signed (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let wyde = self.read_wyde(addr);
@@ -1040,7 +1045,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x86 => {
+            Opcode::LDWU => {
                 // LDWU $X, $Y, $Z - Load wyde unsigned
                 // u($X) <- M2[$Y + $Z]
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1049,7 +1054,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x87 => {
+            Opcode::LDWUI => {
                 // LDWU $X, $Y, Z - Load wyde unsigned (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let wyde = self.read_wyde(addr);
@@ -1057,7 +1062,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x88 => {
+            Opcode::LDT => {
                 // LDT $X, $Y, $Z - Load tetra signed
                 // s($X) <- s(M4[$Y + $Z])
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1067,7 +1072,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x89 => {
+            Opcode::LDTI => {
                 // LDT $X, $Y, Z - Load tetra signed (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let tetra = self.read_tetra(addr);
@@ -1076,7 +1081,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8A => {
+            Opcode::LDTU => {
                 // LDTU $X, $Y, $Z - Load tetra unsigned
                 // u($X) <- M4[$Y + $Z]
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1085,7 +1090,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8B => {
+            Opcode::LDTUI => {
                 // LDTU $X, $Y, Z - Load tetra unsigned (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let tetra = self.read_tetra(addr);
@@ -1093,7 +1098,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8C => {
+            Opcode::LDO => {
                 // LDO $X, $Y, $Z - Load octa
                 // u($X) <- M8[$Y + $Z]
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1102,7 +1107,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8D => {
+            Opcode::LDOI => {
                 // LDO $X, $Y, Z - Load octa (immediate)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let octa = self.read_octa(addr);
@@ -1110,7 +1115,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8E => {
+            Opcode::LDOU => {
                 // LDOU $X, $Y, $Z - Load octa unsigned (same as LDO)
                 // u($X) <- M8[$Y + $Z]
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1119,7 +1124,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x8F => {
+            Opcode::LDOUI => {
                 // LDOU $X, $Y, Z - Load octa unsigned (immediate, same as LDO)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let octa = self.read_octa(addr);
@@ -1127,7 +1132,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x90 => {
+            Opcode::LDSF => {
                 // LDSF $X, $Y, $Z - Load short float (32-bit float to 64-bit)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let tetra = self.read_tetra(addr);
@@ -1137,7 +1142,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x91 => {
+            Opcode::LDSFI => {
                 // LDSFI $X, $Y, Z - Load short float immediate (32-bit float to 64-bit)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let tetra = self.read_tetra(addr);
@@ -1147,17 +1152,17 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x22 => {
+            Opcode::ADDU => {
                 // ADDU $X, $Y, $Z
                 binop_rr!(self, x, y, z, u64::wrapping_add)
             }
-            0x23 => {
+            Opcode::ADDUI => {
                 // ADDUI $X, $Y, Z
                 binop_ri!(self, x, y, z, u64::wrapping_add)
             }
             // SET instructions
             // SET family instructions - opcodes 0xE0-0xEF
-            0xE0 => {
+            Opcode::SETH => {
                 // SETH $X, YZ - Set high wyde (clears low 48 bits)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 48;
@@ -1165,7 +1170,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE1 => {
+            Opcode::SETMH => {
                 // SETMH $X, YZ - Set medium high wyde (clears bits 32-47, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 32;
@@ -1176,7 +1181,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE2 => {
+            Opcode::SETML => {
                 // SETML $X, YZ - Set medium low wyde (clears bits 16-31, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 16;
@@ -1187,7 +1192,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE3 => {
+            Opcode::SETL => {
                 // SETL $X, YZ - Set low wyde (clears bits 0-15, then sets them)
                 let yz = ((y as u64) << 8) | (z as u64);
                 let current = self.get_register(x);
@@ -1197,7 +1202,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE4 => {
+            Opcode::INCH => {
                 // INCH $X, YZ - Increase by high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 48;
@@ -1206,7 +1211,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE5 => {
+            Opcode::INCMH => {
                 // INCMH $X, YZ - Increase by medium high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 32;
@@ -1215,7 +1220,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE6 => {
+            Opcode::INCML => {
                 // INCML $X, YZ - Increase by medium low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 16;
@@ -1224,7 +1229,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE7 => {
+            Opcode::INCL => {
                 // INCL $X, YZ - Increase by low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let current = self.get_register(x);
@@ -1232,7 +1237,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE8 => {
+            Opcode::ORH => {
                 // ORH $X, YZ - OR with high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 48;
@@ -1241,7 +1246,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xE9 => {
+            Opcode::ORMH => {
                 // ORMH $X, YZ - OR with medium high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 32;
@@ -1250,7 +1255,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xEA => {
+            Opcode::ORML => {
                 // ORML $X, YZ - OR with medium low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let value = yz << 16;
@@ -1259,7 +1264,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xEB => {
+            Opcode::ORL => {
                 // ORL $X, YZ - OR with low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let current = self.get_register(x);
@@ -1267,7 +1272,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xEC => {
+            Opcode::ANDNH => {
                 // ANDNH $X, YZ - AND-NOT with high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let mask = !(yz << 48);
@@ -1276,7 +1281,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xED => {
+            Opcode::ANDNMH => {
                 // ANDNMH $X, YZ - AND-NOT with medium high wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let mask = !(yz << 32);
@@ -1285,7 +1290,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xEE => {
+            Opcode::ANDNML => {
                 // ANDNML $X, YZ - AND-NOT with medium low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let mask = !(yz << 16);
@@ -1294,7 +1299,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xEF => {
+            Opcode::ANDNL => {
                 // ANDNL $X, YZ - AND-NOT with low wyde
                 let yz = ((y as u64) << 8) | (z as u64);
                 let mask = !yz;
@@ -1305,7 +1310,7 @@ impl MMix {
             }
 
             // Special Load/Store instructions (0x92-0x9F)
-            0x92 => {
+            Opcode::LDHT => {
                 // LDHT $X, $Y, $Z - Load high tetra
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let tetra = self.read_tetra(addr);
@@ -1314,7 +1319,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x93 => {
+            Opcode::LDHTI => {
                 // LDHTI $X, $Y, Z - Load high tetra immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let tetra = self.read_tetra(addr);
@@ -1323,7 +1328,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x94 => {
+            Opcode::CSWAP => {
                 // CSWAP $X, $Y, $Z - Compare and swap octabytes
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let mem_value = self.read_octa(addr);
@@ -1339,7 +1344,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x95 => {
+            Opcode::CSWAPI => {
                 // CSWAPI $X, $Y, Z - Compare and swap octabytes immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let mem_value = self.read_octa(addr);
@@ -1355,7 +1360,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x96 => {
+            Opcode::LDUNC => {
                 // LDUNC $X, $Y, $Z - Load uncached (treat as normal load)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.read_octa(addr);
@@ -1363,7 +1368,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x97 => {
+            Opcode::LDUNCI => {
                 // LDUNCI $X, $Y, Z - Load uncached immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.read_octa(addr);
@@ -1371,7 +1376,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x98 => {
+            Opcode::LDVTS => {
                 // LDVTS $X, $Y, $Z - Load virtual translation status (simplified)
                 // In a full implementation, this would interact with virtual memory
                 // For now, return 0 (no translation)
@@ -1379,40 +1384,40 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x99 => {
+            Opcode::LDVTSI => {
                 // LDVTSI $X, $Y, Z - Load virtual translation status immediate
                 self.set_register(x, 0);
                 self.advance_pc();
                 true
             }
-            0x9A => {
+            Opcode::PRELD => {
                 // PRELD $X, $Y, $Z - Preload data (hint, no-op in simulation)
                 self.advance_pc();
                 true
             }
-            0x9B => {
+            Opcode::PRELDI => {
                 // PRELDI $X, $Y, Z - Preload data immediate (hint, no-op)
                 self.advance_pc();
                 true
             }
-            0x9C => {
+            Opcode::PREGO => {
                 // PREGO $X, $Y, $Z - Preload to go (hint, no-op in simulation)
                 self.advance_pc();
                 true
             }
-            0x9D => {
+            Opcode::PREGOI => {
                 // PREGOI $X, $Y, Z - Preload to go immediate (hint, no-op)
                 self.advance_pc();
                 true
             }
-            0x9E => {
+            Opcode::GO => {
                 // GO $X, $Y, $Z - Go to location
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 self.set_register(x, self.pc + 4); // Save return address
                 self.pc = addr;
                 true
             }
-            0x9F => {
+            Opcode::GOI => {
                 // GOI $X, $Y, Z - Go to location immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 self.set_register(x, self.pc + 4); // Save return address
@@ -1421,7 +1426,7 @@ impl MMix {
             }
 
             // Store instructions
-            0xA0 => {
+            Opcode::STB => {
                 // STB $X, $Y, $Z - Store byte (with overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1435,7 +1440,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA1 => {
+            Opcode::STBI => {
                 // STB $X, $Y, Z - Store byte immediate (with overflow check)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1447,7 +1452,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA2 => {
+            Opcode::STBU => {
                 // STBU $X, $Y, $Z - Store byte unsigned (no overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1455,7 +1460,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA3 => {
+            Opcode::STBUI => {
                 // STBU $X, $Y, Z - Store byte unsigned immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1463,7 +1468,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA4 => {
+            Opcode::STW => {
                 // STW $X, $Y, $Z - Store wyde (with overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1475,7 +1480,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA5 => {
+            Opcode::STWI => {
                 // STW $X, $Y, Z - Store wyde immediate (with overflow check)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1487,7 +1492,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA6 => {
+            Opcode::STWU => {
                 // STWU $X, $Y, $Z - Store wyde unsigned (no overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1495,7 +1500,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA7 => {
+            Opcode::STWUI => {
                 // STWU $X, $Y, Z - Store wyde unsigned immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1503,7 +1508,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA8 => {
+            Opcode::STT => {
                 // STT $X, $Y, $Z - Store tetra (with overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1515,7 +1520,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xA9 => {
+            Opcode::STTI => {
                 // STT $X, $Y, Z - Store tetra immediate (with overflow check)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1527,7 +1532,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAA => {
+            Opcode::STTU => {
                 // STTU $X, $Y, $Z - Store tetra unsigned (no overflow check)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1535,7 +1540,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAB => {
+            Opcode::STTUI => {
                 // STTU $X, $Y, Z - Store tetra unsigned immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1543,7 +1548,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAC => {
+            Opcode::STO => {
                 // STO $X, $Y, $Z - Store octa
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1551,7 +1556,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAD => {
+            Opcode::STOI => {
                 // STO $X, $Y, Z - Store octa immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1559,7 +1564,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAE => {
+            Opcode::STOU => {
                 // STOU $X, $Y, $Z - Store octa unsigned (same as STO)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1567,7 +1572,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xAF => {
+            Opcode::STOUI => {
                 // STOU $X, $Y, Z - Store octa unsigned immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1575,7 +1580,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB0 => {
+            Opcode::STSF => {
                 // STSF $X, $Y, $Z - Store short float (32-bit float from 64-bit)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = Self::u64_to_f64(self.get_register(x));
@@ -1585,7 +1590,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB1 => {
+            Opcode::STSFI => {
                 // STSFI $X, $Y, Z - Store short float immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
@@ -1595,7 +1600,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB2 => {
+            Opcode::STHT => {
                 // STHT $X, $Y, $Z - Store high tetra
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1604,7 +1609,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB3 => {
+            Opcode::STHTI => {
                 // STHTI $X, $Y, Z - Store high tetra immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1613,21 +1618,21 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB4 => {
+            Opcode::STCO => {
                 // STCO X, $Y, $Z - Store constant octabyte (X is immediate value)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 self.write_octa(addr, x as u64);
                 self.advance_pc();
                 true
             }
-            0xB5 => {
+            Opcode::STCOI => {
                 // STCOI X, $Y, Z - Store constant octabyte immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 self.write_octa(addr, x as u64);
                 self.advance_pc();
                 true
             }
-            0xB6 => {
+            Opcode::STUNC => {
                 // STUNC $X, $Y, $Z - Store uncached (treat as normal store)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
@@ -1635,7 +1640,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB7 => {
+            Opcode::STUNCI => {
                 // STUNCI $X, $Y, Z - Store uncached immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
@@ -1643,37 +1648,37 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xB8 => {
+            Opcode::SYNCD => {
                 // SYNCD X, $Y, $Z - Synchronize data (no-op in simulation)
                 self.advance_pc();
                 true
             }
-            0xB9 => {
+            Opcode::SYNCDI => {
                 // SYNCDI X, $Y, Z - Synchronize data immediate (no-op)
                 self.advance_pc();
                 true
             }
-            0xBA => {
+            Opcode::PREST => {
                 // PREST X, $Y, $Z - Prestore (hint, no-op in simulation)
                 self.advance_pc();
                 true
             }
-            0xBB => {
+            Opcode::PRESTI => {
                 // PRESTI X, $Y, Z - Prestore immediate (hint, no-op)
                 self.advance_pc();
                 true
             }
-            0xBC => {
+            Opcode::SYNCID => {
                 // SYNCID X, $Y, $Z - Synchronize instruction data (no-op in simulation)
                 self.advance_pc();
                 true
             }
-            0xBD => {
+            Opcode::SYNCIDI => {
                 // SYNCIDI X, $Y, Z - Synchronize instruction data immediate (no-op)
                 self.advance_pc();
                 true
             }
-            0xBE => {
+            Opcode::PUSHGO => {
                 // PUSHGO $X, $Y, $Z - Push registers and go
                 // Push registers onto register stack and jump
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
@@ -1685,7 +1690,7 @@ impl MMix {
                 self.set_pc(addr);
                 true
             }
-            0xBF => {
+            Opcode::PUSHGOI => {
                 // PUSHGOI $X, $Y, Z - Push registers and go immediate
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 self.set_special(SpecialReg::RJ, self.get_pc() + 4);
@@ -1694,114 +1699,114 @@ impl MMix {
                 true
             }
             // Arithmetic instructions (§9) - MUL/DIV opcodes 0x18-0x1F
-            0x18 => {
+            Opcode::MUL => {
                 // MUL $X, $Y, $Z - Multiply signed with overflow
                 mul_rr!(self, x, y, z)
             }
-            0x19 => {
+            Opcode::MULI => {
                 // MULI $X, $Y, Z - Multiply signed immediate with overflow
                 mul_ri!(self, x, y, z)
             }
-            0x1A => {
+            Opcode::MULU => {
                 // MULU $X, $Y, $Z - Multiply unsigned
                 mulu_rr!(self, x, y, z)
             }
-            0x1B => {
+            Opcode::MULUI => {
                 // MULUI $X, $Y, Z - Multiply unsigned immediate
                 mulu_ri!(self, x, y, z)
             }
-            0x1C => {
+            Opcode::DIV => {
                 // DIV $X, $Y, $Z - Divide signed
                 div_rr!(self, x, y, z)
             }
-            0x1D => {
+            Opcode::DIVI => {
                 // DIVI $X, $Y, Z - Divide signed immediate
                 div_ri!(self, x, y, z)
             }
-            0x1E => {
+            Opcode::DIVU => {
                 // DIVU $X, $Y, $Z - Divide unsigned
                 divu_rr!(self, x, y, z)
             }
-            0x1F => {
+            Opcode::DIVUI => {
                 // DIVUI $X, $Y, Z - Divide unsigned immediate
                 divu_ri!(self, x, y, z)
             }
             // ADD/SUB and variants - opcodes 0x20-0x2F
-            0x20 => {
+            Opcode::ADD => {
                 // ADD $X, $Y, $Z - Add signed with overflow check
                 add_rr!(self, x, y, z)
             }
-            0x21 => {
+            Opcode::ADDI => {
                 // ADDI $X, $Y, Z - Add signed immediate with overflow check
                 add_ri!(self, x, y, z)
             }
             // 0x22 and 0x23 are ADDU/ADDUI, already implemented above
-            0x24 => {
+            Opcode::SUB => {
                 // SUB $X, $Y, $Z - Subtract signed with overflow check
                 sub_rr!(self, x, y, z)
             }
-            0x25 => {
+            Opcode::SUBI => {
                 // SUBI $X, $Y, Z - Subtract signed immediate with overflow check
                 sub_ri!(self, x, y, z)
             }
-            0x26 => {
+            Opcode::SUBU => {
                 // SUBU $X, $Y, $Z
                 binop_rr!(self, x, y, z, u64::wrapping_sub)
             }
-            0x27 => {
+            Opcode::SUBUI => {
                 // SUBUI $X, $Y, Z
                 binop_ri!(self, x, y, z, u64::wrapping_sub)
             }
-            0x28 => {
+            Opcode::ADDU2 => {
                 // 2ADDU $X, $Y, $Z
                 muladd_rr!(self, x, y, z, 2)
             }
-            0x29 => {
+            Opcode::ADDU2I => {
                 // 2ADDUI $X, $Y, Z
                 muladd_ri!(self, x, y, z, 2)
             }
-            0x2A => {
+            Opcode::ADDU4 => {
                 // 4ADDU $X, $Y, $Z
                 muladd_rr!(self, x, y, z, 4)
             }
-            0x2B => {
+            Opcode::ADDU4I => {
                 // 4ADDUI $X, $Y, Z
                 muladd_ri!(self, x, y, z, 4)
             }
-            0x2C => {
+            Opcode::ADDU8 => {
                 // 8ADDU $X, $Y, $Z
                 muladd_rr!(self, x, y, z, 8)
             }
-            0x2D => {
+            Opcode::ADDU8I => {
                 // 8ADDUI $X, $Y, Z
                 muladd_ri!(self, x, y, z, 8)
             }
-            0x2E => {
+            Opcode::ADDU16 => {
                 // 16ADDU $X, $Y, $Z
                 muladd_rr!(self, x, y, z, 16)
             }
-            0x2F => {
+            Opcode::ADDU16I => {
                 // 16ADDUI $X, $Y, Z
                 muladd_ri!(self, x, y, z, 16)
             }
             // CMP instructions - opcodes 0x30-0x33
-            0x30 => {
+            Opcode::CMP => {
                 // CMP $X, $Y, $Z
                 cmp_rr!(self, x, y, z, |v| v as i64)
             }
-            0x31 => {
+            Opcode::CMPI => {
                 // CMPI $X, $Y, Z
                 cmp_ri!(self, x, y, z, |v| v as i64, |v| v as i64)
             }
-            0x32 => {
+            Opcode::CMPU => {
                 // CMPU $X, $Y, $Z
                 cmp_rr!(self, x, y, z, |v| v)
             }
-            0x33 => {
+            Opcode::CMPUI => {
                 // CMPUI $X, $Y, Z
                 cmp_ri!(self, x, y, z, |v| v, |v| v as u64)
             }
-            0x34 => {
+            Opcode::NEG => {
                 // NEG $X, Y, $Z - Negate with overflow check
                 // Y is immediate constant, $Z is register
                 let a = y as i64;
@@ -1818,7 +1823,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x35 => {
+            Opcode::NEGI => {
                 // NEG $X, Y, Z - Negate immediate with overflow check
                 // Both Y and Z are immediate constants
                 let a = y as i64;
@@ -1835,7 +1840,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x36 => {
+            Opcode::NEGU => {
                 // NEGU $X, Y, $Z - Negate unsigned
                 let a = y as u64;
                 let b = self.get_register(z);
@@ -1843,7 +1848,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x37 => {
+            Opcode::NEGUI => {
                 // NEGU $X, Y, Z - Negate unsigned immediate
                 let a = y as u64;
                 let b = z as u64;
@@ -1852,7 +1857,7 @@ impl MMix {
                 true
             }
             // Shift instructions (§14) - opcodes 0x38-0x3F
-            0x38 => {
+            Opcode::SL => {
                 // SL $X, $Y, $Z - Shift left with overflow check
                 let val_y = self.get_register(y) as i64;
                 let shift = self.get_register(z);
@@ -1877,7 +1882,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x39 => {
+            Opcode::SLI => {
                 // SLI $X, $Y, Z - Shift left immediate with overflow check
                 let val_y = self.get_register(y) as i64;
                 let shift = z as u64;
@@ -1900,7 +1905,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3A => {
+            Opcode::SLU => {
                 // SLU $X, $Y, $Z - Shift left unsigned (no overflow check)
                 let val_y = self.get_register(y);
                 let shift = self.get_register(z);
@@ -1909,7 +1914,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3B => {
+            Opcode::SLUI => {
                 // SLUI $X, $Y, Z - Shift left unsigned immediate (no overflow check)
                 let val_y = self.get_register(y);
                 let shift = z as u64;
@@ -1918,7 +1923,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3C => {
+            Opcode::SR => {
                 // SR $X, $Y, $Z - Shift right (arithmetic)
                 let val_y = self.get_register(y) as i64;
                 let shift = self.get_register(z);
@@ -1931,7 +1936,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3D => {
+            Opcode::SRI => {
                 // SRI $X, $Y, Z - Shift right immediate (arithmetic)
                 let val_y = self.get_register(y) as i64;
                 let shift = z as u64;
@@ -1944,7 +1949,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3E => {
+            Opcode::SRU => {
                 // SRU $X, $Y, $Z - Shift right unsigned (logical)
                 let val_y = self.get_register(y);
                 let shift = self.get_register(z);
@@ -1953,7 +1958,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0x3F => {
+            Opcode::SRUI => {
                 // SRUI $X, $Y, Z - Shift right unsigned immediate (logical)
                 let val_y = self.get_register(y);
                 let shift = z as u64;
@@ -1963,290 +1968,290 @@ impl MMix {
                 true
             }
             // Branch instructions (§15) - opcodes 0x40-0x5F
-            0x40 => {
+            Opcode::BN => {
                 // BN $X, $Y, Z - Branch if negative
                 let cond = (self.get_register(x) as i64) < 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x41 => {
+            Opcode::BNB => {
                 // BNB $X, $Y, Z - Branch if negative (backward)
                 let cond = (self.get_register(x) as i64) < 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x42 => {
+            Opcode::BZ => {
                 // BZ $X, $Y, Z - Branch if zero
                 let cond = self.get_register(x) == 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x43 => {
+            Opcode::BZB => {
                 // BZB $X, $Y, Z - Branch if zero (backward)
                 let cond = self.get_register(x) == 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x44 => {
+            Opcode::BP => {
                 // BP $X, $Y, Z - Branch if positive
                 let cond = (self.get_register(x) as i64) > 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x45 => {
+            Opcode::BPB => {
                 // BPB $X, $Y, Z - Branch if positive (backward)
                 let cond = (self.get_register(x) as i64) > 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x46 => {
+            Opcode::BOD => {
                 // BOD $X, $Y, Z - Branch if odd
                 let cond = (self.get_register(x) & 1) != 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x47 => {
+            Opcode::BODB => {
                 // BODB $X, $Y, Z - Branch if odd (backward)
                 let cond = (self.get_register(x) & 1) != 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x48 => {
+            Opcode::BNN => {
                 // BNN $X, $Y, Z - Branch if non-negative
                 let cond = (self.get_register(x) as i64) >= 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x49 => {
+            Opcode::BNNB => {
                 // BNNB $X, $Y, Z - Branch if non-negative (backward)
                 let cond = (self.get_register(x) as i64) >= 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x4A => {
+            Opcode::BNZ => {
                 // BNZ $X, $Y, Z - Branch if non-zero
                 let cond = self.get_register(x) != 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x4B => {
+            Opcode::BNZB => {
                 // BNZB $X, $Y, Z - Branch if non-zero (backward)
                 let cond = self.get_register(x) != 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x4C => {
+            Opcode::BNP => {
                 // BNP $X, $Y, Z - Branch if non-positive
                 let cond = (self.get_register(x) as i64) <= 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x4D => {
+            Opcode::BNPB => {
                 // BNPB $X, $Y, Z - Branch if non-positive (backward)
                 let cond = (self.get_register(x) as i64) <= 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x4E => {
+            Opcode::BEV => {
                 // BEV $X, $Y, Z - Branch if even
                 let cond = (self.get_register(x) & 1) == 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x4F => {
+            Opcode::BEVB => {
                 // BEVB $X, $Y, Z - Branch if even (backward)
                 let cond = (self.get_register(x) & 1) == 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x50 => {
+            Opcode::PBN => {
                 // PBN $X, $Y, Z - Probable branch if negative
                 let cond = (self.get_register(x) as i64) < 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x51 => {
+            Opcode::PBNB => {
                 // PBNB $X, $Y, Z - Probable branch if negative (backward)
                 let cond = (self.get_register(x) as i64) < 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x52 => {
+            Opcode::PBZ => {
                 // PBZ $X, $Y, Z - Probable branch if zero
                 let cond = self.get_register(x) == 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x53 => {
+            Opcode::PBZB => {
                 // PBZB $X, $Y, Z - Probable branch if zero (backward)
                 let cond = self.get_register(x) == 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x54 => {
+            Opcode::PBP => {
                 // PBP $X, $Y, Z - Probable branch if positive
                 let cond = (self.get_register(x) as i64) > 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x55 => {
+            Opcode::PBPB => {
                 // PBPB $X, $Y, Z - Probable branch if positive (backward)
                 let cond = (self.get_register(x) as i64) > 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x56 => {
+            Opcode::PBOD => {
                 // PBOD $X, $Y, Z - Probable branch if odd
                 let cond = (self.get_register(x) & 1) != 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x57 => {
+            Opcode::PBODB => {
                 // PBODB $X, $Y, Z - Probable branch if odd (backward)
                 let cond = (self.get_register(x) & 1) != 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x58 => {
+            Opcode::PBNN => {
                 // PBNN $X, $Y, Z - Probable branch if non-negative
                 let cond = (self.get_register(x) as i64) >= 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x59 => {
+            Opcode::PBNNB => {
                 // PBNNB $X, $Y, Z - Probable branch if non-negative (backward)
                 let cond = (self.get_register(x) as i64) >= 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x5A => {
+            Opcode::PBNZ => {
                 // PBNZ $X, $Y, Z - Probable branch if non-zero
                 let cond = self.get_register(x) != 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x5B => {
+            Opcode::PBNZB => {
                 // PBNZB $X, $Y, Z - Probable branch if non-zero (backward)
                 let cond = self.get_register(x) != 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x5C => {
+            Opcode::PBNP => {
                 // PBNP $X, $Y, Z - Probable branch if non-positive
                 let cond = (self.get_register(x) as i64) <= 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x5D => {
+            Opcode::PBNPB => {
                 // PBNPB $X, $Y, Z - Probable branch if non-positive (backward)
                 let cond = (self.get_register(x) as i64) <= 0;
                 self.branch_backward(cond, y, z);
                 true
             }
-            0x5E => {
+            Opcode::PBEV => {
                 // PBEV $X, $Y, Z - Probable branch if even
                 let cond = (self.get_register(x) & 1) == 0;
                 self.branch_forward(cond, y, z);
                 true
             }
-            0x5F => {
+            Opcode::PBEVB => {
                 // PBEVB $X, $Y, Z - Probable branch if even (backward)
                 let cond = (self.get_register(x) & 1) == 0;
                 self.branch_backward(cond, y, z);
                 true
             }
             // Conditional Set instructions (§16) - opcodes 0x60-0x6F
-            0x60 => {
+            Opcode::CSN => {
                 // CSN $X, $Y, $Z - Conditional Set if Negative (checks $Y)
                 let cond = (self.get_register(y) as i64) < 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x61 => {
+            Opcode::CSNI => {
                 // CSNI $X, $Y, Z - Conditional Set if Negative (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) < 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x62 => {
+            Opcode::CSZ => {
                 // CSZ $X, $Y, $Z - Conditional Set if Zero (checks $Y)
                 let cond = self.get_register(y) == 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x63 => {
+            Opcode::CSZI => {
                 // CSZI $X, $Y, Z - Conditional Set if Zero (immediate, checks $Y)
                 let cond = self.get_register(y) == 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x64 => {
+            Opcode::CSP => {
                 // CSP $X, $Y, $Z - Conditional Set if Positive (checks $Y)
                 let cond = (self.get_register(y) as i64) > 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x65 => {
+            Opcode::CSPI => {
                 // CSPI $X, $Y, Z - Conditional Set if Positive (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) > 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x66 => {
+            Opcode::CSOD => {
                 // CSOD $X, $Y, $Z - Conditional Set if Odd (checks $Y)
                 let cond = (self.get_register(y) & 1) != 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x67 => {
+            Opcode::CSODI => {
                 // CSODI $X, $Y, Z - Conditional Set if Odd (immediate, checks $Y)
                 let cond = (self.get_register(y) & 1) != 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x68 => {
+            Opcode::CSNN => {
                 // CSNN $X, $Y, $Z - Conditional Set if Non-Negative (checks $Y)
                 let cond = (self.get_register(y) as i64) >= 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x69 => {
+            Opcode::CSNNI => {
                 // CSNNI $X, $Y, Z - Conditional Set if Non-Negative (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) >= 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x6A => {
+            Opcode::CSNZ => {
                 // CSNZ $X, $Y, $Z - Conditional Set if Non-Zero (checks $Y)
                 let cond = self.get_register(y) != 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x6B => {
+            Opcode::CSNZI => {
                 // CSNZI $X, $Y, Z - Conditional Set if Non-Zero (immediate, checks $Y)
                 let cond = self.get_register(y) != 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x6C => {
+            Opcode::CSNP => {
                 // CSNP $X, $Y, $Z - Conditional Set if Non-Positive (checks $Y)
                 let cond = (self.get_register(y) as i64) <= 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x6D => {
+            Opcode::CSNPI => {
                 // CSNPI $X, $Y, Z - Conditional Set if Non-Positive (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) <= 0;
                 self.cond_set_ri(x, y, z, cond);
                 true
             }
-            0x6E => {
+            Opcode::CSEV => {
                 // CSEV $X, $Y, $Z - Conditional Set if Even (checks $Y)
                 let cond = (self.get_register(y) & 1) == 0;
                 self.cond_set_rr(x, y, z, cond);
                 true
             }
-            0x6F => {
+            Opcode::CSEVI => {
                 // CSEVI $X, $Y, Z - Conditional Set if Even (immediate, checks $Y)
                 let cond = (self.get_register(y) & 1) == 0;
                 self.cond_set_ri(x, y, z, cond);
@@ -2254,97 +2259,97 @@ impl MMix {
             }
 
             // Zero or Set instructions (0x70-0x7F)
-            0x70 => {
+            Opcode::ZSN => {
                 // ZSN $X, $Y, $Z - Zero or Set if Negative (checks $Y)
                 let cond = (self.get_register(y) as i64) < 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x71 => {
+            Opcode::ZSNI => {
                 // ZSNI $X, $Y, Z - Zero or Set if Negative (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) < 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x72 => {
+            Opcode::ZSZ => {
                 // ZSZ $X, $Y, $Z - Zero or Set if Zero (checks $Y)
                 let cond = self.get_register(y) == 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x73 => {
+            Opcode::ZSZI => {
                 // ZSZI $X, $Y, Z - Zero or Set if Zero (immediate, checks $Y)
                 let cond = self.get_register(y) == 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x74 => {
+            Opcode::ZSP => {
                 // ZSP $X, $Y, $Z - Zero or Set if Positive (checks $Y)
                 let cond = (self.get_register(y) as i64) > 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x75 => {
+            Opcode::ZSPI => {
                 // ZSPI $X, $Y, Z - Zero or Set if Positive (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) > 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x76 => {
+            Opcode::ZSOD => {
                 // ZSOD $X, $Y, $Z - Zero or Set if Odd (checks $Y)
                 let cond = (self.get_register(y) & 1) != 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x77 => {
+            Opcode::ZSODI => {
                 // ZSODI $X, $Y, Z - Zero or Set if Odd (immediate, checks $Y)
                 let cond = (self.get_register(y) & 1) != 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x78 => {
+            Opcode::ZSNN => {
                 // ZSNN $X, $Y, $Z - Zero or Set if Non-Negative (checks $Y)
                 let cond = (self.get_register(y) as i64) >= 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x79 => {
+            Opcode::ZSNNI => {
                 // ZSNNI $X, $Y, Z - Zero or Set if Non-Negative (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) >= 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x7A => {
+            Opcode::ZSNZ => {
                 // ZSNZ $X, $Y, $Z - Zero or Set if Non-Zero (checks $Y)
                 let cond = self.get_register(y) != 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x7B => {
+            Opcode::ZSNZI => {
                 // ZSNZI $X, $Y, Z - Zero or Set if Non-Zero (immediate, checks $Y)
                 let cond = self.get_register(y) != 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x7C => {
+            Opcode::ZSNP => {
                 // ZSNP $X, $Y, $Z - Zero or Set if Non-Positive (checks $Y)
                 let cond = (self.get_register(y) as i64) <= 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x7D => {
+            Opcode::ZSNPI => {
                 // ZSNPI $X, $Y, Z - Zero or Set if Non-Positive (immediate, checks $Y)
                 let cond = (self.get_register(y) as i64) <= 0;
                 self.zero_set_ri(x, y, z, cond);
                 true
             }
-            0x7E => {
+            Opcode::ZSEV => {
                 // ZSEV $X, $Y, $Z - Zero or Set if Even (checks $Y)
                 let cond = (self.get_register(y) & 1) == 0;
                 self.zero_set_rr(x, y, z, cond);
                 true
             }
-            0x7F => {
+            Opcode::ZSEVI => {
                 // ZSEVI $X, $Y, Z - Zero or Set if Even (immediate, checks $Y)
                 let cond = (self.get_register(y) & 1) == 0;
                 self.zero_set_ri(x, y, z, cond);
@@ -2352,72 +2357,72 @@ impl MMix {
             }
 
             // Bitwise operations (§10) - opcodes 0xC0-0xCF, 0xD8-0xD9
-            0xC0 => {
+            Opcode::OR => {
                 // OR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a, b| a | b)
             }
-            0xC1 => {
+            Opcode::ORI => {
                 // ORI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a, b| a | b)
             }
-            0xC2 => {
+            Opcode::ORN => {
                 // ORN $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| a | !b)
             }
-            0xC3 => {
+            Opcode::ORNI => {
                 // ORNI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| a | !b)
             }
-            0xC4 => {
+            Opcode::NOR => {
                 // NOR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| !(a | b))
             }
-            0xC5 => {
+            Opcode::NORI => {
                 // NORI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| !(a | b))
             }
-            0xC6 => {
+            Opcode::XOR => {
                 // XOR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a, b| a ^ b)
             }
-            0xC7 => {
+            Opcode::XORI => {
                 // XORI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a, b| a ^ b)
             }
-            0xC8 => {
+            Opcode::AND => {
                 // AND $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a, b| a & b)
             }
-            0xC9 => {
+            Opcode::ANDI => {
                 // ANDI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a, b| a & b)
             }
-            0xCA => {
+            Opcode::ANDN => {
                 // ANDN $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| a & !b)
             }
-            0xCB => {
+            Opcode::ANDNI => {
                 // ANDNI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| a & !b)
             }
-            0xCC => {
+            Opcode::NAND => {
                 // NAND $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| !(a & b))
             }
-            0xCD => {
+            Opcode::NANDI => {
                 // NANDI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| !(a & b))
             }
-            0xCE => {
+            Opcode::NXOR => {
                 // NXOR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| !(a ^ b))
             }
-            0xCF => {
+            Opcode::NXORI => {
                 // NXORI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| !(a ^ b))
             }
             // Bit fiddling operations (§11-12) - opcodes 0xD0-0xDF
-            0xD0 => {
+            Opcode::BDIF => {
                 // BDIF $X, $Y, $Z - Byte difference
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2432,7 +2437,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD1 => {
+            Opcode::BDIFI => {
                 // BDIFI $X, $Y, Z - Byte difference immediate
                 let val_y = self.get_register(y);
                 let mut result: u64 = 0;
@@ -2445,7 +2450,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD2 => {
+            Opcode::WDIF => {
                 // WDIF $X, $Y, $Z - Wyde difference
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2460,7 +2465,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD3 => {
+            Opcode::WDIFI => {
                 // WDIFI $X, $Y, Z - Wyde difference immediate
                 let val_y = self.get_register(y);
                 let z_wyde = z as u16;
@@ -2474,7 +2479,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD4 => {
+            Opcode::TDIF => {
                 // TDIF $X, $Y, $Z - Tetra difference
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2489,7 +2494,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD5 => {
+            Opcode::TDIFI => {
                 // TDIFI $X, $Y, Z - Tetra difference immediate
                 let val_y = self.get_register(y);
                 let z_tetra = z as u32;
@@ -2503,23 +2508,23 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD6 => {
+            Opcode::ODIF => {
                 // ODIF $X, $Y, $Z
                 binop_rr!(self, x, y, z, u64::saturating_sub)
             }
-            0xD7 => {
+            Opcode::ODIFI => {
                 // ODIFI $X, $Y, Z
                 binop_ri!(self, x, y, z, u64::saturating_sub)
             }
-            0xDA => {
+            Opcode::SADD => {
                 // SADD $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a: u64, b: u64| (a & !b).count_ones() as u64)
             }
-            0xDB => {
+            Opcode::SADDI => {
                 // SADDI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| (a & !b).count_ones() as u64)
             }
-            0xDC => {
+            Opcode::MOR => {
                 // MOR $X, $Y, $Z - Multiple or (Boolean matrix multiplication)
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2544,7 +2549,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xDD => {
+            Opcode::MORI => {
                 // MORI $X, $Y, Z - Multiple or immediate
                 let val_y = self.get_register(y);
                 let mut result: u64 = 0;
@@ -2567,7 +2572,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xDE => {
+            Opcode::MXOR => {
                 // MXOR $X, $Y, $Z - Multiple exclusive-or (matrix product over GF(2))
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2591,7 +2596,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xDF => {
+            Opcode::MXORI => {
                 // MXORI $X, $Y, Z - Multiple exclusive-or immediate
                 let val_y = self.get_register(y);
                 let mut result: u64 = 0;
@@ -2612,7 +2617,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD8 => {
+            Opcode::MUX => {
                 // MUX $X, $Y, $Z - Bitwise multiplex
                 let val_y = self.get_register(y);
                 let val_z = self.get_register(z);
@@ -2621,7 +2626,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xD9 => {
+            Opcode::MUXI => {
                 // MUXI $X, $Y, Z - Bitwise multiplex immediate
                 let val_y = self.get_register(y);
                 let mask = self.special_regs[SpecialReg::RM as usize];
@@ -2630,7 +2635,7 @@ impl MMix {
                 true
             }
             // Jump/Stack/System instructions (§17-19) - opcodes 0xF0-0xFF
-            0xF0 => {
+            Opcode::JMP => {
                 // JMP XYZ - Jump (unconditional)
                 let offset = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
                 let signed_offset = if offset & 0x800000 != 0 {
@@ -2642,13 +2647,13 @@ impl MMix {
                 self.pc = self.pc.wrapping_add((signed_offset as i64 * 4) as u64);
                 true
             }
-            0xF1 => {
+            Opcode::JMPB => {
                 // JMPB XYZ - Jump backward
                 let offset = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
                 self.pc = self.pc.wrapping_sub((offset as u64) * 4);
                 true
             }
-            0xF2 => {
+            Opcode::PUSHJ => {
                 // PUSHJ $X, YZ - Push registers and jump
                 // Save return address in register rJ
                 self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
@@ -2658,14 +2663,14 @@ impl MMix {
                 // Note: Full implementation should also save local registers
                 true
             }
-            0xF3 => {
+            Opcode::PUSHJB => {
                 // PUSHJB $X, YZ - Push registers and jump backward
                 self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
                 let offset = (y as u16) << 8 | z as u16;
                 self.pc = self.pc.wrapping_sub((offset as u64) * 4);
                 true
             }
-            0xF4 => {
+            Opcode::GETA => {
                 // GETA $X, YZ - Get address relative to current PC
                 let offset = ((y as u16) << 8 | z as u16) as i16;
                 let addr = self.pc.wrapping_add((offset as i64 * 4) as u64);
@@ -2673,7 +2678,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xF5 => {
+            Opcode::GETAB => {
                 // GETAB $X, YZ - Get address backward relative to current PC
                 let offset = (y as u16) << 8 | z as u16;
                 let addr = self.pc.wrapping_sub((offset as u64) * 4);
@@ -2681,7 +2686,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xF6 => {
+            Opcode::PUT => {
                 // PUT rX, $Z - Put to special register
                 // X field specifies the special register, Z specifies source register
                 let special_reg_num = x;
@@ -2693,7 +2698,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xF7 => {
+            Opcode::PUTI => {
                 // PUTI $X, YZ - Put to special register (immediate)
                 let special_reg_num = x;
                 let value = ((y as u64) << 8) | (z as u64);
@@ -2703,21 +2708,21 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xF8 => {
+            Opcode::POP => {
                 // POP X, YZ - Pop registers and return
                 // Return to address in rJ
                 self.pc = self.get_special(SpecialReg::RJ);
                 // Note: Full implementation should restore local registers
                 true
             }
-            0xF9 => {
+            Opcode::RESUME => {
                 // RESUME - Resume after interrupt
                 // This is a complex instruction that would restore full processor state
                 // For now, just continue execution
                 self.advance_pc();
                 true
             }
-            0xFA => {
+            Opcode::SAVE => {
                 // SAVE $X,Z - Save process state
                 // Saves local registers and special registers to memory
                 // Returns address of saved context in $X
@@ -2749,7 +2754,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xFB => {
+            Opcode::UNSAVE => {
                 // UNSAVE X,$Z - Restore process state
                 // Restores local registers and special registers from memory
                 // NOTE: Does NOT restore rJ (return address) - that's managed by PUSHJ/POP
@@ -2778,19 +2783,19 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xFC => {
+            Opcode::SYNC => {
                 // SYNC XYZ - Synchronize
                 // Memory synchronization barrier
                 // For a simulator, this is typically a no-op
                 self.advance_pc();
                 true
             }
-            0xFD => {
+            Opcode::SWYM => {
                 // SWYM XYZ - Sympathize with your machinery (no-op)
                 self.advance_pc();
                 true
             }
-            0xFE => {
+            Opcode::GET => {
                 // GET $X, $Z - Get from special register
                 let special_reg_num = z;
                 if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
@@ -2800,7 +2805,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            0xFF => {
+            Opcode::TRIP => {
                 // TRIP XYZ - Software interrupt
                 // For now, just halt
                 eprintln!("TRIP instruction at PC={:#018x}", self.pc);

@@ -42,7 +42,7 @@ fn main() {
     println!("Assembling: {}", input_file);
 
     // Parse the assembly
-    let mut assembler = MMixAssembler::new(&source, &input_file);
+    let mut assembler = MMixAssembler::new(&source, input_file);
 
     if let Err(e) = assembler.parse() {
         // Format error in standard assembler format: filename:line:column: message

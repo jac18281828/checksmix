@@ -46,6 +46,7 @@ pub const MM: u8 = 0x98;
 /// Reference: MMIXWARE documentation, Section on MMO Format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(clippy::enum_variant_names)]
 pub enum MmoRecordType {
     /// lop_quote (0): Literal data to load at current address
     LopQuote = 0,
