@@ -12,6 +12,7 @@ rH      IS      3       % Himult register
 rJ      IS      4       % Jump register
 rM      IS      5       % Multiplex mask register
 rR      IS      6       % Remainder register
+rN      IS      9       % Serial number register
 rA      IS      21      % Arithmetic status register
 
 % Test counter and expected values
@@ -1992,8 +1993,20 @@ Test160 ADDUI   TestNum,TestNum,1
         SET     Result,#DEAD
 Test160Skip     SET     Expect,66
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test161
+        JMP     TestFail
+
+% ========================================
+% load values from special registers 
+% confirm initialization
+% ========================================
+Test161 ADDUI   TestNum,TestNum,1
+        GET     Result,rN
+        SET     Expect,2009
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
+
 
 % ========================================
 % All tests passed!
@@ -2011,10 +2024,6 @@ TestFail        SET     $0,FailMsg
         SET     Result,#DEAD    % Failure marker
         OR      FailNum,TestNum,Zero    % Copy TestNum to FailNum
         TRAP    0,Halt,1        % Halt with error
-
-% ========================================
-% debug subroutine
-% ========================================
 
 % ========================================
 % Local data for GETA test (must be in code segment, near the code)

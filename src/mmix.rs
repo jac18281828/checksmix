@@ -865,75 +865,35 @@ impl MMix {
             }
             0x08 => {
                 // FLOT $X, $Y, $Z - Convert fixed to floating (signed)
-                // $Y is rounding mode (from register), $Z is source value
-                let value = self.get_register(z) as i64;
-                let result = value as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, y, z, |v: u64| (v as i64) as f64)
             }
             0x09 => {
                 // FLOTI $X, $Y, Z - Convert fixed to floating immediate (signed)
-                // $Y is rounding mode (from register), Z is immediate value to convert
-                let value = z as i8; // Sign extend from byte
-                let result = (value as i64) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |v: u8| ((v as i8) as i64) as f64)
             }
             0x0A => {
                 // FLOTU $X, $Y, $Z - Convert fixed unsigned to floating
-                // $Y is rounding mode (from register), $Z is source value
-                let value = self.get_register(z);
-                let result = value as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, y, z, |v: u64| v as f64)
             }
             0x0B => {
                 // FLOTUI $X, $Y, Z - Convert fixed unsigned to floating immediate
-                // $Y is rounding mode (from register), Z is immediate value
-                let value = z as u64;
-                let result = value as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |v: u8| v as f64)
             }
             0x0C => {
                 // SFLOT $X, $Y, $Z - Convert fixed to short float (signed, 32-bit)
-                // $Y is rounding mode (from register), $Z is source value
-                let value = self.get_register(z) as i64;
-                let result = (value as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, y, z, |v: u64| ((v as i64) as f32) as f64)
             }
             0x0D => {
                 // SFLOTI $X, $Y, Z - Convert fixed to short float immediate (signed)
-                // $Y is rounding mode (from register), Z is immediate value
-                let value = z as i8; // Sign extend
-                let result = ((value as i64) as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |v: u8| (((v as i8) as i64) as f32) as f64)
             }
             0x0E => {
                 // SFLOTU $X, $Y, $Z - Convert fixed unsigned to short float
-                // $Y is rounding mode (from register), $Z is source value
-                let value = self.get_register(z);
-                let result = (value as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_rr!(self, x, y, z, |v: u64| (v as f32) as f64)
             }
             0x0F => {
                 // SFLOTUI $X, $Y, Z - Convert fixed unsigned to short float immediate
-                // $Y is rounding mode (from register), Z is immediate value
-                let value = z as u64;
-                let result = (value as f32) as f64;
-                self.set_register(x, Self::f64_to_u64(result));
-                self.advance_pc();
-                true
+                i2f_conv_ri!(self, x, y, z, |v: u8| (v as f32) as f64)
             }
             0x10 => {
                 // FMUL $X, $Y, $Z
