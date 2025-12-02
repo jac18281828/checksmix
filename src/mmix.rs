@@ -4609,12 +4609,12 @@ mod tests {
     #[test]
     fn test_bnb_taken() {
         let mut mmix = MMix::new();
-        // BNB $1, 0, 3 - Branch backward if $1 is negative
+        // BNB $1, 0xFFFD - Branch backward if $1 is negative (-3 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, (-42i64) as u64);
-        mmix.write_tetra(100, 0x41010003); // BNB $1,0,3
+        mmix.write_tetra(100, 0x4101FFFD); // BNB $1,0,0xFFFD (offset -3)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 88); // PC = 100 - 3*4 = 88
+        assert_eq!(mmix.get_pc(), 88); // PC = 100 + 4*(-3) = 88
     }
 
     #[test]
@@ -4640,12 +4640,12 @@ mod tests {
     #[test]
     fn test_bzb_taken() {
         let mut mmix = MMix::new();
-        // BZB $1, 0, 5 - Branch backward if $1 is zero
+        // BZB $1, 0xFFFB - Branch backward if $1 is zero (-5 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x43010005); // BZB $1,0,5
+        mmix.write_tetra(100, 0x4301FFFB); // BZB $1,0,0xFFFB (offset -5)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 80); // PC = 100 - 5*4 = 80
+        assert_eq!(mmix.get_pc(), 80); // PC = 100 + 4*(-5) = 80
     }
 
     #[test]
@@ -4681,12 +4681,12 @@ mod tests {
     #[test]
     fn test_bpb_taken() {
         let mut mmix = MMix::new();
-        // BPB $1, 0, 2 - Branch backward if $1 is positive
+        // BPB $1, 0xFFFE - Branch backward if $1 is positive (-2 tetras)
         mmix.set_pc(200);
         mmix.set_register(1, 100);
-        mmix.write_tetra(200, 0x45010002); // BPB $1,0,2
+        mmix.write_tetra(200, 0x4501FFFE); // BPB $1,0,0xFFFE (offset -2)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 192); // PC = 200 - 2*4 = 192
+        assert_eq!(mmix.get_pc(), 192); // PC = 200 + 4*(-2) = 192
     }
 
     #[test]
@@ -4712,12 +4712,12 @@ mod tests {
     #[test]
     fn test_bodb_taken() {
         let mut mmix = MMix::new();
-        // BODB $1, 0, 4 - Branch backward if $1 is odd
+        // BODB $1, 0xFFFC - Branch backward if $1 is odd (-4 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 15);
-        mmix.write_tetra(100, 0x47010004); // BODB $1,0,4
+        mmix.write_tetra(100, 0x4701FFFC); // BODB $1,0,0xFFFC (offset -4)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 84); // PC = 100 - 4*4 = 84
+        assert_eq!(mmix.get_pc(), 84); // PC = 100 + 4*(-4) = 84
     }
 
     #[test]
@@ -4753,12 +4753,12 @@ mod tests {
     #[test]
     fn test_bnnb_taken() {
         let mut mmix = MMix::new();
-        // BNNB $1, 0, 3 - Branch backward if $1 is non-negative
+        // BNNB $1, 0xFFFD - Branch backward if $1 is non-negative (-3 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x49010003); // BNNB $1,0,3
+        mmix.write_tetra(100, 0x4901FFFD); // BNNB $1,0,0xFFFD (offset -3)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 88); // PC = 100 - 3*4 = 88
+        assert_eq!(mmix.get_pc(), 88); // PC = 100 + 4*(-3) = 88
     }
 
     #[test]
@@ -4784,12 +4784,12 @@ mod tests {
     #[test]
     fn test_bnzb_taken() {
         let mut mmix = MMix::new();
-        // BNZB $1, 0, 10 - Branch backward if $1 is non-zero
+        // BNZB $1, 0xFFF6 - Branch backward if $1 is non-zero (-10 tetras)
         mmix.set_pc(200);
         mmix.set_register(1, 99);
-        mmix.write_tetra(200, 0x4B01000A); // BNZB $1,0,10
+        mmix.write_tetra(200, 0x4B01FFF6); // BNZB $1,0,0xFFF6 (offset -10)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 160); // PC = 200 - 10*4 = 160
+        assert_eq!(mmix.get_pc(), 160); // PC = 200 + 4*(-10) = 160
     }
 
     #[test]
@@ -4825,12 +4825,12 @@ mod tests {
     #[test]
     fn test_bnpb_taken() {
         let mut mmix = MMix::new();
-        // BNPB $1, 0, 1 - Branch backward if $1 is non-positive
+        // BNPB $1, 0xFFFF - Branch backward if $1 is non-positive (-1 tetra)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x4D010001); // BNPB $1,0,1
+        mmix.write_tetra(100, 0x4D01FFFF); // BNPB $1,0,0xFFFF (offset -1)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 96); // PC = 100 - 1*4 = 96
+        assert_eq!(mmix.get_pc(), 96); // PC = 100 + 4*(-1) = 96
     }
 
     #[test]
@@ -4856,12 +4856,12 @@ mod tests {
     #[test]
     fn test_bevb_taken() {
         let mut mmix = MMix::new();
-        // BEVB $1, 0, 2 - Branch backward if $1 is even
+        // BEVB $1, 0xFFFE - Branch backward if $1 is even (-2 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x4F010002); // BEVB $1,0,2
+        mmix.write_tetra(100, 0x4F01FFFE); // BEVB $1,0,0xFFFE (offset -2)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 92); // PC = 100 - 2*4 = 92
+        assert_eq!(mmix.get_pc(), 92); // PC = 100 + 4*(-2) = 92
     }
 
     #[test]
@@ -4877,12 +4877,12 @@ mod tests {
     #[test]
     fn test_pbnb_taken() {
         let mut mmix = MMix::new();
-        // PBNB $1, 0, 3 - Probable branch backward if $1 is negative
+        // PBNB $1, 0xFFFD - Probable branch backward if $1 is negative (-3 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, (-1i64) as u64);
-        mmix.write_tetra(100, 0x51010003); // PBNB $1,0,3
+        mmix.write_tetra(100, 0x5101FFFD); // PBNB $1,0,0xFFFD (offset -3)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 88); // PC = 100 - 3*4 = 88
+        assert_eq!(mmix.get_pc(), 88); // PC = 100 + 4*(-3) = 88
     }
 
     #[test]
@@ -4898,12 +4898,12 @@ mod tests {
     #[test]
     fn test_pbzb_taken() {
         let mut mmix = MMix::new();
-        // PBZB $1, 0, 4 - Probable branch backward if $1 is zero
+        // PBZB $1, 0xFFFC - Probable branch backward if $1 is zero (-4 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x53010004); // PBZB $1,0,4
+        mmix.write_tetra(100, 0x5301FFFC); // PBZB $1,0,0xFFFC (offset -4)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 84); // PC = 100 - 4*4 = 84
+        assert_eq!(mmix.get_pc(), 84); // PC = 100 + 4*(-4) = 84
     }
 
     #[test]
@@ -4919,12 +4919,12 @@ mod tests {
     #[test]
     fn test_pbpb_taken() {
         let mut mmix = MMix::new();
-        // PBPB $1, 0, 2 - Probable branch backward if $1 is positive
+        // PBPB $1, 0xFFFE - Probable branch backward if $1 is positive (-2 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 1);
-        mmix.write_tetra(100, 0x55010002); // PBPB $1,0,2
+        mmix.write_tetra(100, 0x5501FFFE); // PBPB $1,0,0xFFFE (offset -2)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 92); // PC = 100 - 2*4 = 92
+        assert_eq!(mmix.get_pc(), 92); // PC = 100 + 4*(-2) = 92
     }
 
     #[test]
@@ -4940,12 +4940,12 @@ mod tests {
     #[test]
     fn test_pbodb_taken() {
         let mut mmix = MMix::new();
-        // PBODB $1, 0, 5 - Probable branch backward if $1 is odd
+        // PBODB $1, 0xFFFB - Probable branch backward if $1 is odd (-5 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 99);
-        mmix.write_tetra(100, 0x57010005); // PBODB $1,0,5
+        mmix.write_tetra(100, 0x5701FFFB); // PBODB $1,0,0xFFFB (offset -5)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 80); // PC = 100 - 5*4 = 80
+        assert_eq!(mmix.get_pc(), 80); // PC = 100 + 4*(-5) = 80
     }
 
     #[test]
@@ -4961,12 +4961,12 @@ mod tests {
     #[test]
     fn test_pbnnb_taken() {
         let mut mmix = MMix::new();
-        // PBNNB $1, 0, 1 - Probable branch backward if $1 is non-negative
+        // PBNNB $1, 0xFFFF - Probable branch backward if $1 is non-negative (-1 tetra)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x59010001); // PBNNB $1,0,1
+        mmix.write_tetra(100, 0x5901FFFF); // PBNNB $1,0,0xFFFF (offset -1)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 96); // PC = 100 - 1*4 = 96
+        assert_eq!(mmix.get_pc(), 96); // PC = 100 + 4*(-1) = 96
     }
 
     #[test]
@@ -4982,12 +4982,12 @@ mod tests {
     #[test]
     fn test_pbnzb_taken() {
         let mut mmix = MMix::new();
-        // PBNZB $1, 0, 6 - Probable branch backward if $1 is non-zero
+        // PBNZB $1, 0xFFFA - Probable branch backward if $1 is non-zero (-6 tetras)
         mmix.set_pc(200);
         mmix.set_register(1, 1);
-        mmix.write_tetra(200, 0x5B010006); // PBNZB $1,0,6
+        mmix.write_tetra(200, 0x5B01FFFA); // PBNZB $1,0,0xFFFA (offset -6)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 176); // PC = 200 - 6*4 = 176
+        assert_eq!(mmix.get_pc(), 176); // PC = 200 + 4*(-6) = 176
     }
 
     #[test]
@@ -5003,12 +5003,12 @@ mod tests {
     #[test]
     fn test_pbnpb_taken() {
         let mut mmix = MMix::new();
-        // PBNPB $1, 0, 8 - Probable branch backward if $1 is non-positive
+        // PBNPB $1, 0xFFF8 - Probable branch backward if $1 is non-positive (-8 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x5D010008); // PBNPB $1,0,8
+        mmix.write_tetra(100, 0x5D01FFF8); // PBNPB $1,0,0xFFF8 (offset -8)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 68); // PC = 100 - 8*4 = 68
+        assert_eq!(mmix.get_pc(), 68); // PC = 100 + 4*(-8) = 68
     }
 
     #[test]
@@ -5024,12 +5024,12 @@ mod tests {
     #[test]
     fn test_pbevb_taken() {
         let mut mmix = MMix::new();
-        // PBEVB $1, 0, 7 - Probable branch backward if $1 is even
+        // PBEVB $1, 0xFFF9 - Probable branch backward if $1 is even (-7 tetras)
         mmix.set_pc(100);
         mmix.set_register(1, 0);
-        mmix.write_tetra(100, 0x5F010007); // PBEVB $1,0,7
+        mmix.write_tetra(100, 0x5F01FFF9); // PBEVB $1,0,0xFFF9 (offset -7)
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 72); // PC = 100 - 7*4 = 72
+        assert_eq!(mmix.get_pc(), 72); // PC = 100 + 4*(-7) = 72
     }
 
     #[test]
