@@ -2876,7 +2876,7 @@ impl MMixAssembler {
         let (line, col) = pair.line_col();
 
         // Handle container rules that have children
-        if rule == Rule::expr_value || rule == Rule::number_literal {
+        if rule == Rule::expr_value || rule == Rule::number_literal || rule == Rule::operand_imm {
             let inner = pair.into_inner().next().unwrap();
             return self.parse_number(inner);
         }
