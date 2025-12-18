@@ -64,7 +64,10 @@ fn run_mix(filename: &str) {
     println!();
 
     let mut program = Program::new(&input);
-    program.parse();
+    if let Err(err) = program.parse() {
+        eprintln!("Error: {}", err);
+        process::exit(1);
+    }
 
     println!(
         "Program loaded successfully with {} instructions",

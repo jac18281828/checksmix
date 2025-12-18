@@ -66,13 +66,34 @@ pub enum Instruction {
     HLT,
 }
 
-const MAX_INSTRUCTION_LENGTH: usize = 4;
-
 pub struct Program {
     scanner: Scanner,
     instructions: Vec<Instruction>,
     line: usize,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProgramParseError {
+    InvalidInstruction { line: usize, details: String },
+    InvalidNumber { line: usize, details: String },
+}
+
+impl fmt::Display for ProgramParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProgramParseError::InvalidInstruction { line, details } => {
+                write!(f, "Line {}: {}", line, details)
+            }
+            ProgramParseError::InvalidNumber { line, details } => {
+                write!(f, "Line {}: {}", line, details)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProgramParseError {}
+
+type ProgramResult<T> = Result<T, ProgramParseError>;
 
 impl Program {
     pub fn instruction_count(&self) -> usize {
@@ -89,375 +110,334 @@ impl Program {
         }
     }
 
-    pub fn parse(&mut self) {
-        while let Some(instruction) = self.parse_instruction() {
+    pub fn parse(&mut self) -> ProgramResult<()> {
+        while let Some(instruction) = self.next_instruction()? {
             match instruction.as_str() {
                 "ADD" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::ADD(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::ADD(value));
                 }
                 "SUB" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::SUB(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::SUB(value));
                 }
                 "STA" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::STA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::STA(value));
                 }
                 "STX" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::STX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "ST1" | "ST2" | "ST3" | "ST4" | "ST5" | "ST6" | "ST7" | "ST8" | "ST9" | "ST10" => {
-                    let n = instruction.chars().nth(2).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::STI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::STX(value));
                 }
                 "STJ" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::STJ(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::STJ(value));
                 }
                 "STZ" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::STZ(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::STZ(value));
                 }
                 "ENTA" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENTA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::ENTA(value));
                 }
                 "ENTX" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENTX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "ENT1" | "ENT2" | "ENT3" | "ENT4" | "ENT5" | "ENT6" | "ENT7" | "ENT8" | "ENT9"
-                | "ENT10" => {
-                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENTI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::ENTX(value));
                 }
                 "ENNA" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENNA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::ENNA(value));
                 }
                 "ENNX" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENNX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "ENN1" | "ENN2" | "ENN3" | "ENN4" | "ENN5" | "ENN6" | "ENN7" | "ENN8" | "ENN9"
-                | "ENN10" => {
-                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::ENNI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::ENNX(value));
                 }
                 "LDA" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::LDA(value));
                 }
                 "LDX" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "LD1" | "LD2" | "LD3" | "LD4" | "LD5" | "LD6" | "LD7" | "LD8" | "LD9" | "LD10" => {
-                    let n = instruction.chars().nth(2).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::LDX(value));
                 }
                 "LDAN" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDAN(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::LDAN(value));
                 }
                 "LDXN" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDXN(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "LD1N" | "LD2N" | "LD3N" | "LD4N" | "LD5N" | "LD6N" | "LD7N" | "LD8N" | "LD9N" => {
-                    let n = instruction.chars().nth(2).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::LDIN(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::LDXN(value));
                 }
                 "MUL" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::MUL(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::MUL(value));
                 }
                 "DIV" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::DIV(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::DIV(value));
                 }
                 "INCA" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::INCA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::INCA(value));
                 }
                 "INCX" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::INCX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "INC1" | "INC2" | "INC3" | "INC4" | "INC5" | "INC6" | "INC7" | "INC8" | "INC9" => {
-                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::INCI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::INCX(value));
                 }
                 "DECA" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::DECA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::DECA(value));
                 }
                 "DECX" => {
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::DECX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "DEC1" | "DEC2" | "DEC3" | "DEC4" | "DEC5" | "DEC6" | "DEC7" | "DEC8" | "DEC9" => {
-                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_value() {
-                        self.instructions.push(Instruction::DECI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_value()?;
+                    self.instructions.push(Instruction::DECX(value));
                 }
                 "CMPA" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::CMPA(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::CMPA(value));
                 }
                 "CMPX" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::CMPX(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-                "CMP1" | "CMP2" | "CMP3" | "CMP4" | "CMP5" | "CMP6" | "CMP7" | "CMP8" | "CMP9" => {
-                    let n = instruction.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::CMPI(n, value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::CMPX(value));
                 }
                 "JMP" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JMP(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JMP(value));
                 }
                 "JE" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JE(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JE(value));
                 }
                 "JNE" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JNE(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JNE(value));
                 }
                 "JG" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JG(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JG(value));
                 }
                 "JGE" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JGE(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JGE(value));
                 }
                 "JL" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JL(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JL(value));
                 }
                 "JLE" => {
-                    if let Some(value) = self.parse_address() {
-                        self.instructions.push(Instruction::JLE(value));
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
+                    let value = self.parse_address()?;
+                    self.instructions.push(Instruction::JLE(value));
                 }
                 "HLT" => {
                     self.instructions.push(Instruction::HLT);
                 }
-                _ => panic!("Unknown instruction at line {}", self.line),
+                _ => {
+                    if let Some(reg) = self.parse_indexed(&instruction, "ST", "")? {
+                        let value = self.parse_address()?;
+                        self.instructions.push(Instruction::STI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "ENT", "")? {
+                        let value = self.parse_value()?;
+                        self.instructions.push(Instruction::ENTI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "ENN", "")? {
+                        let value = self.parse_value()?;
+                        self.instructions.push(Instruction::ENNI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "LD", "N")? {
+                        let value = self.parse_address()?;
+                        self.instructions.push(Instruction::LDIN(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "LD", "")? {
+                        let value = self.parse_address()?;
+                        self.instructions.push(Instruction::LDI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "INC", "")? {
+                        let value = self.parse_value()?;
+                        self.instructions.push(Instruction::INCI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "DEC", "")? {
+                        let value = self.parse_value()?;
+                        self.instructions.push(Instruction::DECI(reg, value));
+                    } else if let Some(reg) = self.parse_indexed(&instruction, "CMP", "")? {
+                        let value = self.parse_address()?;
+                        self.instructions.push(Instruction::CMPI(reg, value));
+                    } else {
+                        return Err(ProgramParseError::InvalidInstruction {
+                            line: self.line,
+                            details: format!("Unknown instruction {}", instruction),
+                        });
+                    }
+                }
             }
         }
+        Ok(())
     }
 
     pub fn parse_instruction(&mut self) -> Option<String> {
-        let mut instruction = String::new();
-        while !self.scanner.is_done() {
-            let ch = self.scanner.pop();
-            if ch.is_none() {
-                break;
-            }
-            let c = ch.unwrap();
-            match c {
-                ' ' => break,
-                '\n' => {
-                    self.line += 1;
-                    break;
-                }
-                '\t' => break,
-                '\r' => break,
-                _ => {
-                    if c.is_ascii_uppercase() || (instruction.len() >= 2 && c.is_ascii_digit()) {
-                        instruction.push(*c)
-                    } else {
-                        panic!("Invalid instruction at line {}", self.line)
-                    }
-                }
-            }
+        match self.next_instruction() {
+            Ok(result) => result,
+            Err(err) => panic!("{}", err),
         }
-        if instruction.is_empty() {
-            return None;
-        }
-        if instruction.len() > MAX_INSTRUCTION_LENGTH {
-            panic!("Invalid instruction at line {}", self.line)
-        }
-        Some(instruction)
     }
 
-    fn parse_address(&mut self) -> Option<u64> {
-        let value = self.parse_digit_string();
-        if let Some(value) = value {
-            return Some(value.parse().unwrap());
-        }
-        None
-    }
-
-    fn parse_value(&mut self) -> Option<i64> {
-        let ch = self.scanner.peek();
-        let c = ch?;
-        let mut sign = 1;
-        if *c == '-' {
-            self.scanner.pop();
-            sign = -1;
-        }
-        let value = self.parse_digit_string();
-        if let Some(value) = value {
-            let value = value.parse::<i64>().unwrap();
-            return Some(sign * value);
-        }
-        None
-    }
-
-    fn parse_digit_string(&mut self) -> Option<String> {
-        let mut value = String::new();
-        while !self.scanner.is_done() {
-            let ch = self.scanner.pop();
-            if ch.is_none() {
-                break;
+    fn next_instruction(&mut self) -> ProgramResult<Option<String>> {
+        loop {
+            self.consume_whitespace();
+            if self.scanner.is_done() {
+                return Ok(None);
             }
-            let c = ch.unwrap();
-            match c {
-                ' ' => break,
-                '\n' => {
-                    self.line += 1;
-                    break;
-                }
-                '\t' => break,
-                '\r' => break,
-                _ => {
-                    if c.is_ascii_digit() {
-                        value.push(*c)
-                    } else if value.is_empty() {
+            let mut instruction = String::new();
+            while let Some(ch) = self.scanner.peek() {
+                let c = *ch;
+                match c {
+                    ' ' | '\t' | '\r' => {
+                        self.scanner.pop();
                         break;
+                    }
+                    '\n' => {
+                        self.scanner.pop();
+                        self.line += 1;
+                        break;
+                    }
+                    _ if c.is_ascii_uppercase()
+                        || (!instruction.is_empty() && c.is_ascii_digit()) =>
+                    {
+                        instruction.push(c);
+                        self.scanner.pop();
+                    }
+                    _ => {
+                        return Err(ProgramParseError::InvalidInstruction {
+                            line: self.line,
+                            details: format!("Invalid character '{}' in instruction", c),
+                        });
+                    }
+                }
+            }
+            if !instruction.is_empty() {
+                return Ok(Some(instruction));
+            }
+        }
+    }
+
+    fn parse_address(&mut self) -> ProgramResult<u64> {
+        self.consume_whitespace();
+        let digits = self.parse_digits()?;
+        digits
+            .parse::<u64>()
+            .map_err(|_| ProgramParseError::InvalidNumber {
+                line: self.line,
+                details: format!("Invalid address '{}'", digits),
+            })
+    }
+
+    fn parse_value(&mut self) -> ProgramResult<i64> {
+        self.consume_whitespace();
+        let mut sign = 1;
+        if let Some(ch) = self.scanner.peek() {
+            let c = *ch;
+            if c == '-' {
+                self.scanner.pop();
+                sign = -1;
+            } else if c == '+' {
+                self.scanner.pop();
+            }
+        }
+        let digits = self.parse_digits()?;
+        let value = digits
+            .parse::<i64>()
+            .map_err(|_| ProgramParseError::InvalidNumber {
+                line: self.line,
+                details: format!("Invalid value '{}'", digits),
+            })?;
+        Ok(sign * value)
+    }
+
+    fn parse_digits(&mut self) -> ProgramResult<String> {
+        let mut digits = String::new();
+        while let Some(ch) = self.scanner.peek() {
+            let c = *ch;
+            match c {
+                '0'..='9' => {
+                    digits.push(c);
+                    self.scanner.pop();
+                }
+                ' ' | '\t' | '\r' => {
+                    self.scanner.pop();
+                    break;
+                }
+                '\n' => {
+                    self.scanner.pop();
+                    self.line += 1;
+                    break;
+                }
+                _ => {
+                    if digits.is_empty() {
+                        return Err(ProgramParseError::InvalidNumber {
+                            line: self.line,
+                            details: format!("Unexpected character '{}' while parsing number", c),
+                        });
                     } else {
-                        panic!("Invalid value at line {}", self.line)
+                        break;
                     }
                 }
             }
         }
-        if value.is_empty() {
-            return None;
+        if digits.is_empty() {
+            return Err(ProgramParseError::InvalidNumber {
+                line: self.line,
+                details: "Expected digits".to_string(),
+            });
         }
-        Some(value)
+        Ok(digits)
+    }
+
+    fn consume_whitespace(&mut self) {
+        while let Some(ch) = self.scanner.peek() {
+            let c = *ch;
+            match c {
+                ' ' | '\t' | '\r' => {
+                    self.scanner.pop();
+                }
+                '\n' => {
+                    self.scanner.pop();
+                    self.line += 1;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    fn parse_indexed(
+        &self,
+        instruction: &str,
+        prefix: &str,
+        suffix: &str,
+    ) -> ProgramResult<Option<u8>> {
+        if !instruction.starts_with(prefix) || !instruction.ends_with(suffix) {
+            return Ok(None);
+        }
+        let start = prefix.len();
+        let end = instruction.len() - suffix.len();
+        if end <= start {
+            return Err(ProgramParseError::InvalidInstruction {
+                line: self.line,
+                details: format!("Missing register in {}", instruction),
+            });
+        }
+        let digits = &instruction[start..end];
+        if !digits.chars().all(|c| c.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let reg = digits
+            .parse::<u8>()
+            .map_err(|_| ProgramParseError::InvalidInstruction {
+                line: self.line,
+                details: format!("Invalid register in {}", instruction),
+            })?;
+        if (1..=10).contains(&reg) {
+            Ok(Some(reg))
+        } else {
+            Err(ProgramParseError::InvalidInstruction {
+                line: self.line,
+                details: format!("Register out of range in {}", instruction),
+            })
+        }
     }
 }
 
@@ -491,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_parse_instruction_ldi() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("LD{} 100\n", i).as_str());
             assert_eq!(program.parse_instruction(), Some(format!("LD{}", i)));
         }
@@ -511,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_parse_instruction_ldin() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("LD{}N 100\n", i).as_str());
             assert_eq!(program.parse_instruction(), Some(format!("LD{}N", i)));
         }
@@ -531,7 +511,7 @@ mod tests {
 
     #[test]
     fn test_parse_instruction_sti() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("ST{} 100\n", i).as_str());
             assert_eq!(program.parse_instruction(), Some(format!("ST{}", i)));
         }
@@ -563,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_parse_instruction_enti() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("ENT{} 100\n", i).as_str());
             assert_eq!(program.parse_instruction(), Some(format!("ENT{}", i)));
         }
@@ -583,7 +563,7 @@ mod tests {
 
     #[test]
     fn test_parse_instruction_enni() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("ENN{} 100\n", i).as_str());
             assert_eq!(program.parse_instruction(), Some(format!("ENN{}", i)));
         }
@@ -591,37 +571,37 @@ mod tests {
     #[test]
     fn test_parse_value() {
         let mut program = Program::new("100\n");
-        assert_eq!(program.parse_value(), Some(100));
+        assert_eq!(program.parse_value(), Ok(100));
     }
 
     #[test]
     fn test_parse_value_neg() {
         let mut program = Program::new("-100\n");
-        assert_eq!(program.parse_value(), Some(-100));
+        assert_eq!(program.parse_value(), Ok(-100));
     }
 
     #[test]
     fn test_parse_value_invalid() {
         let mut program = Program::new("abc\n");
-        assert_eq!(program.parse_value(), None);
+        assert!(program.parse_value().is_err());
     }
 
     #[test]
     fn test_parse_value_empty() {
         let mut program = Program::new("\n");
-        assert_eq!(program.parse_value(), None);
+        assert!(program.parse_value().is_err());
     }
 
     #[test]
     fn test_parse_address() {
         let mut program = Program::new("128\n");
-        assert_eq!(program.parse_address(), Some(128));
+        assert_eq!(program.parse_address(), Ok(128));
     }
 
     #[test]
     fn test_parse_program_load() {
         let mut program = Program::new("LDA 100\nLDX 200\nLD1 400\nLD5 500\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(
             program.instructions,
             vec![
@@ -636,7 +616,7 @@ mod tests {
     #[test]
     fn test_parse_program_load_neg() {
         let mut program = Program::new("LDAN 100\nLDXN 200\nLD1N 400\nLD5N 500\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(
             program.instructions,
             vec![
@@ -651,7 +631,7 @@ mod tests {
     #[test]
     fn test_parse_program_store() {
         let mut program = Program::new("STA 100\nSTX 200\nSTJ 300\nST1 400\nST5 500\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(
             program.instructions,
             vec![
@@ -667,7 +647,7 @@ mod tests {
     #[test]
     fn test_parse_program_store_zero() {
         let mut program = Program::new("STZ 100\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(program.instructions, vec![Instruction::STZ(100)]);
     }
 
@@ -675,7 +655,7 @@ mod tests {
     fn test_parse_program_enter() {
         let mut program =
             Program::new("ENTA 100\nENTX 200\nENT1 300\nENNA 300\nENN1 400\nENN5 500\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(
             program.instructions,
             vec![
@@ -692,21 +672,21 @@ mod tests {
     #[test]
     fn test_parse_program_add() {
         let mut program = Program::new("ADD 100\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(program.instructions, vec![Instruction::ADD(100)]);
     }
 
     #[test]
     fn test_parse_program_sub() {
         let mut program = Program::new("SUB 100\n");
-        program.parse();
+        program.parse().unwrap();
         assert_eq!(program.instructions, vec![Instruction::SUB(100)]);
     }
 
     #[test]
     fn test_program_ent_sto_a() {
         let mut program = Program::new("ENTA 112\nSTA 200\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.a, 112);
@@ -716,7 +696,7 @@ mod tests {
     #[test]
     fn test_program_ent_sto_x() {
         let mut program = Program::new("ENTX 112\nSTX 200\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.x, 112);
@@ -725,9 +705,9 @@ mod tests {
 
     #[test]
     fn test_program_ent_sto_i() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("ENT{} 112\nST{} 200\n", i, i).as_str());
-            program.parse();
+            program.parse().unwrap();
             let mut mix = Mix::new();
             mix.execute(&program);
             assert_eq!(mix.i[i as usize], 112);
@@ -738,7 +718,7 @@ mod tests {
     #[test]
     fn test_program_ent_sto_neg_a() {
         let mut program = Program::new("ENNA 112\nSTA 200\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.a, -112);
@@ -748,7 +728,7 @@ mod tests {
     #[test]
     fn test_program_ent_sto_neg_x() {
         let mut program = Program::new("ENNX 112\nSTX 200\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.x, -112);
@@ -757,9 +737,9 @@ mod tests {
 
     #[test]
     fn test_program_ent_sto_neg_i() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("ENN{} 112\nST{} 200\n", i, i).as_str());
-            program.parse();
+            program.parse().unwrap();
             let mut mix = Mix::new();
             mix.execute(&program);
             assert_eq!(mix.i[i as usize], -112);
@@ -770,7 +750,7 @@ mod tests {
     #[test]
     fn test_program_load_a() {
         let mut program = Program::new("LDA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 175;
         mix.execute(&program);
@@ -780,7 +760,7 @@ mod tests {
     #[test]
     fn test_program_load_x() {
         let mut program = Program::new("LDX 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 175;
         mix.execute(&program);
@@ -789,9 +769,9 @@ mod tests {
 
     #[test]
     fn test_program_load_i() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("LD{} 100\n", i).as_str());
-            program.parse();
+            program.parse().unwrap();
             let mut mix = Mix::new();
             mix.memory[100] = 175;
             mix.execute(&program);
@@ -802,7 +782,7 @@ mod tests {
     #[test]
     fn test_program_load_neg_a() {
         let mut program = Program::new("LDAN 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = -175;
         mix.execute(&program);
@@ -812,7 +792,7 @@ mod tests {
     #[test]
     fn test_program_load_neg_x() {
         let mut program = Program::new("LDXN 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = -175;
         mix.execute(&program);
@@ -821,9 +801,9 @@ mod tests {
 
     #[test]
     fn test_program_load_neg_i() {
-        for i in 1..10 {
+        for i in 1..=10 {
             let mut program = Program::new(format!("LD{}N 100\n", i).as_str());
-            program.parse();
+            program.parse().unwrap();
             let mut mix = Mix::new();
             mix.memory[100] = -175;
             mix.execute(&program);
@@ -834,7 +814,7 @@ mod tests {
     #[test]
     fn test_program_add() {
         let mut program = Program::new("ADD 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = 75;
@@ -845,7 +825,7 @@ mod tests {
     #[test]
     fn test_program_sub() {
         let mut program = Program::new("SUB 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = 75;
@@ -856,7 +836,7 @@ mod tests {
     #[test]
     fn test_program_add_overflow() {
         let mut program = Program::new("ADD 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = i64::MAX;
@@ -867,7 +847,7 @@ mod tests {
     #[test]
     fn test_program_sub_overflow() {
         let mut program = Program::new("SUB 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = i64::MIN;
@@ -879,7 +859,7 @@ mod tests {
     #[test]
     fn test_program_mul() {
         let mut program = Program::new("MUL 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 10;
         mix.memory[100] = 20;
@@ -891,7 +871,7 @@ mod tests {
     #[test]
     fn test_program_mul_overflow() {
         let mut program = Program::new("MUL 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = i64::MAX;
         mix.memory[100] = 2;
@@ -902,7 +882,7 @@ mod tests {
     #[test]
     fn test_program_div() {
         let mut program = Program::new("DIV 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = 5;
@@ -914,7 +894,7 @@ mod tests {
     #[test]
     fn test_program_div_by_zero() {
         let mut program = Program::new("DIV 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.memory[100] = 0;
@@ -925,7 +905,7 @@ mod tests {
     #[test]
     fn test_program_inca() {
         let mut program = Program::new("INCA 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.execute(&program);
@@ -935,7 +915,7 @@ mod tests {
     #[test]
     fn test_program_incx() {
         let mut program = Program::new("INCX 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.x = 100;
         mix.execute(&program);
@@ -945,7 +925,7 @@ mod tests {
     #[test]
     fn test_program_inci() {
         let mut program = Program::new("INC1 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.i[1] = 100;
         mix.execute(&program);
@@ -955,7 +935,7 @@ mod tests {
     #[test]
     fn test_program_deca() {
         let mut program = Program::new("DECA 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 100;
         mix.execute(&program);
@@ -965,7 +945,7 @@ mod tests {
     #[test]
     fn test_program_decx() {
         let mut program = Program::new("DECX 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.x = 100;
         mix.execute(&program);
@@ -975,7 +955,7 @@ mod tests {
     #[test]
     fn test_program_deci() {
         let mut program = Program::new("DEC1 50\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.i[1] = 100;
         mix.execute(&program);
@@ -985,7 +965,7 @@ mod tests {
     #[test]
     fn test_program_cmpa_equal() {
         let mut program = Program::new("CMPA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 50;
         mix.memory[100] = 50;
@@ -996,7 +976,7 @@ mod tests {
     #[test]
     fn test_program_cmpa_less() {
         let mut program = Program::new("CMPA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 30;
         mix.memory[100] = 50;
@@ -1007,7 +987,7 @@ mod tests {
     #[test]
     fn test_program_cmpa_greater() {
         let mut program = Program::new("CMPA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.a = 70;
         mix.memory[100] = 50;
@@ -1018,7 +998,7 @@ mod tests {
     #[test]
     fn test_program_jmp() {
         let mut program = Program::new("ENTA 10\nJMP 3\nENTA 20\nENTA 30\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.a, 30);
@@ -1027,7 +1007,7 @@ mod tests {
     #[test]
     fn test_program_je_taken() {
         let mut program = Program::new("ENTA 50\nCMPA 100\nJE 4\nENTA 99\nENTA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 50;
         mix.execute(&program);
@@ -1037,7 +1017,7 @@ mod tests {
     #[test]
     fn test_program_je_not_taken() {
         let mut program = Program::new("ENTA 30\nCMPA 100\nJE 4\nENTA 99\nENTA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 50;
         mix.execute(&program);
@@ -1047,7 +1027,7 @@ mod tests {
     #[test]
     fn test_program_jne_taken() {
         let mut program = Program::new("ENTA 30\nCMPA 100\nJNE 4\nENTA 99\nENTA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 50;
         mix.execute(&program);
@@ -1057,7 +1037,7 @@ mod tests {
     #[test]
     fn test_program_jg_taken() {
         let mut program = Program::new("ENTA 70\nCMPA 100\nJG 4\nENTA 99\nENTA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 50;
         mix.execute(&program);
@@ -1067,7 +1047,7 @@ mod tests {
     #[test]
     fn test_program_jl_taken() {
         let mut program = Program::new("ENTA 30\nCMPA 100\nJL 4\nENTA 99\nENTA 100\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.memory[100] = 50;
         mix.execute(&program);
@@ -1077,7 +1057,7 @@ mod tests {
     #[test]
     fn test_program_hlt() {
         let mut program = Program::new("ENTA 10\nHLT\nENTA 20\n");
-        program.parse();
+        program.parse().unwrap();
         let mut mix = Mix::new();
         mix.execute(&program);
         assert_eq!(mix.a, 10);

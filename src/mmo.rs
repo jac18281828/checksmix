@@ -244,13 +244,17 @@ impl MmoGenerator {
         mmo.extend_from_slice(&low.to_be_bytes());
     }
 
-    /// Emit lop_post: postamble
-    /// Format: MM lop_post YZ G (4 bytes)
-    fn emit_lop_post(&self, mmo: &mut Vec<u8>, _entry_point: u64) {
+    /// Emit lop_post: postamble, storing entry point in register 255
+    fn emit_lop_post(&self, mmo: &mut Vec<u8>, entry_point: u64) {
         mmo.push(MM); // MM escape code
         mmo.push(MmoRecordType::LopPost as u8); // lop_post
-        mmo.push(0x00); // Y
-        mmo.push(0x00); // Z (no symbol table)
+        mmo.push(0x00); // Y must be 0
+        mmo.push(0xFF); // Z = 255 (start writing from g[255])
+
+        let high = (entry_point >> 32) as u32;
+        let low = (entry_point & 0xFFFF_FFFF) as u32;
+        mmo.extend_from_slice(&high.to_be_bytes());
+        mmo.extend_from_slice(&low.to_be_bytes());
     }
 }
 
@@ -273,7 +277,7 @@ impl MmoDecoder {
         F: FnMut(u64, u8),
     {
         debug!("Decoding MMIX object code (.mmo format)");
-        let entry_point = 0x100u64; // Default entry point
+        let mut entry_point = 0x100u64; // Default entry point
         let mut i = 0;
         let mut current_addr = 0u64;
 
@@ -364,12 +368,37 @@ impl MmoDecoder {
                     i += 2; // Skip YZ
                 }
                 Ok(MmoRecordType::LopPost) => {
-                    // lop_post: Postamble (just YZ, no data in our simple format)
                     if i + 2 > self.data.len() {
                         break;
                     }
-                    i += 2; // Skip YZ
-                    // Entry point defaults to 0x100
+                    let _y = self.data[i];
+                    let start = self.data[i + 1] as usize;
+                    i += 2;
+                    let mut reg_index = start;
+                    while reg_index <= 255 {
+                        if i + 8 > self.data.len() {
+                            i = self.data.len();
+                            break;
+                        }
+                        let high = u32::from_be_bytes([
+                            self.data[i],
+                            self.data[i + 1],
+                            self.data[i + 2],
+                            self.data[i + 3],
+                        ]);
+                        let low = u32::from_be_bytes([
+                            self.data[i + 4],
+                            self.data[i + 5],
+                            self.data[i + 6],
+                            self.data[i + 7],
+                        ]);
+                        let value = ((high as u64) << 32) | (low as u64);
+                        if reg_index == 255 {
+                            entry_point = value;
+                        }
+                        i += 8;
+                        reg_index += 1;
+                    }
                 }
                 Ok(MmoRecordType::LopSkip) => {
                     // lop_skip: Advance current address by YZ tetras
@@ -580,7 +609,7 @@ mod tests {
         });
 
         // Entry point should be Main label address
-        assert_eq!(entry_point, 0x100); // Note: decoder uses default for now
+        assert_eq!(entry_point, 0x1000);
     }
 
     #[test]

@@ -2822,11 +2822,6 @@ impl MMix {
         let mut count = 0;
         while self.execute_instruction() {
             count += 1;
-            // Safety limit to prevent infinite loops during development
-            if count >= 10000 {
-                eprintln!("Warning: Execution limit reached (10000 instructions)");
-                break;
-            }
         }
         debug!(instruction_count = count, "Execution completed");
         count
