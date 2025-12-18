@@ -3332,13 +3332,13 @@ mod tests {
         mmix.set_register(2, 100);
         mmix.set_register(3, 50);
         // Write a 32-bit float (e.g., 3.14159 in IEEE 754 single precision)
-        let float_val = 3.14159f32;
+        let float_val = std::f32::consts::PI;
         mmix.write_tetra(150, float_val.to_bits());
 
         mmix.execute_instruction();
         // Should be converted to 64-bit float
         let result_f64 = MMix::u64_to_f64(mmix.get_register(1));
-        assert!((result_f64 - 3.14159).abs() < 0.0001);
+        assert!((result_f64 - std::f64::consts::PI).abs() < 0.0001);
         assert_eq!(mmix.get_pc(), 4);
     }
 
@@ -6346,7 +6346,7 @@ mod tests {
     fn test_stsf() {
         let mut mmix = MMix::new();
         // STSF $1, $2, $3 - Store short float
-        let f64_value = 3.14159265358979f64;
+        let f64_value = std::f64::consts::PI;
         mmix.set_register(1, f64_value.to_bits());
         mmix.set_register(2, 1000);
         mmix.set_register(3, 8);
@@ -6355,14 +6355,14 @@ mod tests {
 
         let stored_tetra = mmix.read_tetra(1008);
         let f32_value = f32::from_bits(stored_tetra);
-        assert!((f32_value - 3.14159265f32).abs() < 1e-5);
+        assert!((f32_value - std::f32::consts::PI).abs() < 1e-5);
     }
 
     #[test]
     fn test_stsfi() {
         let mut mmix = MMix::new();
         // STSFI $1, $2, 16 - Store short float immediate
-        let f64_value = 2.71828f64;
+        let f64_value = std::f64::consts::E;
         mmix.set_register(1, f64_value.to_bits());
         mmix.set_register(2, 2000);
         mmix.write_tetra(0, 0xB1010210); // STSFI $1,$2,16
@@ -6370,7 +6370,7 @@ mod tests {
 
         let stored_tetra = mmix.read_tetra(2016);
         let f32_value = f32::from_bits(stored_tetra);
-        assert!((f32_value - 2.71828f32).abs() < 1e-5);
+        assert!((f32_value - std::f32::consts::E).abs() < 1e-5);
     }
 
     #[test]
