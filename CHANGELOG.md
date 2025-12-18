@@ -1,3 +1,7 @@
+0.2.1 (2025-12-17)
+
+* fix deployment
+
 0.2.0 (2025-12-17)
 
 * full mmix implementation
