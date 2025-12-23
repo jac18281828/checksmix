@@ -1,0 +1,81 @@
+.TH CHECKSMIX 1 "May 2025" "checksmix 0.2.3"
+.SH NAME
+checksmix \- run MMIX assembly or object files with a lightweight emulator
+.SH SYNOPSIS
+.B checksmix
+.RI file
+.br
+.B checksmix
+accepts one input file with extension
+.BR .mms ", " .mmo ", " .mix ", or " .mixal .
+.SH DESCRIPTION
+.B checksmix
+is a fast MMIX emulator. It can parse and execute MMIX assembly
+.RB ( .mms )
+directly, or load MMIX object files
+.RB ( .mmo ).
+Legacy MIX programs
+.RB ( .mix
+or
+.BR .mixal )
+are also supported.
+.PP
+For
+.BR .mms
+files,
+.B checksmix
+assembles the program in memory, initializes the program counter to
+the
+.I Main
+label if present (otherwise to \#100 or the first code address), and
+prints register state before and after execution.
+.PP
+For
+.BR .mmo
+files it decodes the object code, loads it into memory, uses the
+postamble entry point for the initial program counter, and runs until
+halt.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Enable tracing output from the emulator. Example:
+.BR RUST_LOG=checksmix=debug .
+.SH FILES
+.TP
+.I examples/hello_world.mms
+Minimal program using
+.B TRAP 0,Fputs,StdOut
+to print a string.
+.TP
+.I examples/linked_list.mms
+Traverses a static linked list and sums node values.
+.TP
+.I examples/all_instructions_test.mms
+Broad instruction coverage for regression testing.
+.SH EXAMPLES
+Run MMIX assembly directly:
+.PP
+.RS
+.nf
+checksmix examples/hello_world.mms
+.fi
+.RE
+.PP
+Run a prebuilt object file:
+.PP
+.RS
+.nf
+checksmix target/hello_world.mmo
+.fi
+.RE
+.PP
+Assemble, then run:
+.PP
+.RS
+.nf
+mmixasm examples/linked_list.mms /tmp/list.mmo
+checksmix /tmp/list.mmo
+.fi
+.RE
+.SH SEE ALSO
+.BR mmixasm (1)

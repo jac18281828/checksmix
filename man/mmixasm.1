@@ -1,0 +1,44 @@
+.TH MMIXASM 1 "May 2025" "checksmix 0.2.3"
+.SH NAME
+mmixasm \- assemble MMIX source into MMO object code
+.SH SYNOPSIS
+.B mmixasm
+.RI input.mms
+.RI [ output.mmo ]
+.SH DESCRIPTION
+.B mmixasm
+assembles MMIX assembly source
+.RB ( .mms )
+into an MMO object file. If no output path is given, the input basename
+is used with a
+.B .mmo
+extension.
+.PP
+On success it writes the object bytes to the chosen file. During
+assembly it prints labels and encoded instructions to standard error to
+help with debugging.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Enable parser and encoder debug logs. Example:
+.BR RUST_LOG=checksmix=debug .
+.SH EXAMPLES
+Assemble and write next to the source:
+.PP
+.RS
+.nf
+mmixasm examples/hello_world.mms
+.fi
+.RE
+.PP
+Assemble to a specific path, then execute with
+.BR checksmix :
+.PP
+.RS
+.nf
+mmixasm examples/linked_list.mms /tmp/list.mmo
+checksmix /tmp/list.mmo
+.fi
+.RE
+.SH SEE ALSO
+.BR checksmix (1)
