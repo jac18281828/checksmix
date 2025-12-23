@@ -70,3 +70,15 @@ Main    LDA     $0,Text
 
 ## Legacy MIX support
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.
+
+## Tribute
+
+Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me alot about how to think about programming and system design.
+
+Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software.  Some time later, I submitted a “bug” in The Art of Computer Programming- to earn the coveted Knuth “hexadecimal dollar.” His reply was short and perfect:
+
+“e is as real as any other number.”
+
+Evidently!
+
+This project carries a little of that spirit forward: curiosity, precision, and the belief that computing can be serious fun.
