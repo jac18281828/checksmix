@@ -8,6 +8,7 @@ license = "BSD-3-Clause"
 repository = "https://github.com/jac18281828/checksmix"
 keywords = ["mmix", "simulator", "knuth", "assembly", "educational"]
 categories = ["simulation", "emulators"]
+exclude = ["examples/*", "README.md", "docs/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -25,7 +26,7 @@ panic = "abort"
 [dependencies]
 pest = "2.7"
 pest_derive = "2.7"
-lyn = "0.1.0"  # Temporary, for old parser
-tracing = "0.1"
+lyn = "0.1.0"
+tracing = "0.1.44"
 regex = "1.10"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -24,13 +24,14 @@ Node3   OCTA    3               % node3.value = 3
         %   $5 = sum
         % ----------------------------------------------------
 
-Start   SET     $0,0                % constant zero register initialization
-        SET     $5,0                % sum = 0
+Zero    IS      $255        
+
+Start   SET     $5,0                % sum = 0
         LDA     $1,Node1            % head = address of node1
 
         % -------- traversal: sum all values --------
 Traverse
-        CMP     $4,$1,$0            % compare head to NULL
+        CMP     $4,$1,Zero          % compare head to NULL
         BZ      $4,Done             % if equal (zero result), exit
 
         LDO     $2,$1,$0            % load value from node
