@@ -6,6 +6,22 @@ use tracing::{debug, instrument};
 #[grammar = "mmixal.pest"]
 struct MMixalParser;
 
+/// Type of symbol defined by IS directive
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SymbolType {
+    Register(u8),  // Register alias: "Zero IS $255" -> Register(255)
+    Constant(u64), // Numeric constant: "MAXLIMBS IS 32" -> Constant(32)
+}
+
+impl std::fmt::Display for SymbolType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SymbolType::Register(reg) => write!(f, "${}", reg),
+            SymbolType::Constant(val) => write!(f, "{}", val),
+        }
+    }
+}
+
 /// MMIX Assembly Language Parser
 /// Parses MMIX assembly language into binary object code (.mmo)
 #[allow(clippy::upper_case_acronyms)]
@@ -867,7 +883,7 @@ pub struct MMixAssembler {
     source: String,
     filename: String,
     pub labels: HashMap<String, u64>,
-    pub symbols: HashMap<String, u64>, // For IS directive - symbolic names
+    pub symbols: HashMap<String, SymbolType>, // For IS directive - symbolic names with type
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
@@ -949,27 +965,36 @@ impl MMixAssembler {
 
         // Standard MMIXAL predefined symbols
         // Segment constants
-        symbols.insert("Data_Segment".to_string(), 0x2000000000000000);
-        symbols.insert("Pool_Segment".to_string(), 0x4000000000000000);
-        symbols.insert("Stack_Segment".to_string(), 0x6000000000000000);
+        symbols.insert(
+            "Data_Segment".to_string(),
+            SymbolType::Constant(0x2000000000000000),
+        );
+        symbols.insert(
+            "Pool_Segment".to_string(),
+            SymbolType::Constant(0x4000000000000000),
+        );
+        symbols.insert(
+            "Stack_Segment".to_string(),
+            SymbolType::Constant(0x6000000000000000),
+        );
 
         // Standard I/O handles
-        symbols.insert("StdIn".to_string(), 0);
-        symbols.insert("StdOut".to_string(), 1);
-        symbols.insert("StdErr".to_string(), 2);
+        symbols.insert("StdIn".to_string(), SymbolType::Constant(0));
+        symbols.insert("StdOut".to_string(), SymbolType::Constant(1));
+        symbols.insert("StdErr".to_string(), SymbolType::Constant(2));
 
         // Common TRAP function codes (C library emulation)
-        symbols.insert("Halt".to_string(), 0);
-        symbols.insert("Fopen".to_string(), 1);
-        symbols.insert("Fclose".to_string(), 2);
-        symbols.insert("Fread".to_string(), 3);
-        symbols.insert("Fgets".to_string(), 4);
-        symbols.insert("Fgetws".to_string(), 5);
-        symbols.insert("Fwrite".to_string(), 6);
-        symbols.insert("Fputs".to_string(), 7);
-        symbols.insert("Fputws".to_string(), 8);
-        symbols.insert("Fseek".to_string(), 9);
-        symbols.insert("Ftell".to_string(), 10);
+        symbols.insert("Halt".to_string(), SymbolType::Constant(0));
+        symbols.insert("Fopen".to_string(), SymbolType::Constant(1));
+        symbols.insert("Fclose".to_string(), SymbolType::Constant(2));
+        symbols.insert("Fread".to_string(), SymbolType::Constant(3));
+        symbols.insert("Fgets".to_string(), SymbolType::Constant(4));
+        symbols.insert("Fgetws".to_string(), SymbolType::Constant(5));
+        symbols.insert("Fwrite".to_string(), SymbolType::Constant(6));
+        symbols.insert("Fputs".to_string(), SymbolType::Constant(7));
+        symbols.insert("Fputws".to_string(), SymbolType::Constant(8));
+        symbols.insert("Fseek".to_string(), SymbolType::Constant(9));
+        symbols.insert("Ftell".to_string(), SymbolType::Constant(10));
 
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);
@@ -1166,8 +1191,9 @@ impl MMixAssembler {
                             };
 
                             if let Some(label) = label_name.take() {
-                                // Map the label to the register NUMBER (not address)
-                                self.symbols.insert(label, allocated_reg as u64);
+                                // Map the label to the register (as register alias, not address)
+                                self.symbols
+                                    .insert(label, SymbolType::Register(allocated_reg));
                             }
 
                             // Parse to get the init value (will be processed again in second pass)
@@ -1242,13 +1268,13 @@ impl MMixAssembler {
                         Rule::greg_directive => {
                             // GREG was already processed in first pass
                             // Verify that any label was properly added to symbols
-                            if let Some(label) = label_name.take() {
-                                if !self.symbols.contains_key(&label) {
-                                    return Err(format!(
-                                        "Internal error: GREG label '{}' not found in symbols from first pass",
-                                        label
-                                    ));
-                                }
+                            if let Some(label) = label_name.take()
+                                && !self.symbols.contains_key(&label)
+                            {
+                                return Err(format!(
+                                    "Internal error: GREG label '{}' not found in symbols from first pass",
+                                    label
+                                ));
                             }
                         }
                         Rule::is_directive => {
@@ -1285,8 +1311,8 @@ impl MMixAssembler {
         let inner = pair.into_inner().next().ok_or("Empty instruction")?;
 
         match inner.as_rule() {
-            Rule::inst_set_rr => Ok(MMixInstruction::SETRR(0, 0)), // Placeholder for sizing
-            Rule::inst_set_ri => Ok(MMixInstruction::SET(0, 0)),   // Placeholder for sizing
+            Rule::inst_set => Ok(MMixInstruction::SETRR(0, 0)), // Placeholder: SET $X,$Y -> ORI
+            Rule::inst_seti => Ok(MMixInstruction::SET(0, 0)), // Placeholder: SETI $X,IMM (will expand)
             Rule::inst_setl_ri => Ok(MMixInstruction::SETL(0, 0)),
             Rule::inst_seth_ri => Ok(MMixInstruction::SETH(0, 0)),
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
@@ -1359,8 +1385,8 @@ impl MMixAssembler {
         let inner = pair.into_inner().next().ok_or("Empty instruction")?;
 
         match inner.as_rule() {
-            Rule::inst_set_rr => self.parse_inst_set_rr(inner),
-            Rule::inst_set_ri => self.parse_inst_set(inner),
+            Rule::inst_set => self.parse_inst_set(inner),
+            Rule::inst_seti => self.parse_inst_seti(inner),
             Rule::inst_setl_ri => self.parse_inst_setl(inner),
             Rule::inst_seth_ri => self.parse_inst_seth(inner),
             Rule::inst_setmh_ri => self.parse_inst_setmh(inner),
@@ -1457,25 +1483,29 @@ impl MMixAssembler {
 
     fn parse_inst_set(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let operands = parts.next().unwrap();
+        let _mnem = parts.next(); // mnemonic_set
+        let operands = parts.next().unwrap(); // operand_reg_reg
         let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())?;
-        Ok(MMixInstruction::SET(reg, val))
+        let dest_reg = self.parse_register(ops.next().unwrap())?;
+        let src_reg = self.parse_register(ops.next().unwrap())?;
+
+        // SET $X,$Y expands to ORI $X,$Y,0 (register-to-register copy)
+        Ok(MMixInstruction::SETRR(dest_reg, src_reg))
     }
 
-    fn parse_inst_set_rr(
+    fn parse_inst_seti(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let operands = parts.next().unwrap();
+        let _mnem = parts.next(); // mnemonic_seti  
+        let operands = parts.next().unwrap(); // operand_reg_imm
         let mut ops = operands.into_inner();
-        let reg_x = self.parse_register(ops.next().unwrap())?;
-        let reg_y = self.parse_register(ops.next().unwrap())?;
-        Ok(MMixInstruction::SETRR(reg_x, reg_y))
+        let dest_reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())?;
+
+        // SETI $X,IMM expands to SETL/INCML/INCMH/INCH as needed
+        Ok(MMixInstruction::SET(dest_reg, val))
     }
 
     fn parse_inst_setl(
@@ -2870,35 +2900,53 @@ impl MMixAssembler {
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
 
-        let value = match value_pair.as_rule() {
-            Rule::register => self.parse_register(value_pair)? as u64,
-            Rule::expr_value => self.parse_number(value_pair)?,
+        let symbol_type = match value_pair.as_rule() {
+            Rule::register => {
+                let reg = self.parse_register(value_pair)?;
+                SymbolType::Register(reg)
+            }
+            Rule::expr_value => {
+                let value = self.parse_number(value_pair)?;
+                SymbolType::Constant(value)
+            }
             _ => return Err("IS directive requires register or expr_value".to_string()),
         };
 
-        self.symbols.insert(symbol_name, value);
+        self.symbols.insert(symbol_name, symbol_type);
         Ok(())
     }
 
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
-        let text = pair.as_str();
         let (line, col) = pair.line_col();
+
+        // If the pair is a `register` rule, it might have an inner rule (register_num or symbol)
+        let text = if pair.as_rule() == Rule::register {
+            // Check if it has children (symbol case)
+            if let Some(inner) = pair.clone().into_inner().next() {
+                inner.as_str()
+            } else {
+                pair.as_str()
+            }
+        } else {
+            pair.as_str()
+        };
 
         // Check if it's a symbolic name from IS directive
         if !text.starts_with('$') {
-            // Try to resolve as symbol
-            if let Some(&value) = self.symbols.get(text) {
-                if value <= 255 {
-                    return Ok(value as u8);
-                } else {
-                    return Err(format!(
-                        "Line {}:{}: Symbol '{}' value {} exceeds register range (max 255)",
-                        line, col, text, value
-                    ));
+            // Try to resolve as symbol - must be a register type
+            if let Some(&symbol_type) = self.symbols.get(text) {
+                match symbol_type {
+                    SymbolType::Register(reg) => return Ok(reg),
+                    SymbolType::Constant(value) => {
+                        return Err(format!(
+                            "Line {}:{}: Symbol '{}' is a numeric constant ({}), cannot use as register",
+                            line, col, text, value
+                        ));
+                    }
                 }
             }
             return Err(format!(
-                "Line {}:{}: Undefined symbol '{}' (expected register like $0 or defined symbol)",
+                "Line {}:{}: Undefined symbol '{}' (expected register like $0 or register alias)",
                 line, col, text
             ));
         }
@@ -2947,19 +2995,35 @@ impl MMixAssembler {
                 .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e)),
             Rule::symbol => {
                 // Try to resolve as symbol from IS directive or label
-                self.symbols
-                    .get(text)
-                    .or_else(|| self.labels.get(text))
-                    .copied()
-                    .ok_or_else(|| format!("Line {}:{}: Undefined symbol: {}", line, col, text))
+                if let Some(&symbol_type) = self.symbols.get(text) {
+                    match symbol_type {
+                        SymbolType::Constant(value) => Ok(value),
+                        SymbolType::Register(reg) => Err(format!(
+                            "Line {}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
+                            line, col, text, reg
+                        )),
+                    }
+                } else if let Some(&label_addr) = self.labels.get(text) {
+                    Ok(label_addr)
+                } else {
+                    Err(format!("Line {}:{}: Undefined symbol: {}", line, col, text))
+                }
             }
             Rule::identifier => {
                 // Backward compatibility: identifier same as symbol
-                self.symbols
-                    .get(text)
-                    .or_else(|| self.labels.get(text))
-                    .copied()
-                    .ok_or_else(|| format!("Line {}:{}: Undefined symbol: {}", line, col, text))
+                if let Some(&symbol_type) = self.symbols.get(text) {
+                    match symbol_type {
+                        SymbolType::Constant(value) => Ok(value),
+                        SymbolType::Register(reg) => Err(format!(
+                            "Line {}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
+                            line, col, text, reg
+                        )),
+                    }
+                } else if let Some(&label_addr) = self.labels.get(text) {
+                    Ok(label_addr)
+                } else {
+                    Err(format!("Line {}:{}: Undefined symbol: {}", line, col, text))
+                }
             }
             _ => Err(format!(
                 "Line {}:{}: Expected number, got: {:?}",
@@ -3024,8 +3088,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_set() {
-        let mut asm = MMixAssembler::new("SET $2, 10", "<test>");
+    #[test]
+    fn test_parse_seti() {
+        let mut asm = MMixAssembler::new("SETI $2, 10", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
     }

@@ -3113,7 +3113,7 @@ mod tests {
         assert_eq!(mmix.get_special(SpecialReg::RO), 0x6000000000000000);
         assert_eq!(mmix.get_special(SpecialReg::RS), 0);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
-        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 255);
         assert!(mmix.frame_info_stack.is_empty());
     }
 

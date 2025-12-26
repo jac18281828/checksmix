@@ -6,7 +6,7 @@ Zero    IS      $255
         LOC     #100
 
 % Entry point
-Main    SET     $1,20           % compute fib(20)
+Main    SETI $1,20              % compute fib(20)
         PUSHJ   $0,Fibonacci    % call Fibonacci; return to TRAP below
         JMP     Done
 
@@ -27,12 +27,12 @@ Main    SET     $1,20           % compute fib(20)
 
 % calculate fib($1) and return result in $0
 Fibonacci
-        SET     $2,2
+        SETI $2,2
         CMP     $5,$1,$2
         BN      $5,TwoOrLess
-        SET     $2,0
-        SET     $3,1
-        SET     $4,2
+        SETI $2,0
+        SETI $3,1
+        SETI $4,2
 AddLoop
         CMP     $5,$4,$1
         BP      $5,FibEnd

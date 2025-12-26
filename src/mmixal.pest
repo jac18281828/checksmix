@@ -81,6 +81,7 @@ mnemonic_setmh = { ^"SETMH" }
 mnemonic_setml = { ^"SETML" }
 mnemonic_setl = { ^"SETL" }
 mnemonic_seth = { ^"SETH" }
+mnemonic_seti = { ^"SETI" }
 mnemonic_set = { ^"SET" }
 mnemonic_incl = { ^"INCL" }
 mnemonic_inch = { ^"INCH" }
@@ -380,8 +381,9 @@ operand_reg = { register }
 operand_imm = { expr_value }
 
 // Instructions with different operand patterns
-inst_set_rr = { mnemonic_set ~ operand_reg_reg }
-inst_set_ri = { mnemonic_set ~ operand_reg_imm }
+// SET/SETI follow MMIX convention: SET for register, SETI for immediate
+inst_set = { mnemonic_set ~ operand_reg_reg }  // SET $X,$Y -> ORI $X,$Y,0
+inst_seti = { mnemonic_seti ~ operand_reg_imm }  // SETI $X,IMM -> SETL/INCML/etc
 inst_setl_ri = { mnemonic_setl ~ operand_reg_imm }
 inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
 inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
@@ -427,10 +429,9 @@ inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
 // Arithmetic (3 operands) - ordered longest first
 inst_arith_rrr = {
     (mnemonic_16addu | mnemonic_8addu | mnemonic_4addu | mnemonic_2addu |
-     mnemonic_addui | mnemonic_subui | mnemonic_mului | mnemonic_divui | mnemonic_cmpui |
-     mnemonic_addu | mnemonic_addi | mnemonic_subu | mnemonic_subi |
-     mnemonic_mulu | mnemonic_muli | mnemonic_divu | mnemonic_divi |
-     mnemonic_cmpu | mnemonic_cmpi | mnemonic_add | mnemonic_sub | mnemonic_mul | mnemonic_div | mnemonic_cmp) ~
+     mnemonic_addu | mnemonic_subu |
+     mnemonic_mulu | mnemonic_divu |
+     mnemonic_cmpu | mnemonic_add | mnemonic_sub | mnemonic_mul | mnemonic_div | mnemonic_cmp) ~
     operand_reg_reg_reg
 }
 
@@ -471,11 +472,11 @@ inst_float_rri = {
 
 // Bitwise operations (3 operands) - ordered longest first
 inst_bitwise_rrr = {
-    (mnemonic_andni | mnemonic_andn | mnemonic_nandi | mnemonic_nand |
-     mnemonic_nxori | mnemonic_nxor | mnemonic_andi | mnemonic_and |
-     mnemonic_orni | mnemonic_orn | mnemonic_nori | mnemonic_nor | 
-     mnemonic_ori | mnemonic_or | mnemonic_xori | mnemonic_xor |
-     mnemonic_muxi | mnemonic_mux) ~
+    (mnemonic_andn | mnemonic_nand |
+     mnemonic_nxor | mnemonic_and |
+     mnemonic_orn | mnemonic_nor | 
+     mnemonic_or | mnemonic_xor |
+     mnemonic_mux) ~
     operand_reg_reg_reg
 }
 
@@ -488,8 +489,7 @@ inst_bitwise_rri = {
 
 // Bit fiddling operations (§11-12) - ordered longest first
 inst_bitfiddle_rrr = {
-    (mnemonic_bdifi | mnemonic_wdifi | mnemonic_tdifi | mnemonic_odifi | mnemonic_saddi | mnemonic_mxori | mnemonic_mori |
-     mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
+    (mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
     operand_reg_reg_reg
 }
 
@@ -500,8 +500,7 @@ inst_bitfiddle_rri = {
 
 // Shift instructions (§14) - ordered longest first
 inst_shift_rrr = {
-    (mnemonic_slui | mnemonic_srui |
-     mnemonic_slu | mnemonic_sli | mnemonic_sru | mnemonic_sri |
+    (mnemonic_slu | mnemonic_sru |
      mnemonic_sl | mnemonic_sr) ~
     operand_reg_reg_reg
 }
@@ -513,9 +512,7 @@ inst_shift_rri = {
 
 // Conditional set instructions - 3 operands - ordered longest first
 inst_conditional_set_rrr = {
-    (mnemonic_csnni | mnemonic_csnzi | mnemonic_csnpi | mnemonic_csodi | mnemonic_csevi |
-     mnemonic_csni | mnemonic_cszi | mnemonic_cspi |
-     mnemonic_csnn | mnemonic_csnz | mnemonic_csnp | mnemonic_csod | mnemonic_csev |
+    (mnemonic_csnn | mnemonic_csnz | mnemonic_csnp | mnemonic_csod | mnemonic_csev |
      mnemonic_csn | mnemonic_csz | mnemonic_csp) ~
     operand_reg_reg_reg
 }
@@ -528,9 +525,7 @@ inst_conditional_set_rri = {
 
 // Zero or set instructions - 3 operands - ordered longest first
 inst_zero_or_set_rrr = {
-    (mnemonic_zsnni | mnemonic_zsnzi | mnemonic_zsnpi | mnemonic_zsodi | mnemonic_zsevi |
-     mnemonic_zsni | mnemonic_zszi | mnemonic_zspi |
-     mnemonic_zsnn | mnemonic_zsnz | mnemonic_zsnp | mnemonic_zsod | mnemonic_zsev |
+    (mnemonic_zsnn | mnemonic_zsnz | mnemonic_zsnp | mnemonic_zsod | mnemonic_zsev |
      mnemonic_zsn | mnemonic_zsz | mnemonic_zsp) ~
     operand_reg_reg_reg
 }
@@ -631,26 +626,27 @@ operand_num_num_num = { expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
 inst_halt = { mnemonic_halt }
 
 // Combined instruction rule
+// PEG requires longest match first: rrr before rri
 instruction = {
-    inst_set_ri | inst_set_rr | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
+    inst_seti | inst_set | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
     inst_inch_ri | inst_incmh_ri | inst_incml_ri |
     inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
     inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |
-    inst_load_store_rri | inst_load_store_rrr |
+    inst_load_store_rrr | inst_load_store_rri |
     inst_ldunc_rrr | inst_ldunc_rri | inst_stunc_rrr | inst_stunc_rri |
     inst_ldht_rrr | inst_ldht_rri | inst_stht_rrr | inst_stht_rri |
     inst_ldsf_rrr | inst_ldsf_rri | inst_stsf_rrr | inst_stsf_rri |
     inst_ldvts_rrr | inst_ldvts_rri | inst_cswap_rrr | inst_cswap_rri |
     inst_stco_rrr | inst_stco_rri |
     inst_lda_rri | inst_lda_ri |
-    inst_arith_rri | inst_arith_rrr |
-    inst_float_rri | inst_float_rrr |
-    inst_neg_rri | inst_neg_rrr |
-    inst_bitwise_rri | inst_bitwise_rrr |
-    inst_bitfiddle_rri | inst_bitfiddle_rrr |
-    inst_shift_rri | inst_shift_rrr |
-    inst_conditional_set_rri | inst_conditional_set_rrr |
-    inst_zero_or_set_rri | inst_zero_or_set_rrr |
+    inst_arith_rrr | inst_arith_rri |
+    inst_float_rrr | inst_float_rri |
+    inst_neg_rrr | inst_neg_rri |
+    inst_bitwise_rrr | inst_bitwise_rri |
+    inst_bitfiddle_rrr | inst_bitfiddle_rri |
+    inst_shift_rrr | inst_shift_rri |
+    inst_conditional_set_rrr | inst_conditional_set_rri |
+    inst_zero_or_set_rrr | inst_zero_or_set_rri |
     inst_pbranch | inst_branch | inst_jmp |
     inst_pushj | inst_pushjb | inst_pushgo_rrr | inst_pushgo_rri | inst_pop |
     inst_go_rrr | inst_go_rri |
