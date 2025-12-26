@@ -490,6 +490,8 @@ struct FrameInfo {
     saved_count: u8,
     /// Caller's rL value to restore on POP
     saved_rl: u64,
+    /// Caller's rJ value to restore on POP
+    saved_rj: u64,
 }
 
 pub struct MMix {
@@ -535,9 +537,8 @@ impl MMix {
         // The MMIX specification says this should be a unique machine serial number
         mmix.set_special(SpecialReg::RN, 2009);
         // Initialize rG (global threshold register) - registers $rG..$255 are global
-        // With no GREG declarations, rG=255 (only $255 is global, the zero register)
-        // First GREG will allocate $254 and set rG=254
-        mmix.set_special(SpecialReg::RG, 255);
+        // With no GREG declarations, rG=32
+        mmix.set_special(SpecialReg::RG, 32);
         // Initialize rL (local threshold register) - number of local registers in use
         // Start with 0, will be updated by PUSHJ/POP
         mmix.set_special(SpecialReg::RL, 0);
@@ -596,6 +597,13 @@ impl MMix {
             addr = format!("0x{:X}", addr),
             value, "Writing byte to memory"
         );
+        // Skip load-time noise (pc=0) but keep low-address writes during execution.
+        if addr < 0x800 && self.pc != 0 {
+            eprintln!(
+                "DBG write_byte pc=0x{:X} addr=0x{:X} value=0x{:02X}",
+                self.pc, addr, value
+            );
+        }
         if value == 0 {
             self.memory.remove(&addr); // Don't store zeros (sparse memory)
         } else {
@@ -784,6 +792,7 @@ impl MMix {
             0 => {
                 // Halt - stop execution
                 debug!(trap_code, arg, "TRAP: Halt");
+                eprintln!("HALT trap at PC={:#018x}", self.pc);
                 self.advance_pc();
                 false
             }
@@ -832,6 +841,7 @@ impl MMix {
             _ => {
                 // Unhandled trap - just advance PC and continue
                 debug!(trap_code, arg, "TRAP: Unhandled trap code");
+                eprintln!("Unhandled TRAP code {} at PC={:#018x}", trap_code, self.pc);
                 self.advance_pc();
                 true
             }
@@ -871,6 +881,10 @@ impl MMix {
                         let z_val = self.get_register(z);
                         (y_val << 32) | z_val
                     };
+                    eprintln!(
+                        "Register TRAP x={} y=$ {} z=$ {} val=0x{:016X} at PC={:#018x}",
+                        x, y, z, trap_val, self.pc
+                    );
                     self.set_special(SpecialReg::RBB, trap_val);
                     self.advance_pc();
                     false // Halt by default for unhandled register traps
@@ -1744,6 +1758,7 @@ impl MMix {
                 self.frame_info_stack.push(FrameInfo {
                     saved_count: save_count,
                     saved_rl: self.get_special(SpecialReg::RL),
+                    saved_rj: self.get_special(SpecialReg::RJ),
                 });
 
                 // Advance rS past saved registers + frame word
@@ -1784,6 +1799,7 @@ impl MMix {
                 self.frame_info_stack.push(FrameInfo {
                     saved_count: save_count,
                     saved_rl: self.get_special(SpecialReg::RL),
+                    saved_rj: self.get_special(SpecialReg::RJ),
                 });
 
                 self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
@@ -2777,6 +2793,7 @@ impl MMix {
                 self.frame_info_stack.push(FrameInfo {
                     saved_count: save_count,
                     saved_rl: self.get_special(SpecialReg::RL),
+                    saved_rj: self.get_special(SpecialReg::RJ),
                 });
 
                 // Advance rS past saved registers + frame word
@@ -2818,6 +2835,7 @@ impl MMix {
                 self.frame_info_stack.push(FrameInfo {
                     saved_count: save_count,
                     saved_rl: self.get_special(SpecialReg::RL),
+                    saved_rj: self.get_special(SpecialReg::RJ),
                 });
 
                 self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
@@ -2894,6 +2912,7 @@ impl MMix {
 
                 let frame_info = self.frame_info_stack.pop().unwrap();
                 let saved_count = frame_info.saved_count;
+                let saved_rj = frame_info.saved_rj;
 
                 let ro = self.get_special(SpecialReg::RO);
                 let rs = self.get_special(SpecialReg::RS);
@@ -2936,8 +2955,10 @@ impl MMix {
                     self.set_special(SpecialReg::RL, caller_rl as u64);
                 }
 
-                // Return to rJ plus offset
-                self.pc = self.get_special(SpecialReg::RJ);
+                // Use callee's rJ for the branch target, then restore caller rJ
+                let return_pc = self.get_special(SpecialReg::RJ);
+                self.set_special(SpecialReg::RJ, saved_rj);
+                self.pc = return_pc;
                 let yz = ((y as u16) << 8 | z as u16) as i16;
                 self.pc = self.pc.wrapping_add((yz as i64 * 4) as u64);
 
@@ -3051,6 +3072,10 @@ impl MMix {
         while self.execute_instruction() {
             count += 1;
         }
+        eprintln!(
+            "Execution stopped at PC={:#018x} after {} instructions",
+            self.pc, count
+        );
         debug!(instruction_count = count, "Execution completed");
         count
     }
@@ -3205,7 +3230,7 @@ mod tests {
         assert_eq!(mmix.get_special(SpecialReg::RO), 0x6000000000000000);
         assert_eq!(mmix.get_special(SpecialReg::RS), 0);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
-        assert_eq!(mmix.get_special(SpecialReg::RG), 255);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
         assert!(mmix.frame_info_stack.is_empty());
     }
 
@@ -3310,6 +3335,7 @@ mod tests {
         mmix.frame_info_stack.push(FrameInfo {
             saved_count: 3,
             saved_rl: 3,
+            saved_rj: 0x200,
         });
 
         // Modify registers in callee
@@ -3357,6 +3383,7 @@ mod tests {
         mmix.frame_info_stack.push(FrameInfo {
             saved_count: 4,
             saved_rl: 4,
+            saved_rj: 0x200,
         });
 
         // Set return values in callee
@@ -3492,6 +3519,7 @@ mod tests {
         mmix.frame_info_stack.push(FrameInfo {
             saved_count: 3,
             saved_rl: 0,
+            saved_rj: 0x200,
         });
 
         // Callee sets values in its valid local registers

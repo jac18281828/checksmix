@@ -171,6 +171,17 @@ fn run_mmo(filename: &str) {
         mmix.write_byte(addr, byte);
     });
 
+    // Temporary debug: inspect instruction bytes at 0x370 to debug big_fib issues
+    let debug_addr = 0x370;
+    let word = mmix.read_tetra(debug_addr);
+    println!(
+        "Debug: instr@0x{debug_addr:03X} = 0x{word:08X} (bytes {:02X} {:02X} {:02X} {:02X})",
+        (word >> 24) as u8,
+        (word >> 16) as u8,
+        (word >> 8) as u8,
+        word as u8
+    );
+
     // Set PC to entry point from postamble
     mmix.set_pc(entry_point);
 
