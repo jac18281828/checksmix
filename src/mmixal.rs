@@ -869,6 +869,8 @@ pub struct MMixAssembler {
     pub symbols: HashMap<String, u64>, // For IS directive - symbolic names
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
+    next_greg: u8, // Next global register to allocate (starts at 254, counts down)
+    pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
 }
 
 impl MMixAssembler {
@@ -978,6 +980,8 @@ impl MMixAssembler {
             symbols,
             instructions: Vec::new(),
             current_addr: 0,
+            next_greg: 254, // Start allocating from $254, count down
+            greg_inits: Vec::new(),
         }
     }
 
@@ -1147,10 +1151,29 @@ impl MMixAssembler {
                             }
                         }
                         Rule::greg_directive => {
-                            self.parse_greg_directive(directive_pair)?;
+                            // GREG allocates a global register
+                            // If there's a label, it should map to the register number, not an address
+                            let allocated_reg = if self.next_greg == 0 {
+                                return Err(
+                                    "Too many GREG directives - ran out of global registers"
+                                        .to_string(),
+                                );
+                            } else {
+                                let reg = self.next_greg;
+                                self.next_greg -= 1;
+                                reg
+                            };
+
                             if let Some(label) = label_name.take() {
-                                self.labels.insert(label, self.current_addr);
+                                // Map the label to the register NUMBER (not address)
+                                self.symbols.insert(label, allocated_reg as u64);
                             }
+
+                            // Parse to get the init value (will be processed again in second pass)
+                            let mut greg_parts = directive_pair.clone().into_inner();
+                            let _directive = greg_parts.next();
+                            let value = self.parse_number(greg_parts.next().unwrap())?;
+                            self.greg_inits.push((allocated_reg, value));
                         }
                         Rule::is_directive => {
                             // Process IS directive immediately
@@ -1216,7 +1239,16 @@ impl MMixAssembler {
                             self.parse_loc_directive(directive_pair)?;
                         }
                         Rule::greg_directive => {
-                            self.parse_greg_directive(directive_pair)?;
+                            // GREG was already processed in first pass
+                            // Verify that any label was properly added to symbols
+                            if let Some(label) = label_name.take() {
+                                if !self.symbols.contains_key(&label) {
+                                    return Err(format!(
+                                        "Internal error: GREG label '{}' not found in symbols from first pass",
+                                        label
+                                    ));
+                                }
+                            }
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair)?;
@@ -2813,17 +2845,6 @@ impl MMixAssembler {
         let _directive = parts.next(); // Skip "LOC" keyword
         let addr = self.parse_number(parts.next().unwrap())?;
         self.current_addr = addr;
-        Ok(())
-    }
-
-    fn parse_greg_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let mut parts = pair.into_inner();
-        let _directive = parts.next(); // Skip "GREG" keyword
-        let value = self.parse_number(parts.next().unwrap())?;
-        // GREG @ means use current address
-        // For now, we'll just note this was encountered
-        // In a full implementation, this would allocate a global register
-        eprintln!("GREG directive with value: {:#x}", value);
         Ok(())
     }
 

@@ -68,6 +68,16 @@ fn main() {
     for (label, addr) in &assembler.labels {
         eprintln!("  {} -> 0x{:X}", label, addr);
     }
+    eprintln!("Symbols:");
+    for (symbol, value) in &assembler.symbols {
+        eprintln!("  {} = {}", symbol, value);
+    }
+    if !assembler.greg_inits.is_empty() {
+        eprintln!("Global Register Initializations:");
+        for (reg, value) in &assembler.greg_inits {
+            eprintln!("  ${} = 0x{:X}", reg, value);
+        }
+    }
     eprintln!("Instructions ({}):", assembler.instructions.len());
     for (addr, inst) in &assembler.instructions {
         eprintln!("  0x{:X}: {:?}", addr, inst);
