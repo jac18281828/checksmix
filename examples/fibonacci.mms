@@ -37,15 +37,15 @@ AddLoop
         CMP     $5,$4,$1
         BP      $5,FibEnd
         ADDU    $5,$2,$3
-        OR      $2,$3,Zero
-        OR      $3,$5,Zero
+        SET     $2,$3
+        SET     $3,$5
         ADDUI   $4,$4,1
         JMP     AddLoop
 FibEnd
-        OR      $0,$3,Zero
+        SET     $0,$3
         POP     0,0             % return to caller (rJ)
 TwoOrLess
-        OR      $0,$1,Zero
+        SET     $0,$1
         POP     0,0             % return to caller (rJ)
 
 Done

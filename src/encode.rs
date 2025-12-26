@@ -21,6 +21,10 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             bytes.extend_from_slice(&encode_instruction(0xE2, *x, b2)); // SETML
             bytes.extend_from_slice(&encode_instruction(0xE3, *x, b3)); // SETL
         }
+        MMixInstruction::SETRR(x, y) => {
+            // SET $X, $Y -> ORI $X, $Y, 0 (machine copy)
+            bytes.extend_from_slice(&[0xC1, *x, *y, 0]);
+        }
         MMixInstruction::SETL(x, yz) => {
             bytes.extend_from_slice(&encode_instruction(0xE3, *x, *yz));
         }
@@ -894,6 +898,13 @@ mod tests {
         // TRAP - opcode 0x00
         let bytes = encode_instruction_bytes(&MMixInstruction::TRAP(1, 2, 3));
         assert_eq!(bytes, vec![0x00, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_setrr_encoding() {
+        // SETRR - should encode as ORI $X, $Y, 0 (opcode 0xC1)
+        let bytes = encode_instruction_bytes(&MMixInstruction::SETRR(2, 1));
+        assert_eq!(bytes, vec![0xC1, 2, 1, 0]);
     }
 
     #[test]

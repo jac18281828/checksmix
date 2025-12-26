@@ -13,6 +13,7 @@ struct MMixalParser;
 pub enum MMixInstruction {
     // Immediate load instructions
     SET(u8, u64),    // SET $X, value - pseudo-instruction
+    SETRR(u8, u8),   // SET $X, $Y - register copy (emits ORI $X, $Y, 0)
     SETL(u8, u16),   // SETL $X, YZ - set low wyde
     SETH(u8, u16),   // SETH $X, YZ - set high wyde
     SETMH(u8, u16),  // SETMH $X, YZ - set medium high wyde
@@ -1284,7 +1285,8 @@ impl MMixAssembler {
         let inner = pair.into_inner().next().ok_or("Empty instruction")?;
 
         match inner.as_rule() {
-            Rule::inst_set_ri => Ok(MMixInstruction::SET(0, 0)), // Placeholder for sizing
+            Rule::inst_set_rr => Ok(MMixInstruction::SETRR(0, 0)), // Placeholder for sizing
+            Rule::inst_set_ri => Ok(MMixInstruction::SET(0, 0)),   // Placeholder for sizing
             Rule::inst_setl_ri => Ok(MMixInstruction::SETL(0, 0)),
             Rule::inst_seth_ri => Ok(MMixInstruction::SETH(0, 0)),
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
@@ -1357,6 +1359,7 @@ impl MMixAssembler {
         let inner = pair.into_inner().next().ok_or("Empty instruction")?;
 
         match inner.as_rule() {
+            Rule::inst_set_rr => self.parse_inst_set_rr(inner),
             Rule::inst_set_ri => self.parse_inst_set(inner),
             Rule::inst_setl_ri => self.parse_inst_setl(inner),
             Rule::inst_seth_ri => self.parse_inst_seth(inner),
@@ -1460,6 +1463,19 @@ impl MMixAssembler {
         let reg = self.parse_register(ops.next().unwrap())?;
         let val = self.parse_number(ops.next().unwrap())?;
         Ok(MMixInstruction::SET(reg, val))
+    }
+
+    fn parse_inst_set_rr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let reg_x = self.parse_register(ops.next().unwrap())?;
+        let reg_y = self.parse_register(ops.next().unwrap())?;
+        Ok(MMixInstruction::SETRR(reg_x, reg_y))
     }
 
     fn parse_inst_setl(
@@ -2955,6 +2971,7 @@ impl MMixAssembler {
     fn instruction_size(inst: &MMixInstruction) -> u64 {
         match inst {
             MMixInstruction::SET(_, _) => 16,
+            MMixInstruction::SETRR(_, _) => 4, // ORI $X, $Y, 0
             MMixInstruction::BYTE(_) => 1,
             MMixInstruction::WYDE(_) => 2,
             MMixInstruction::TETRA(_) => 4,
@@ -3011,6 +3028,13 @@ mod tests {
         let mut asm = MMixAssembler::new("SET $2, 10", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SET(2, 10));
+    }
+
+    #[test]
+    fn test_parse_set_register() {
+        let mut asm = MMixAssembler::new("SET $1, $7", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETRR(1, 7));
     }
 
     // Bitwise operation tests
