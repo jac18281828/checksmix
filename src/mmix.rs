@@ -534,11 +534,12 @@ impl MMix {
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
         mmix.set_special(SpecialReg::RN, 2009);
-        // Initialize rG (global threshold register) - registers $0..$G-1 are local
-        // Default to 32 to give us 32 local registers
-        mmix.set_special(SpecialReg::RG, 32);
+        // Initialize rG (global threshold register) - registers $rG..$255 are global
+        // With no GREG declarations, rG=255 (only $255 is global, the zero register)
+        // First GREG will allocate $254 and set rG=254
+        mmix.set_special(SpecialReg::RG, 255);
         // Initialize rL (local threshold register) - number of local registers in use
-        // Start with 0, will be updated by programs
+        // Start with 0, will be updated by PUSHJ/POP
         mmix.set_special(SpecialReg::RL, 0);
         // Initialize rO (register stack offset) - base address of register stack in memory
         // Use segment 6 per MMIX convention: 0x6000000000000000

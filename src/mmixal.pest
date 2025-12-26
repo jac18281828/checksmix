@@ -632,7 +632,7 @@ inst_halt = { mnemonic_halt }
 
 // Combined instruction rule
 instruction = {
-    inst_set_rr | inst_set_ri | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
+    inst_set_ri | inst_set_rr | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
     inst_inch_ri | inst_incmh_ri | inst_incml_ri |
     inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
     inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |
