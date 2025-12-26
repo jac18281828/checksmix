@@ -3088,7 +3088,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_parse_seti() {
         let mut asm = MMixAssembler::new("SETI $2, 10", "<test>");
         asm.parse().unwrap();
