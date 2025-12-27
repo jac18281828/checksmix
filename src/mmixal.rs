@@ -2974,6 +2974,42 @@ impl MMixAssembler {
                 // @ represents the current location
                 Ok(self.current_addr)
             }
+            Rule::char_literal => {
+                // Single-byte character literal with minimal escapes
+                let inner = &text[1..text.len() - 1];
+                let ch = if let Some(rest) = inner.strip_prefix('\\') {
+                    match rest {
+                        "n" => '\n',
+                        "r" => '\r',
+                        "t" => '\t',
+                        "0" => '\0',
+                        "\\" => '\\',
+                        "'" => '\'',
+                        _ => {
+                            return Err(format!(
+                                "Line {}:{}: Unsupported escape in char literal: \\{}",
+                                line, col, rest
+                            ));
+                        }
+                    }
+                } else {
+                    if inner.chars().count() != 1 {
+                        return Err(format!(
+                            "Line {}:{}: Invalid char literal (must be one byte): '{}'",
+                            line, col, inner
+                        ));
+                    }
+                    inner.chars().next().unwrap()
+                };
+
+                if !ch.is_ascii() {
+                    return Err(format!(
+                        "Line {}:{}: Char literal must be ASCII byte, got {:?}",
+                        line, col, ch
+                    ));
+                }
+                Ok(ch as u8 as u64)
+            }
             Rule::hex_literal => {
                 // Support both # and 0x/0X prefixes
                 let hex_str = if let Some(stripped) = text.strip_prefix('#') {
@@ -3099,6 +3135,32 @@ mod tests {
         let mut asm = MMixAssembler::new("SET $1, $7", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SETRR(1, 7));
+    }
+
+    #[test]
+    fn test_parse_char_literal_immediate() {
+        let mut asm = MMixAssembler::new("ANDI $1, $2, 'A'", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 65));
+    }
+
+    #[test]
+    fn test_parse_char_literal_escape_newline() {
+        let mut asm = MMixAssembler::new("ANDI $1, $2, '\\n'", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 10));
+    }
+
+    #[test]
+    fn test_parse_char_literal_non_ascii_error() {
+        let mut asm = MMixAssembler::new("ANDI $1, $2, 'Ā'", "<test>");
+        assert!(asm.parse().is_err());
+    }
+
+    #[test]
+    fn test_parse_char_literal_multi_char_error() {
+        let mut asm = MMixAssembler::new("ANDI $1, $2, 'AB'", "<test>");
+        assert!(asm.parse().is_err());
     }
 
     // Bitwise operation tests

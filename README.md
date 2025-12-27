@@ -1,6 +1,6 @@
-# ChecksMix
+# ChecksMix - Blazing Fast MMIX Emulator
 
-MMIX-first assembler and emulator with fast feedback for learning, experimenting, and debugging Knuth’s 64-bit machine. MIX source still parses and emulates, but the checksmix now focuses on MMIX with `.mms` and `.mmo` workflows.
+MMIX assembler and emulator with fast feedback for learning, experimenting, and debugging Knuth’s 64-bit machine. MIX source still parses and emulates, but the checksmix now focuses on MMIX with `.mms` and `.mmo` workflows.
 
 ## What’s inside
 - `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
@@ -60,7 +60,7 @@ Hello World (trimmed):
 ```asm
         LOC     Data_Segment
         GREG    @
-Text    BYTE    "Hello world!",10,0
+Text    BYTE    "Hello world!",'\n',0
 
         LOC     #100
 Main    LDA     $0,Text
@@ -81,4 +81,4 @@ Knuth’s blend of rigor, playfulness, and generosity has shaped how I write cod
 
 Evidently!
 
-This project carries a little of that spirit forward: curiosity, precision, and the belief that computing can be serious fun.
+This project carries a little of that spirit forward: curiosity, precision, and the belief that programming can be serious fun.

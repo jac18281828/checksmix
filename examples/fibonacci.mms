@@ -1,13 +1,10 @@
 % ----------------------------------------------------
 % Fibonacci Sequence 
 % ----------------------------------------------------
-
-Zero    IS      $255
         LOC     #100
-
 % Entry point
-Main    SETI $1,20              % compute fib(20)
-        PUSHJ   $0,Fibonacci    % call Fibonacci; return to TRAP below
+Main    SETI $1,90              % compute fib(20)
+        PUSHJ   $0,Fibonacci    % call Fibonacci
         JMP     Done
 
         % ----------------------------------------------------
@@ -27,8 +24,7 @@ Main    SETI $1,20              % compute fib(20)
 
 % calculate fib($1) and return result in $0
 Fibonacci
-        SETI $2,2
-        CMP     $5,$1,$2
+        CMPI    $5,$1,2
         BN      $5,TwoOrLess
         SETI $2,0
         SETI $3,1

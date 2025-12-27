@@ -13,7 +13,8 @@ at_symbol = @{ "@" }
 hex_literal = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
 oct_literal = @{ "0" ~ ASCII_OCT_DIGIT+ }
 dec_literal = @{ ASCII_DIGIT+ }
-number_literal = { at_symbol | hex_literal | oct_literal | dec_literal }
+char_literal = @{ "'" ~ ( "\\" ~ ( "n" | "r" | "t" | "0" | "\\" | "'" ) | (!"'" ~ ANY)) ~ "'" }
+number_literal = { at_symbol | hex_literal | oct_literal | dec_literal | char_literal }
 
 // Expression value: can be a numeric literal or a symbol (label/constant)
 expr_value = { number_literal | symbol }

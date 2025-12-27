@@ -1,6 +1,6 @@
 	LOC	Data_Segment
 	GREG	@
-Text	BYTE	"Hello world!",10,0
+Text	BYTE	"Hello world!",'\n',0
 
 	LOC	#100
 
