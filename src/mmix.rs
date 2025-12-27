@@ -2887,6 +2887,8 @@ impl MMix {
             Opcode::POP => {
                 // POP X, YZ - Pop registers and return
                 // MMIX spec: POP undoes PUSHJ/PUSHGO frame, restoring registers and rL
+                // Registers $0..$(X-1) already contain return values from the subroutine
+                // Only restore registers $X..$(saved_count-1) from the stack
 
                 let mut pop_x = x;
                 let rl = self.get_special(SpecialReg::RL) as u8;
@@ -2904,12 +2906,6 @@ impl MMix {
                     return true;
                 }
 
-                // Capture return values before restoring caller registers
-                let mut return_values = Vec::new();
-                for i in 0..pop_x {
-                    return_values.push(self.get_register(i));
-                }
-
                 let frame_info = self.frame_info_stack.pop().unwrap();
                 let saved_count = frame_info.saved_count;
                 let saved_rj = frame_info.saved_rj;
@@ -2921,8 +2917,9 @@ impl MMix {
                 let new_rs = rs.wrapping_sub(saved_count as u64 + 1);
                 let stack_addr = ro.wrapping_add(new_rs.wrapping_mul(8));
 
-                // Restore caller registers $0..$(saved_count-1)
-                for i in 0..saved_count {
+                // Restore caller registers $pop_x..$(saved_count-1)
+                // Skip first pop_x registers - they already contain return values
+                for i in pop_x..saved_count {
                     let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
                     let reg_val = self.read_octa(addr);
                     self.set_register(i, reg_val);
@@ -2934,20 +2931,9 @@ impl MMix {
                 // Restore caller rL baseline
                 let caller_rl = frame_info.saved_rl as u8;
 
-                // Place return values starting at $saved_count
+                // Update rL to accommodate return values if needed
                 if pop_x > 0 {
-                    if saved_count < 255 {
-                        let main_ret_val = return_values[(pop_x - 1) as usize];
-                        self.set_register(saved_count, main_ret_val);
-                    }
-                    for i in 0..(pop_x - 1) {
-                        let reg_num = saved_count + 1 + i;
-                        if reg_num < 255 {
-                            self.set_register(reg_num, return_values[i as usize]);
-                        }
-                    }
-
-                    let growth_target = saved_count as u16 + pop_x as u16;
+                    let growth_target = pop_x as u16;
                     let new_rl =
                         std::cmp::min(std::cmp::max(caller_rl as u16, growth_target), rg as u16);
                     self.set_special(SpecialReg::RL, new_rl as u64);
@@ -3432,31 +3418,107 @@ mod tests {
             saved_rj: 0x200,
         });
 
-        // Set return values in callee
+        // Set return values in callee - these are already in $0, $1, $2
         mmix.set_register(0, 300);
         mmix.set_register(1, 301);
         mmix.set_register(2, 302);
 
-        // POP 3, 0 (return 3 values)
+        // POP 3, 0 (return 3 values in $0, $1, $2)
         mmix.write_tetra(0x100, 0xF8030000);
         mmix.execute_instruction();
 
-        // Verify caller's registers restored
+        // Verify return values remain in $0, $1, $2 (not overwritten)
+        assert_eq!(mmix.get_register(0), 300);
+        assert_eq!(mmix.get_register(1), 301);
+        assert_eq!(mmix.get_register(2), 302);
+
+        // Verify caller's register $3 restored (only registers >= pop_x are restored)
+        assert_eq!(mmix.get_register(3), 103);
+
+        // Verify rL updated to accommodate return values: max(4, 3) = 4
+        assert_eq!(mmix.get_special(SpecialReg::RL), 4);
+    }
+
+    #[test]
+    fn test_pop_more_returns_than_saved() {
+        // Special case: PUSHJ saved 1 register, but POP returns 4 values
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+
+        // Simulate PUSHJ $1 state (saved 1 register)
+        let ro = 0x6000000000000000u64;
+        mmix.write_octa(ro, 999); // $0 was 999
+        mmix.write_octa(ro + 8, 1);
+        mmix.set_special(SpecialReg::RS, 2);
+        mmix.set_special(SpecialReg::RL, 1);
+        mmix.set_special(SpecialReg::RJ, 0x200);
+        mmix.frame_info_stack.push(FrameInfo {
+            saved_count: 1,
+            saved_rl: 1,
+            saved_rj: 0x200,
+        });
+
+        // Subroutine computed 4 return values in $0..$3
+        mmix.set_register(0, 10);
+        mmix.set_register(1, 20);
+        mmix.set_register(2, 30);
+        mmix.set_register(3, 40);
+
+        // POP 4, 0 (return 4 values, but rL=1 so clamped to 2)
+        mmix.write_tetra(0x100, 0xF8040000);
+        mmix.execute_instruction();
+
+        // pop_x gets clamped to rl+1 = 2
+        // $0, $1 should NOT be restored (they have return values)
+        assert_eq!(mmix.get_register(0), 10);
+        assert_eq!(mmix.get_register(1), 20);
+        // $2, $3 were never saved (saved_count=1), so they keep their values
+        assert_eq!(mmix.get_register(2), 30);
+        assert_eq!(mmix.get_register(3), 40);
+
+        // rL updated to max(caller_rl=1, pop_x=2) = 2
+        assert_eq!(mmix.get_special(SpecialReg::RL), 2);
+    }
+
+    #[test]
+    fn test_pop_no_return_values() {
+        // Special case: PUSHJ saved 31 registers, POP returns 0 values
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+
+        // Simulate PUSHJ saving many registers
+        let ro = 0x6000000000000000u64;
+        for i in 0..5 {
+            mmix.write_octa(ro + (i * 8), 100 + i);
+        }
+        mmix.write_octa(ro + 40, 5); // frame size
+        mmix.set_special(SpecialReg::RS, 6);
+        mmix.set_special(SpecialReg::RL, 5);
+        mmix.set_special(SpecialReg::RJ, 0x200);
+        mmix.frame_info_stack.push(FrameInfo {
+            saved_count: 5,
+            saved_rl: 10,
+            saved_rj: 0x200,
+        });
+
+        // Subroutine modified some registers
+        mmix.set_register(0, 999);
+        mmix.set_register(1, 888);
+        mmix.set_register(2, 777);
+
+        // POP 0, 0 (return 0 values - restore all saved registers)
+        mmix.write_tetra(0x100, 0xF8000000);
+        mmix.execute_instruction();
+
+        // All saved registers should be restored (loop is 0..5)
         assert_eq!(mmix.get_register(0), 100);
         assert_eq!(mmix.get_register(1), 101);
         assert_eq!(mmix.get_register(2), 102);
         assert_eq!(mmix.get_register(3), 103);
+        assert_eq!(mmix.get_register(4), 104);
 
-        // Verify return values placed at $saved_x (4), $saved_x+1 (5), $saved_x+2 (6)
-        // $4 gets main return (from $2) = 302
-        // $5 gets $0 = 300
-        // $6 gets $1 = 301
-        assert_eq!(mmix.get_register(4), 302);
-        assert_eq!(mmix.get_register(5), 300);
-        assert_eq!(mmix.get_register(6), 301);
-
-        // Verify rL updated to include return values: min(4 + 3, 32) = 7
-        assert_eq!(mmix.get_special(SpecialReg::RL), 7);
+        // rL restored to caller's rL
+        assert_eq!(mmix.get_special(SpecialReg::RL), 10);
     }
 
     #[test]
@@ -3527,22 +3589,24 @@ mod tests {
         assert_eq!(mmix.read_octa(ro + 32), 21);
         assert_eq!(mmix.frame_info_stack.len(), 2);
 
-        // First POP
+        // First POP (POP 1,0 - returns 1 value in $0)
         mmix.set_register(0, 30);
         mmix.write_tetra(0x108, 0xF8010000);
         mmix.execute_instruction();
 
         assert_eq!(mmix.get_special(SpecialReg::RS), 3);
-        assert_eq!(mmix.get_register(0), 20);
+        // $0 contains return value (30), not restored
+        assert_eq!(mmix.get_register(0), 30);
+        // $1 restored from nested call's saved registers
         assert_eq!(mmix.get_register(1), 21);
-        assert_eq!(mmix.get_register(2), 30);
         assert_eq!(mmix.frame_info_stack.len(), 1);
 
-        // Second POP
+        // Second POP (POP 0,0 - no return values, restore all)
         mmix.write_tetra(0x108, 0xF8000000);
         mmix.execute_instruction();
 
         assert_eq!(mmix.get_special(SpecialReg::RS), 0);
+        // All registers restored from first call
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
         assert!(mmix.frame_info_stack.is_empty());
@@ -3576,16 +3640,13 @@ mod tests {
         mmix.write_tetra(0x100, 0xF8050000);
         mmix.execute_instruction();
 
-        // Caller's registers restored
-        assert_eq!(mmix.get_register(0), 100);
-        assert_eq!(mmix.get_register(1), 101);
-        assert_eq!(mmix.get_register(2), 102);
+        // pop_x clamped to rl+1 = 3
+        // $0, $1, $2 contain return values (not restored)
+        assert_eq!(mmix.get_register(0), 200);
+        assert_eq!(mmix.get_register(1), 201);
+        assert_eq!(mmix.get_register(2), 0); // Not a valid local, keeps value from before
 
-        // With pop_x=3 (limited from 5): collects $0=200, $1=201, $2=0 (not a valid local)
-        // Placement: $3 gets $(pop_x-1)=$2=0, $4 gets $0=200, $5 gets $1=201
-        assert_eq!(mmix.get_register(3), 0); // Main return from $2 (invalid)
-        assert_eq!(mmix.get_register(4), 200); // From $0
-        assert_eq!(mmix.get_register(5), 201); // From $1
+        // No registers restored (loop is 3..3, empty)
     }
 
     #[test]
