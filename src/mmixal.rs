@@ -2974,6 +2974,13 @@ impl MMixAssembler {
                 // @ represents the current location
                 Ok(self.current_addr)
             }
+            Rule::signed_number_literal => {
+                // Unary minus applied to a numeric literal
+                let mut inner = pair.into_inner();
+                let unsigned = self.parse_number(inner.next().unwrap())?;
+                let signed = -(unsigned as i128);
+                Ok(signed as u64)
+            }
             Rule::char_literal => {
                 // Single-byte character literal with minimal escapes
                 let inner = &text[1..text.len() - 1];
@@ -3135,6 +3142,20 @@ mod tests {
         let mut asm = MMixAssembler::new("SET $1, $7", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SETRR(1, 7));
+    }
+
+    #[test]
+    fn test_parse_negative_literal_seti() {
+        let mut asm = MMixAssembler::new("SETI $1, -1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SET(1, u64::MAX));
+    }
+
+    #[test]
+    fn test_parse_negative_literal_8bit_wrap() {
+        let mut asm = MMixAssembler::new("ADDI $1, $2, -1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 0xFF));
     }
 
     #[test]
