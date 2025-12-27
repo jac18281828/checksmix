@@ -1,3 +1,7 @@
+0.2.8 (2025-12-27)
+
+* print signed values
+
 0.2.7 (2025-12-27)
 
 * negative constants
