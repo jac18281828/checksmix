@@ -1,6 +1,6 @@
 [package]
 name = "checksmix"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 authors = ["John Cairns <john@2ad.com>"]
 description = "A simplified MIX simulator - Donald Knuth's hypothetical computer for teaching and learning assembly language programming."
