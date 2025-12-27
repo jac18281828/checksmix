@@ -1,3 +1,7 @@
+0.2.10 (2025-12-27)
+
+* bug fixing, pop instruction
+
 0.2.8 (2025-12-27)
 
 * print signed values
