@@ -3083,6 +3083,40 @@ impl MMix {
 
 impl fmt::Display for MMix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_with_mode(f, ValueFormat::Signed)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum ValueFormat {
+    Signed,
+    Unsigned,
+}
+
+pub struct MMixDisplay<'a> {
+    mmix: &'a MMix,
+    format: ValueFormat,
+}
+
+fn display_value(value: u64, format: ValueFormat) -> String {
+    match format {
+        ValueFormat::Signed => (value as i64).to_string(),
+        ValueFormat::Unsigned => value.to_string(),
+    }
+}
+
+impl<'a> fmt::Display for MMixDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.mmix.fmt_with_mode(f, self.format)
+    }
+}
+
+impl MMix {
+    pub fn display_with(&self, format: ValueFormat) -> MMixDisplay<'_> {
+        MMixDisplay { mmix: self, format }
+    }
+
+    fn fmt_with_mode(&self, f: &mut fmt::Formatter<'_>, format: ValueFormat) -> fmt::Result {
         writeln!(f, "MMIX Computer State:")?;
         writeln!(f, "  PC = {:#018x}", self.pc)?;
         writeln!(f)?;
@@ -3092,7 +3126,13 @@ impl fmt::Display for MMix {
         let mut any_nonzero = false;
         for (i, &value) in self.general_regs.iter().enumerate() {
             if value != 0 && i != 255 {
-                writeln!(f, "  ${:<3} = {:#018x} ({})", i, value, value)?;
+                writeln!(
+                    f,
+                    "  ${:<3} = {:#018x} ({})",
+                    i,
+                    value,
+                    display_value(value, format)
+                )?;
                 any_nonzero = true;
             }
         }
@@ -3111,7 +3151,13 @@ impl fmt::Display for MMix {
         any_nonzero = false;
         for (i, &value) in self.special_regs.iter().enumerate() {
             if value != 0 {
-                writeln!(f, "  {:<4} = {:#018x} ({})", special_names[i], value, value)?;
+                writeln!(
+                    f,
+                    "  {:<4} = {:#018x} ({})",
+                    special_names[i],
+                    value,
+                    display_value(value, format)
+                )?;
                 any_nonzero = true;
             }
         }

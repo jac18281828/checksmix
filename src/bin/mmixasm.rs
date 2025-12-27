@@ -1,10 +1,27 @@
 /// MMIX Assembler - Compile .mms assembly files to .mmo object code
 use checksmix::MMixAssembler;
-use std::env;
+use clap::Parser;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "mmixasm",
+    about = "Assemble MMIX .mms files into .mmo object code",
+    version,
+    author
+)]
+struct Cli {
+    /// Input MMIX assembly file (.mms)
+    #[arg(value_name = "INPUT.mms")]
+    input: PathBuf,
+
+    /// Output MMO file (defaults to INPUT basename with .mmo)
+    #[arg(value_name = "OUTPUT.mmo")]
+    output: Option<PathBuf>,
+}
 
 fn main() {
     // Initialize tracing subscriber with RUST_LOG environment variable support
@@ -12,37 +29,25 @@ fn main() {
     // Example: RUST_LOG=checksmix=debug cargo run --bin mmixasm -- file.mms
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 || args.len() > 3 {
-        eprintln!("Usage: {} <input.mms> [output.mmo]", args[0]);
-        eprintln!("\nAssembles MMIX assembly language (.mms) to object code (.mmo)");
-        eprintln!("\nIf output file is not specified, uses input basename with .mmo extension");
-        process::exit(1);
-    }
-
-    let input_file = &args[1];
-    let output_file = if args.len() == 3 {
-        args[2].clone()
-    } else {
-        // Replace extension with .mmo
-        let path = Path::new(input_file);
-        path.with_extension("mmo")
-            .to_str()
-            .unwrap_or("output.mmo")
-            .to_string()
-    };
+    let cli = Cli::parse();
+    let input_file = cli.input;
+    let output_file = cli
+        .output
+        .unwrap_or_else(|| input_file.with_extension("mmo"));
 
     // Read the input file
-    let source = fs::read_to_string(input_file).unwrap_or_else(|err| {
-        eprintln!("Error reading '{}': {}", input_file, err);
+    let source = fs::read_to_string(&input_file).unwrap_or_else(|err| {
+        eprintln!("Error reading '{}': {}", input_file.display(), err);
         process::exit(1);
     });
 
-    println!("Assembling: {}", input_file);
+    println!("Assembling: {}", input_file.display());
 
     // Parse the assembly
-    let mut assembler = MMixAssembler::new(&source, input_file);
+    let input_name = input_file
+        .to_str()
+        .unwrap_or("input.mms");
+    let mut assembler = MMixAssembler::new(&source, input_name);
 
     if let Err(e) = assembler.parse() {
         // Format error in standard assembler format: filename:line:column: message
@@ -50,15 +55,15 @@ fn main() {
         if e.starts_with("Line ") {
             if let Some(rest) = e.strip_prefix("Line ") {
                 if let Some((line_col, msg)) = rest.split_once(": ") {
-                    eprintln!("{}:{}: {}", input_file, line_col, msg);
+                    eprintln!("{}:{}: {}", input_name, line_col, msg);
                 } else {
-                    eprintln!("{}: {}", input_file, e);
+                    eprintln!("{}: {}", input_name, e);
                 }
             } else {
-                eprintln!("{}: {}", input_file, e);
+                eprintln!("{}: {}", input_name, e);
             }
         } else {
-            eprintln!("{}: {}", input_file, e);
+            eprintln!("{}: {}", input_name, e);
         }
         process::exit(1);
     }
@@ -96,9 +101,9 @@ fn main() {
 
     // Write the output file
     fs::write(&output_file, &object_code).unwrap_or_else(|err| {
-        eprintln!("Error writing '{}': {}", output_file, err);
+        eprintln!("Error writing '{}': {}", output_file.display(), err);
         process::exit(1);
     });
 
-    println!("Output written to: {}", output_file);
+    println!("Output written to: {}", output_file.display());
 }

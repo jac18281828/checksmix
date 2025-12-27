@@ -1,9 +1,25 @@
-use checksmix::{MMix, MMixAssembler, Mix, MmoDecoder, Program};
-use std::env;
+use checksmix::{MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat};
+use clap::Parser;
 use std::fs;
 use std::path::Path;
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "checksmix",
+    about = "Run MIX/MMIX programs and assemblers",
+    version,
+    author
+)]
+struct Cli {
+    /// Display register values as unsigned decimals (hex output unchanged)
+    #[arg(long)]
+    unsigned: bool,
+
+    /// Program file to execute (.mix/.mixal/.mms/.mmo)
+    program_file: String,
+}
 
 fn main() {
     // Initialize tracing subscriber with RUST_LOG environment variable support
@@ -11,33 +27,20 @@ fn main() {
     // Example: RUST_LOG=checksmix=debug cargo run --bin checksmix -- file.mms
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
-    let args: Vec<String> = env::args().collect();
+    let opts = Cli::parse();
+    let value_format = if opts.unsigned {
+        ValueFormat::Unsigned
+    } else {
+        ValueFormat::Signed
+    };
 
-    if args.len() != 2 {
-        eprintln!("Usage: {} <program_file>", args[0]);
-        eprintln!("Supported file extensions:");
-        eprintln!("  .mix, .mixal  - MIX computer");
-        eprintln!("  .mms          - MMIX assembly source");
-        eprintln!("  .mmo          - MMIX object code");
-        eprintln!("\nMIX Example program format:");
-        eprintln!("  ENTA 100");
-        eprintln!("  STA 200");
-        eprintln!("  ADD 200");
-        eprintln!("\nMMIX Example program format:");
-        eprintln!("  SET $2, 10");
-        eprintln!("  INCL $1, $2, $3");
-        eprintln!("  HALT");
-        process::exit(1);
-    }
-
-    let filename = &args[1];
-    let path = Path::new(filename);
+    let path = Path::new(&opts.program_file);
     let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
     match extension {
-        "mix" | "mixal" => run_mix(filename),
-        "mms" => run_mms(filename),
-        "mmo" => run_mmo(filename),
+        "mix" | "mixal" => run_mix(&opts.program_file),
+        "mms" => run_mms(&opts.program_file, value_format),
+        "mmo" => run_mmo(&opts.program_file, value_format),
         _ => {
             eprintln!(
                 "Unknown file extension: .{}",
@@ -52,6 +55,7 @@ fn main() {
         }
     }
 }
+
 
 fn run_mix(filename: &str) {
     let input = fs::read_to_string(filename).unwrap_or_else(|err| {
@@ -92,7 +96,7 @@ fn run_mix(filename: &str) {
     println!("Execution completed.");
 }
 
-fn run_mms(filename: &str) {
+fn run_mms(filename: &str, value_format: ValueFormat) {
     let input = fs::read_to_string(filename).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", filename, err);
         process::exit(1);
@@ -137,7 +141,7 @@ fn run_mms(filename: &str) {
         mmix.set_pc(code_addr);
     }
     println!("=== Initial Machine State ===");
-    println!("{}", mmix);
+    println!("{}", mmix.display_with(value_format));
     println!();
 
     println!("=== Executing Program ===");
@@ -147,13 +151,13 @@ fn run_mms(filename: &str) {
     println!();
 
     println!("=== Final Machine State ===");
-    println!("{}", mmix);
+    println!("{}", mmix.display_with(value_format));
     println!();
 
     println!("Execution completed.");
 }
 
-fn run_mmo(filename: &str) {
+fn run_mmo(filename: &str, value_format: ValueFormat) {
     let data = fs::read(filename).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", filename, err);
         process::exit(1);
@@ -189,7 +193,7 @@ fn run_mmo(filename: &str) {
     println!();
 
     println!("=== Initial Machine State ===");
-    println!("{}", mmix);
+    println!("{}", mmix.display_with(value_format));
     println!();
 
     println!("=== Executing Program ===");
@@ -199,7 +203,7 @@ fn run_mmo(filename: &str) {
     println!();
 
     println!("=== Final Machine State ===");
-    println!("{}", mmix);
+    println!("{}", mmix.display_with(value_format));
     println!();
 
     println!("Execution completed.");

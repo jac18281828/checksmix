@@ -8,7 +8,7 @@ mod mmixal;
 mod mmo;
 
 pub use mix::Mix;
-pub use mmix::{MMix, SpecialReg};
+pub use mmix::{MMix, SpecialReg, ValueFormat};
 pub use mmixal::MMixAssembler;
 pub use mmo::{MmoDecoder, MmoGenerator};
 
