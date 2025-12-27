@@ -56,7 +56,6 @@ fn main() {
     }
 }
 
-
 fn run_mix(filename: &str) {
     let input = fs::read_to_string(filename).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", filename, err);

@@ -44,9 +44,7 @@ fn main() {
     println!("Assembling: {}", input_file.display());
 
     // Parse the assembly
-    let input_name = input_file
-        .to_str()
-        .unwrap_or("input.mms");
+    let input_name = input_file.to_str().unwrap_or("input.mms");
     let mut assembler = MMixAssembler::new(&source, input_name);
 
     if let Err(e) = assembler.parse() {
