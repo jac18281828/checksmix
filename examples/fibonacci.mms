@@ -3,7 +3,7 @@
 % ----------------------------------------------------
         LOC     #100
 % Entry point
-Main    SETI $1,90              % compute fib(20)
+Main    SETI $1,20              % compute fib(20)
         PUSHJ   $0,Fibonacci    % call Fibonacci
         JMP     Done
 
