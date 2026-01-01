@@ -992,9 +992,10 @@ impl MMixAssembler {
         symbols.insert("Fgetws".to_string(), SymbolType::Constant(5));
         symbols.insert("Fwrite".to_string(), SymbolType::Constant(6));
         symbols.insert("Fputs".to_string(), SymbolType::Constant(7));
-        symbols.insert("Fputws".to_string(), SymbolType::Constant(8));
-        symbols.insert("Fseek".to_string(), SymbolType::Constant(9));
-        symbols.insert("Ftell".to_string(), SymbolType::Constant(10));
+        symbols.insert("Fputc".to_string(), SymbolType::Constant(8));
+        symbols.insert("Fputws".to_string(), SymbolType::Constant(9));
+        symbols.insert("Fseek".to_string(), SymbolType::Constant(10));
+        symbols.insert("Ftell".to_string(), SymbolType::Constant(11));
 
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);

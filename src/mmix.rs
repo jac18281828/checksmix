@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use tracing::{debug, instrument, trace};
 
@@ -381,6 +383,50 @@ macro_rules! sub_ri {
     }};
 }
 
+/// TRAP code identifiers for MMIX.
+/// These codes are used in TRAP instructions to invoke system calls.
+/// The TRAP instruction format is: TRAP X, Y, Z where:
+/// - X is unused (typically 0)
+/// - Y is the trap code
+/// - Z is an argument (varies by trap code)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TrapCode {
+    Halt = 0,   // Stop execution
+    Fopen = 1,  // Open file
+    Fclose = 2, // Close file
+    Fread = 3,  // Read from file
+    Fgets = 4,  // Read line from file
+    Fgetws = 5, // Read wide string from file
+    Fwrite = 6, // Write to file
+    Fputs = 7,  // Write null-terminated string
+    Fputc = 8,  // Write character
+    Fputws = 9, // Write wide string
+    Fseek = 10, // Seek in file
+    Ftell = 11, // Get file position
+}
+
+impl TrapCode {
+    /// Convert a u8 to a TrapCode variant
+    pub fn from_u8(n: u8) -> Option<Self> {
+        match n {
+            0 => Some(TrapCode::Halt),
+            1 => Some(TrapCode::Fopen),
+            2 => Some(TrapCode::Fclose),
+            3 => Some(TrapCode::Fread),
+            4 => Some(TrapCode::Fgets),
+            5 => Some(TrapCode::Fgetws),
+            6 => Some(TrapCode::Fwrite),
+            7 => Some(TrapCode::Fputs),
+            8 => Some(TrapCode::Fputc),
+            9 => Some(TrapCode::Fputws),
+            10 => Some(TrapCode::Fseek),
+            11 => Some(TrapCode::Ftell),
+            _ => None,
+        }
+    }
+}
+
 /// Special register identifiers for MMIX.
 /// These 32 special registers control various aspects of MMIX operation.
 /// Per TAOCP specification.
@@ -515,6 +561,14 @@ pub struct MMix {
     /// Frame metadata stack for PUSHJ/POP bookkeeping
     /// Actual register values live in main memory at rO + 8×rS
     frame_info_stack: Vec<FrameInfo>,
+
+    /// Open file handles for TRAP calls
+    /// Maps file descriptor numbers to File objects
+    /// 0 = stdin, 1 = stdout, 2 = stderr, 3+ = user-opened files
+    file_handles: HashMap<u8, File>,
+
+    /// Counter for allocating new file descriptors
+    next_fd: u8,
 }
 
 impl Default for MMix {
@@ -532,6 +586,8 @@ impl MMix {
             memory: HashMap::new(),
             pc: 0,
             frame_info_stack: Vec::new(),
+            file_handles: HashMap::new(),
+            next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
         };
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
@@ -787,65 +843,499 @@ impl MMix {
 
     /// Handle TRAP system calls
     /// Returns true if execution should continue, false if halted
-    fn handle_trap(&mut self, trap_code: u8, arg: u8) -> bool {
+    fn handle_trap(&mut self, trap_code: TrapCode, arg: u8) -> bool {
         match trap_code {
-            0 => {
-                // Halt - stop execution
-                debug!(trap_code, arg, "TRAP: Halt");
-                eprintln!("HALT trap at PC={:#018x}", self.pc);
-                self.advance_pc();
-                false
-            }
-            7 => {
-                // Fputs - write null-terminated string to file
-                // Standard calling convention: $0 contains the string address
-                // arg (Z) contains the file descriptor (0=stdin, 1=stdout, 2=stderr)
+            TrapCode::Halt => self.handle_halt(arg),
+            TrapCode::Fopen => self.handle_fopen(arg),
+            TrapCode::Fclose => self.handle_fclose(arg),
+            TrapCode::Fread => self.handle_fread(arg),
+            TrapCode::Fgets => self.handle_fgets(arg),
+            TrapCode::Fgetws => self.handle_fgetws(arg),
+            TrapCode::Fwrite => self.handle_fwrite(arg),
+            TrapCode::Fputs => self.handle_fputs(arg),
+            TrapCode::Fputc => self.handle_fputc(arg),
+            TrapCode::Fputws => self.handle_fputws(arg),
+            TrapCode::Fseek => self.handle_fseek(arg),
+            TrapCode::Ftell => self.handle_ftell(arg),
+        }
+    }
 
-                let str_addr = self.get_register(0);
-                let mut output = String::new();
-                let mut addr = str_addr;
+    /// TRAP 0: Halt - stop execution
+    fn handle_halt(&mut self, _arg: u8) -> bool {
+        debug!("TRAP: Halt");
+        eprintln!("HALT trap at PC={:#018x}", self.pc);
+        self.advance_pc();
+        false
+    }
 
-                // Read null-terminated string from memory
-                loop {
-                    let byte = self.read_byte(addr);
-                    if byte == 0 {
-                        break;
-                    }
-                    output.push(byte as char);
-                    addr += 1;
-                    // Safety limit
-                    if addr.wrapping_sub(str_addr) > 10000 {
-                        eprintln!("Warning: Fputs string too long, truncating");
-                        break;
-                    }
-                }
+    /// TRAP 1: Fopen - open a file
+    /// $0 = filename address, $1 = mode (0=read, 1=write, 2=append)
+    /// Returns file descriptor in $0, or -1 on error
+    fn handle_fopen(&mut self, _arg: u8) -> bool {
+        let filename_addr = self.get_register(0);
+        let mode = self.get_register(1) as u8;
+        let filename = self.read_cstring(filename_addr, 256);
 
-                // Write to appropriate stream
-                match arg {
-                    1 => print!("{}", output),  // stdout
-                    2 => eprint!("{}", output), // stderr
-                    _ => {
-                        debug!(trap_code, arg, "Fputs to unsupported file descriptor");
-                    }
-                }
+        debug!(filename = %filename, mode, "TRAP: Fopen");
 
-                debug!(
-                    trap_code,
-                    arg,
-                    str_addr = format!("0x{:X}", str_addr),
-                    "TRAP: Fputs"
-                );
-                self.advance_pc();
-                true
-            }
+        let result = match mode {
+            0 => File::open(&filename).ok(),
+            1 => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&filename)
+                .ok(),
+            2 => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(&filename)
+                .ok(),
             _ => {
-                // Unhandled trap - just advance PC and continue
-                debug!(trap_code, arg, "TRAP: Unhandled trap code");
-                eprintln!("Unhandled TRAP code {} at PC={:#018x}", trap_code, self.pc);
-                self.advance_pc();
-                true
+                debug!("Invalid file open mode: {}", mode);
+                None
+            }
+        };
+
+        match result {
+            Some(file) => {
+                let fd = self.next_fd;
+                self.file_handles.insert(fd, file);
+                self.next_fd = self.next_fd.wrapping_add(1);
+                if self.next_fd < 3 {
+                    self.next_fd = 3;
+                }
+                self.set_register(0, fd as u64);
+                debug!(fd, "File opened successfully");
+            }
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!("File open failed");
             }
         }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 2: Fclose - close a file
+    /// $0 = file descriptor
+    fn handle_fclose(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        debug!(fd, "TRAP: Fclose");
+
+        match self.file_handles.remove(&fd) {
+            Some(_) => {
+                self.set_register(0, 0);
+                debug!(fd, "File closed successfully");
+            }
+            None => {
+                self.set_register(0, -1i64 as u64);
+                debug!(fd, "File not open");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 3: Fread - read from file
+    /// $0 = file descriptor, $1 = buffer address, $2 = number of bytes
+    /// Returns number of bytes read in $0, or -1 on error
+    fn handle_fread(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let buffer_addr = self.get_register(1);
+        let size = self.get_register(2) as usize;
+
+        debug!(
+            fd,
+            buffer_addr = format!("0x{:X}", buffer_addr),
+            size,
+            "TRAP: Fread"
+        );
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => {
+                let mut buffer = vec![0u8; size];
+                match file.read(&mut buffer) {
+                    Ok(bytes_read) => {
+                        for (i, &byte) in buffer[..bytes_read].iter().enumerate() {
+                            self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
+                        }
+                        self.set_register(0, bytes_read as u64);
+                        debug!(bytes_read, "Read successful");
+                    }
+                    Err(_) => {
+                        self.set_register(0, (-1i64) as u64);
+                        debug!("Read failed");
+                    }
+                }
+            }
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open for read");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 4: Fgets - read a line from file (up to newline)
+    /// $0 = file descriptor, $1 = buffer address, $2 = maximum buffer size
+    /// Returns number of bytes read in $0, or -1 on error
+    fn handle_fgets(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let buffer_addr = self.get_register(1);
+        let max_size = self.get_register(2) as usize;
+
+        debug!(
+            fd,
+            buffer_addr = format!("0x{:X}", buffer_addr),
+            max_size,
+            "TRAP: Fgets"
+        );
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => {
+                let mut buffer = Vec::new();
+                let mut one_byte = [0u8; 1];
+                let mut bytes_read = 0;
+
+                while bytes_read < max_size - 1 {
+                    match file.read_exact(&mut one_byte) {
+                        Ok(_) => {
+                            buffer.push(one_byte[0]);
+                            bytes_read += 1;
+                            if one_byte[0] == b'\n' {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if bytes_read > 0 || !buffer.is_empty() {
+                    for (i, &byte) in buffer.iter().enumerate() {
+                        self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
+                    }
+                    self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
+                    self.set_register(0, bytes_read as u64);
+                    debug!(bytes_read, "Fgets successful");
+                } else {
+                    self.set_register(0, 0);
+                    debug!("EOF reached");
+                }
+            }
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open for read");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 5: Fgetws - read a wide string from file (same as Fgets for now)
+    /// $0 = file descriptor, $1 = buffer address, $2 = maximum buffer size
+    fn handle_fgetws(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let buffer_addr = self.get_register(1);
+        let max_size = self.get_register(2) as usize;
+
+        debug!(
+            fd,
+            buffer_addr = format!("0x{:X}", buffer_addr),
+            max_size,
+            "TRAP: Fgetws"
+        );
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => {
+                let mut buffer = Vec::new();
+                let mut one_byte = [0u8; 1];
+                let mut bytes_read = 0;
+
+                while bytes_read < max_size - 1 {
+                    match file.read_exact(&mut one_byte) {
+                        Ok(_) => {
+                            buffer.push(one_byte[0]);
+                            bytes_read += 1;
+                            if one_byte[0] == b'\n' {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if bytes_read > 0 || !buffer.is_empty() {
+                    for (i, &byte) in buffer.iter().enumerate() {
+                        self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
+                    }
+                    self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
+                    self.set_register(0, bytes_read as u64);
+                    debug!(bytes_read, "Fgetws successful");
+                } else {
+                    self.set_register(0, 0);
+                    debug!("EOF reached");
+                }
+            }
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open for read");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 6: Fwrite - write to file
+    /// $0 = file descriptor, $1 = buffer address, $2 = number of bytes
+    /// Returns number of bytes written in $0, or -1 on error
+    fn handle_fwrite(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let buffer_addr = self.get_register(1);
+        let size = self.get_register(2) as usize;
+
+        debug!(
+            fd,
+            buffer_addr = format!("0x{:X}", buffer_addr),
+            size,
+            "TRAP: Fwrite"
+        );
+
+        let mut buffer = Vec::with_capacity(size);
+        for i in 0..size {
+            buffer.push(self.read_byte(buffer_addr.wrapping_add(i as u64)));
+        }
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => match file.write_all(&buffer) {
+                Ok(_) => {
+                    self.set_register(0, size as u64);
+                    debug!(size, "Write successful");
+                }
+                Err(_) => {
+                    self.set_register(0, (-1i64) as u64);
+                    debug!("Write failed");
+                }
+            },
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open for write");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 7: Fputs - write null-terminated string
+    /// $0 = string address, arg = file descriptor (1=stdout, 2=stderr)
+    fn handle_fputs(&mut self, arg: u8) -> bool {
+        let str_addr = self.get_register(0);
+        let mut output = String::new();
+        let mut addr = str_addr;
+
+        loop {
+            let byte = self.read_byte(addr);
+            if byte == 0 {
+                break;
+            }
+            output.push(byte as char);
+            addr += 1;
+            if addr.wrapping_sub(str_addr) > 10000 {
+                eprintln!("Warning: Fputs string too long, truncating");
+                break;
+            }
+        }
+
+        match arg {
+            1 => print!("{}", output),
+            2 => eprint!("{}", output),
+            _ => debug!(arg, "Fputs to unsupported file descriptor"),
+        }
+
+        debug!(arg, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputs");
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 8: Fputc - write a character to file
+    /// $0 = file descriptor, $1 = character
+    fn handle_fputc(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let ch = self.get_register(1) as u8;
+
+        debug!(fd, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
+
+        match fd {
+            1 => {
+                print!("{}", ch as char);
+                self.set_register(0, 0);
+            }
+            2 => {
+                eprint!("{}", ch as char);
+                self.set_register(0, 0);
+            }
+            _ => match self.file_handles.get_mut(&fd) {
+                Some(file) => match file.write_all(&[ch]) {
+                    Ok(_) => {
+                        self.set_register(0, 0);
+                        debug!("Fputc successful");
+                    }
+                    Err(_) => {
+                        self.set_register(0, (-1i64) as u64);
+                        debug!("Fputc write failed");
+                    }
+                },
+                None => {
+                    self.set_register(0, (-1i64) as u64);
+                    debug!(fd, "File not open for write");
+                }
+            },
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 9: Fputws - write a wide string to file (same as Fputs for now)
+    /// $0 = file descriptor, $1 = string address
+    fn handle_fputws(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let str_addr = self.get_register(1);
+        let mut output = String::new();
+        let mut addr = str_addr;
+
+        loop {
+            let byte = self.read_byte(addr);
+            if byte == 0 {
+                break;
+            }
+            output.push(byte as char);
+            addr += 1;
+            if addr.wrapping_sub(str_addr) > 10000 {
+                eprintln!("Warning: Fputws string too long, truncating");
+                break;
+            }
+        }
+
+        match fd {
+            1 => {
+                print!("{}", output);
+                self.set_register(0, 0);
+            }
+            2 => {
+                eprint!("{}", output);
+                self.set_register(0, 0);
+            }
+            _ => match self.file_handles.get_mut(&fd) {
+                Some(file) => match file.write_all(output.as_bytes()) {
+                    Ok(_) => {
+                        self.set_register(0, 0);
+                        debug!("Fputws successful");
+                    }
+                    Err(_) => {
+                        self.set_register(0, (-1i64) as u64);
+                        debug!("Fputws write failed");
+                    }
+                },
+                None => {
+                    self.set_register(0, (-1i64) as u64);
+                    debug!(fd, "File not open for write");
+                }
+            },
+        }
+        debug!(fd, "TRAP: Fputws");
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 10: Fseek - seek in file
+    /// $0 = file descriptor, $1 = offset (as i64), $2 = whence (0=start, 1=current, 2=end)
+    /// Returns new position in $0, or -1 on error
+    fn handle_fseek(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+        let offset = self.get_register(1) as i64;
+        let whence = self.get_register(2) as u8;
+
+        debug!(fd, offset, whence, "TRAP: Fseek");
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => {
+                let seek_from = match whence {
+                    0 => SeekFrom::Start(offset as u64),
+                    1 => SeekFrom::Current(offset),
+                    2 => SeekFrom::End(offset),
+                    _ => {
+                        debug!("Invalid seek whence: {}", whence);
+                        self.set_register(0, (-1i64) as u64);
+                        self.advance_pc();
+                        return true;
+                    }
+                };
+
+                match file.seek(seek_from) {
+                    Ok(pos) => {
+                        self.set_register(0, pos);
+                        debug!(pos, "Seek successful");
+                    }
+                    Err(_) => {
+                        self.set_register(0, (-1i64) as u64);
+                        debug!("Seek failed");
+                    }
+                }
+            }
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 11: Ftell - get file position
+    /// $0 = file descriptor
+    /// Returns current position in $0, or -1 on error
+    fn handle_ftell(&mut self, _arg: u8) -> bool {
+        let fd = self.get_register(0) as u8;
+
+        debug!(fd, "TRAP: Ftell");
+
+        match self.file_handles.get_mut(&fd) {
+            Some(file) => match file.stream_position() {
+                Ok(pos) => {
+                    self.set_register(0, pos);
+                    debug!(pos, "Ftell successful");
+                }
+                Err(_) => {
+                    self.set_register(0, (-1i64) as u64);
+                    debug!("Ftell failed");
+                }
+            },
+            None => {
+                self.set_register(0, (-1i64) as u64);
+                debug!(fd, "File not open");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// Helper function to read a null-terminated C string from memory
+    fn read_cstring(&self, addr: u64, max_len: usize) -> String {
+        let mut result = String::new();
+        let mut current_addr = addr;
+
+        for _ in 0..max_len {
+            let byte = self.read_byte(current_addr);
+            if byte == 0 {
+                break;
+            }
+            result.push(byte as char);
+            current_addr += 1;
+        }
+
+        result
     }
 
     // ========== Instruction Execution ==========
@@ -873,7 +1363,15 @@ impl MMix {
                 // For immediate form: Y is the trap number, Z is an argument
                 if x == 0 {
                     // Immediate TRAP - handle system calls
-                    self.handle_trap(y, z)
+                    match TrapCode::from_u8(y) {
+                        Some(trap) => self.handle_trap(trap, z),
+                        None => {
+                            debug!(trap_code = y, arg = z, "TRAP: Unhandled trap code");
+                            eprintln!("Unhandled TRAP code {} at PC={:#018x}", y, self.pc);
+                            self.advance_pc();
+                            true
+                        }
+                    }
                 } else {
                     // Register form - not commonly used for syscalls
                     let trap_val = {
@@ -7152,5 +7650,334 @@ mod tests {
         mmix.write_tetra(0, 0xBB010280); // PRESTI $1,$2,128
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 4); // PC advanced
+    }
+
+    // ========== TRAP Handler Tests ==========
+
+    #[test]
+    fn test_trap_halt() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Halt, 0
+        mmix.write_tetra(0, 0x00000000); // TRAP 0,0,0
+        let should_continue = mmix.execute_instruction();
+        assert!(!should_continue); // Should halt
+        assert_eq!(mmix.get_pc(), 4); // PC still advances
+    }
+
+    #[test]
+    fn test_trap_fputs_stdout() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Fputs, 1 (write to stdout)
+        let test_string = b"Hello, MMIX!\0";
+        let str_addr = 1000u64;
+
+        // Write string to memory
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+
+        mmix.set_register(0, str_addr);
+        mmix.write_tetra(0, 0x00000701); // TRAP 0, 7, 1 (Fputs to stdout)
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue); // Should continue
+        assert_eq!(mmix.get_pc(), 4); // PC advanced
+    }
+
+    #[test]
+    fn test_trap_fputs_stderr() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Fputs, 2 (write to stderr)
+        let test_string = b"Error message\0";
+        let str_addr = 2000u64;
+
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+
+        mmix.set_register(0, str_addr);
+        mmix.write_tetra(0, 0x00000702); // TRAP 0, 7, 2 (Fputs to stderr)
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_pc(), 4);
+    }
+
+    #[test]
+    fn test_trap_fputc_stdout() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Fputc, 1 (write character to stdout)
+        mmix.set_register(0, 1); // file descriptor = stdout
+        mmix.set_register(1, b'X' as u64); // character 'X'
+        mmix.write_tetra(0, 0x00000801); // TRAP 0, 8, 1
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 0); // Success
+        assert_eq!(mmix.get_pc(), 4);
+    }
+
+    #[test]
+    fn test_trap_fputws() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Fputws, 1 (write wide string to stdout)
+        let test_string = b"Wide string\0";
+        let str_addr = 3000u64;
+
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+
+        mmix.set_register(0, 1); // file descriptor
+        mmix.set_register(1, str_addr);
+        mmix.write_tetra(0, 0x00000901); // TRAP 0, 9, 1 (Fputws)
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 0); // Success
+    }
+
+    #[test]
+    fn test_trap_read_cstring() {
+        let mut mmix = MMix::new();
+        // Test the helper function read_cstring
+        let test_string = b"Test String\0";
+        let addr = 1000u64;
+
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(addr + i as u64, byte);
+        }
+
+        let result = mmix.read_cstring(addr, 256);
+        assert_eq!(result, "Test String");
+    }
+
+    #[test]
+    fn test_trap_fopen_write() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Fopen, 0 - open file for writing
+        let filename = b"/tmp/test_mmix_fopen.txt\0";
+        let filename_addr = 1000u64;
+
+        // Write filename to memory
+        for (i, &byte) in filename.iter().enumerate() {
+            mmix.write_byte(filename_addr + i as u64, byte);
+        }
+
+        mmix.set_register(0, filename_addr); // filename address
+        mmix.set_register(1, 1); // mode = write
+        mmix.write_tetra(0, 0x00000100); // TRAP 0, 1, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+
+        let fd = mmix.get_register(0) as u8;
+        assert!(fd > 2 && fd < 255); // Valid FD (not stdin/out/err)
+        assert_eq!(mmix.get_pc(), 4);
+    }
+
+    #[test]
+    fn test_trap_fwrite_basic() {
+        let mut mmix = MMix::new();
+        // Create a test file first in /tmp
+        use std::fs;
+        let test_file = "/tmp/test_mmix_write.txt";
+        let _ = fs::remove_file(test_file); // Clean up if exists
+
+        // Open file for writing
+        let file = std::fs::File::create(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        // Prepare data in memory
+        let data = b"Hello, File!\0";
+        let data_addr = 2000u64;
+        for (i, &byte) in data.iter().enumerate() {
+            mmix.write_byte(data_addr + i as u64, byte);
+        }
+
+        // Write 12 bytes (excluding null terminator)
+        mmix.set_register(0, fd as u64); // file descriptor
+        mmix.set_register(1, data_addr);
+        mmix.set_register(2, 12); // number of bytes
+        mmix.write_tetra(0, 0x00000600); // TRAP 0, 6, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 12); // Bytes written
+
+        // Verify file contents
+        let contents = fs::read_to_string(test_file).unwrap();
+        assert_eq!(contents, "Hello, File!");
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_fread_basic() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_read.txt";
+        fs::write(test_file, "Test Content").unwrap();
+
+        // Open file for reading
+        let file = fs::File::open(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        // Read into buffer at address 3000
+        let buffer_addr = 3000u64;
+        mmix.set_register(0, fd as u64); // file descriptor
+        mmix.set_register(1, buffer_addr);
+        mmix.set_register(2, 20); // max bytes to read
+        mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+
+        let bytes_read = mmix.get_register(0);
+        assert_eq!(bytes_read, 12); // "Test Content" is 12 bytes
+
+        // Verify read data
+        let mut result = String::new();
+        for i in 0..bytes_read {
+            result.push(mmix.read_byte(buffer_addr + i) as char);
+        }
+        assert_eq!(result, "Test Content");
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_fgets_basic() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_gets.txt";
+        fs::write(test_file, "First Line\nSecond Line\n").unwrap();
+
+        // Open file for reading
+        let file = fs::File::open(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        // Read line into buffer
+        let buffer_addr = 4000u64;
+        mmix.set_register(0, fd as u64);
+        mmix.set_register(1, buffer_addr);
+        mmix.set_register(2, 50); // max size
+        mmix.write_tetra(0, 0x00000400); // TRAP 0, 4, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+
+        let bytes_read = mmix.get_register(0);
+        // Read line includes the newline character, so "First Line\n" = 11 bytes
+        assert_eq!(bytes_read, 11);
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_fclose_success() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_close.txt";
+        let file = fs::File::create(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        mmix.set_register(0, fd as u64);
+        mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 0); // Success
+        assert!(!mmix.file_handles.contains_key(&fd)); // File removed
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_fclose_error() {
+        let mut mmix = MMix::new();
+        // Try to close non-existent file
+        mmix.set_register(0, 99u64); // Non-existent FD
+        mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), (-1i64) as u64); // Error
+    }
+
+    #[test]
+    fn test_trap_fseek_basic() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_seek.txt";
+        fs::write(test_file, "0123456789ABCDEF").unwrap();
+
+        let file = fs::File::open(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        // Seek to position 5
+        mmix.set_register(0, fd as u64);
+        mmix.set_register(1, 5i64 as u64); // offset
+        mmix.set_register(2, 0); // whence = start
+        mmix.write_tetra(0, 0x00000A00); // TRAP 0, 10, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 5); // New position
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_ftell_basic() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_tell.txt";
+        fs::write(test_file, "Test Data").unwrap();
+
+        let file = fs::File::open(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        // Get current position (should be 0)
+        mmix.set_register(0, fd as u64);
+        mmix.write_tetra(0, 0x00000B00); // TRAP 0, 11, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(0), 0); // Position 0
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_fgetws_basic() {
+        let mut mmix = MMix::new();
+        use std::fs;
+
+        let test_file = "/tmp/test_mmix_getws.txt";
+        fs::write(test_file, "Wide line\nAnother line\n").unwrap();
+
+        let file = fs::File::open(test_file).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        let buffer_addr = 5000u64;
+        mmix.set_register(0, fd as u64);
+        mmix.set_register(1, buffer_addr);
+        mmix.set_register(2, 50);
+        mmix.write_tetra(0, 0x00000500); // TRAP 0, 5, 0
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+
+        let bytes_read = mmix.get_register(0);
+        assert!(bytes_read > 0);
+
+        // Clean up
+        let _ = fs::remove_file(test_file);
     }
 }
