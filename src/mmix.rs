@@ -7781,7 +7781,7 @@ mod tests {
         }
 
         mmix.set_register(255, str_addr); // $255 contains string address
-        mmix.write_tetra(0, 0x00000901); // TRAP 0, 9, 1 (Fputws to stdout)
+        mmix.write_tetra(0, 0x00000A01); // TRAP 0, 10, 1 (Fputws to stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 11); // Character count returned in $255
@@ -7815,7 +7815,7 @@ mod tests {
         }
 
         mmix.set_register(255, filename_addr); // $255 contains filename address
-        mmix.write_tetra(0, 0x00000101); // TRAP 0, 1, 1 (Fopen with mode 1=write in Z)
+        mmix.write_tetra(0, 0x00000201); // TRAP 0, 2, 1 (Fopen with mode 1=write in Z)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
@@ -7851,7 +7851,7 @@ mod tests {
         mmix.write_octa(param_addr + 8, data_addr); // OCTA 1: buffer address
         mmix.write_octa(param_addr + 16, 12); // OCTA 2: number of bytes
         mmix.set_register(255, param_addr); // $255 points to parameter block
-        mmix.write_tetra(0, 0x00000600); // TRAP 0, 6, 0
+        mmix.write_tetra(0, 0x00000700); // TRAP 0, 7, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 12); // Bytes written returned in $255
@@ -7885,7 +7885,7 @@ mod tests {
         mmix.write_octa(param_addr + 8, buffer_addr); // OCTA 1: buffer address
         mmix.write_octa(param_addr + 16, 20); // OCTA 2: max bytes to read
         mmix.set_register(255, param_addr); // $255 points to parameter block
-        mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
+        mmix.write_tetra(0, 0x00000400); // TRAP 0, 4, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
@@ -7923,7 +7923,7 @@ mod tests {
         mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
         mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
         mmix.set_register(255, param_addr); // $255 points to parameter block
-        mmix.write_tetra(0, 0x00000403); // TRAP 0, 4, 3 (Fgets from fd 3)
+        mmix.write_tetra(0, 0x00000503); // TRAP 0, 5, 3 (Fgets from fd 3)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
@@ -7946,7 +7946,7 @@ mod tests {
         mmix.file_handles.insert(fd, file);
 
         mmix.set_register(255, fd as u64); // $255 contains file descriptor
-        mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
+        mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success returned in $255
@@ -7961,7 +7961,7 @@ mod tests {
         let mut mmix = MMix::new();
         // Try to close non-existent file
         mmix.set_register(255, 99u64); // Non-existent FD in $255
-        mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
+        mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), (-1i64) as u64); // Error returned in $255
@@ -7985,7 +7985,7 @@ mod tests {
         mmix.write_octa(param_addr + 8, 5i64 as u64); // OCTA 1: offset
         mmix.write_octa(param_addr + 16, 0); // OCTA 2: whence = start
         mmix.set_register(255, param_addr); // $255 points to parameter block
-        mmix.write_tetra(0, 0x00000A00); // TRAP 0, 10, 0
+        mmix.write_tetra(0, 0x00000B00); // TRAP 0, 11, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 5); // New position returned in $255
@@ -8008,7 +8008,7 @@ mod tests {
 
         // Get current position (should be 0)
         mmix.set_register(255, fd as u64); // $255 contains file descriptor
-        mmix.write_tetra(0, 0x00000B00); // TRAP 0, 11, 0
+        mmix.write_tetra(0, 0x00000C00); // TRAP 0, 12, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Position 0 returned in $255
@@ -8035,7 +8035,7 @@ mod tests {
         mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
         mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
         mmix.set_register(255, param_addr); // $255 points to parameter block
-        mmix.write_tetra(0, 0x00000503); // TRAP 0, 5, 3 (Fgetws from fd 3)
+        mmix.write_tetra(0, 0x00000603); // TRAP 0, 6, 3 (Fgetws from fd 3)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
