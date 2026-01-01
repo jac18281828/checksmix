@@ -1064,6 +1064,40 @@ impl MMixAssembler {
             SymbolType::Constant(TrapCode::Time as u64),
         );
 
+        // Special register names (for use with GET and PUT instructions)
+        symbols.insert("rB".to_string(), SymbolType::Constant(0)); // rB - Bootstrap register
+        symbols.insert("rD".to_string(), SymbolType::Constant(1)); // rD - Dividend register
+        symbols.insert("rE".to_string(), SymbolType::Constant(2)); // rE - Epsilon register
+        symbols.insert("rH".to_string(), SymbolType::Constant(3)); // rH - Himult register
+        symbols.insert("rJ".to_string(), SymbolType::Constant(4)); // rJ - Return-jump register
+        symbols.insert("rM".to_string(), SymbolType::Constant(5)); // rM - Multiplex mask register
+        symbols.insert("rR".to_string(), SymbolType::Constant(6)); // rR - Remainder register
+        symbols.insert("rBB".to_string(), SymbolType::Constant(7)); // rBB - Bootstrap register (kernel)
+        symbols.insert("rC".to_string(), SymbolType::Constant(8)); // rC - Continuation register
+        symbols.insert("rN".to_string(), SymbolType::Constant(9)); // rN - Serial number
+        symbols.insert("rO".to_string(), SymbolType::Constant(10)); // rO - Register stack offset
+        symbols.insert("rS".to_string(), SymbolType::Constant(11)); // rS - Register stack pointer
+        symbols.insert("rI".to_string(), SymbolType::Constant(12)); // rI - Interval counter
+        symbols.insert("rT".to_string(), SymbolType::Constant(13)); // rT - Trap address register
+        symbols.insert("rTT".to_string(), SymbolType::Constant(14)); // rTT - Dynamic trap address register
+        symbols.insert("rK".to_string(), SymbolType::Constant(15)); // rK - Interrupt mask register
+        symbols.insert("rQ".to_string(), SymbolType::Constant(16)); // rQ - Interrupt request register
+        symbols.insert("rU".to_string(), SymbolType::Constant(17)); // rU - Usage counter
+        symbols.insert("rV".to_string(), SymbolType::Constant(18)); // rV - Virtual translation register
+        symbols.insert("rG".to_string(), SymbolType::Constant(19)); // rG - Global threshold register
+        symbols.insert("rL".to_string(), SymbolType::Constant(20)); // rL - Local threshold register
+        symbols.insert("rA".to_string(), SymbolType::Constant(21)); // rA - Arithmetic status register
+        symbols.insert("rF".to_string(), SymbolType::Constant(22)); // rF - Failure location register
+        symbols.insert("rP".to_string(), SymbolType::Constant(23)); // rP - Prediction register
+        symbols.insert("rW".to_string(), SymbolType::Constant(24)); // rW - Where-interrupted register (user)
+        symbols.insert("rX".to_string(), SymbolType::Constant(25)); // rX - Execution register (user)
+        symbols.insert("rY".to_string(), SymbolType::Constant(26)); // rY - Y operand (user)
+        symbols.insert("rZ".to_string(), SymbolType::Constant(27)); // rZ - Z operand (user)
+        symbols.insert("rWW".to_string(), SymbolType::Constant(28)); // rWW - Where-interrupted register (kernel)
+        symbols.insert("rXX".to_string(), SymbolType::Constant(29)); // rXX - Execution register (kernel)
+        symbols.insert("rYY".to_string(), SymbolType::Constant(30)); // rYY - Y operand (kernel)
+        symbols.insert("rZZ".to_string(), SymbolType::Constant(31)); // rZZ - Z operand (kernel)
+
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);
 
