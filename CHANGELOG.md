@@ -1,3 +1,8 @@
+0.2.12 (2026-01-01)
+
+* bug fixes - print $255
+* halt with error code properly
+
 0.2.11 (2025-12-31)
 
 * implementing the traps

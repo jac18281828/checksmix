@@ -154,6 +154,10 @@ fn run_mms(filename: &str, value_format: ValueFormat) {
     println!();
 
     println!("Execution completed.");
+
+    // Exit with the code set by HALT trap
+    let exit_code = mmix.get_exit_code();
+    process::exit(exit_code as i32);
 }
 
 fn run_mmo(filename: &str, value_format: ValueFormat) {
@@ -206,4 +210,8 @@ fn run_mmo(filename: &str, value_format: ValueFormat) {
     println!();
 
     println!("Execution completed.");
+
+    // Exit with the code set by HALT trap
+    let exit_code = mmix.get_exit_code();
+    process::exit(exit_code as i32);
 }

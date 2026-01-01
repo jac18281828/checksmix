@@ -568,6 +568,9 @@ pub struct MMix {
 
     /// Counter for allocating new file descriptors
     next_fd: u8,
+
+    /// Exit code from HALT trap (to be returned as process exit code)
+    exit_code: u64,
 }
 
 impl Default for MMix {
@@ -587,6 +590,7 @@ impl MMix {
             frame_info_stack: Vec::new(),
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
+            exit_code: 0,
         };
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
@@ -741,6 +745,11 @@ impl MMix {
         self.pc = self.pc.wrapping_add(4);
     }
 
+    /// Get the exit code set by TRAP 0 (Halt).
+    pub fn get_exit_code(&self) -> u64 {
+        self.exit_code
+    }
+
     // ========== Internal Helpers ==========
 
     /// Conditional branch forward: if cond, PC = PC + (Y<<8|Z) * 4
@@ -856,6 +865,7 @@ impl MMix {
     fn handle_halt(&mut self, _arg: u8) -> bool {
         debug!("TRAP: Halt");
         let exit_code = self.get_register(255);
+        self.exit_code = exit_code;
         eprintln!("HALT trap at PC={:#018x}, exit code={}", self.pc, exit_code);
         self.advance_pc();
         false
@@ -3628,7 +3638,7 @@ impl MMix {
         writeln!(f, "General Registers:")?;
         let mut any_nonzero = false;
         for (i, &value) in self.general_regs.iter().enumerate() {
-            if value != 0 && i != 255 {
+            if value != 0 {
                 writeln!(
                     f,
                     "  ${:<3} = {:#018x} ({})",
