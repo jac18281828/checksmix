@@ -392,18 +392,19 @@ macro_rules! sub_ri {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TrapCode {
-    Halt = 0,   // Stop execution
-    Fopen = 1,  // Open file
-    Fclose = 2, // Close file
-    Fread = 3,  // Read from file
-    Fgets = 4,  // Read line from file
-    Fgetws = 5, // Read wide string from file
-    Fwrite = 6, // Write to file
-    Fputs = 7,  // Write null-terminated string
-    Fputc = 8,  // Write character
-    Fputws = 9, // Write wide string
-    Fseek = 10, // Seek in file
-    Ftell = 11, // Get file position
+    Halt = 0,    // Stop execution
+    Trip = 1,    // Cause a trip (not implemented)
+    Fopen = 2,   // Open file
+    Fclose = 3,  // Close file
+    Fread = 4,   // Read from file
+    Fgets = 5,   // Read line from file
+    Fgetws = 6,  // Read wide string from file
+    Fwrite = 7,  // Write to file
+    Fputs = 8,   // Write null-terminated string
+    Fputc = 9,   // Write character
+    Fputws = 10, // Write wide string
+    Fseek = 11,  // Seek in file
+    Ftell = 12,  // Get file position
 }
 
 impl TrapCode {
@@ -411,17 +412,18 @@ impl TrapCode {
     pub fn from_u8(n: u8) -> Option<Self> {
         match n {
             0 => Some(TrapCode::Halt),
-            1 => Some(TrapCode::Fopen),
-            2 => Some(TrapCode::Fclose),
-            3 => Some(TrapCode::Fread),
-            4 => Some(TrapCode::Fgets),
-            5 => Some(TrapCode::Fgetws),
-            6 => Some(TrapCode::Fwrite),
-            7 => Some(TrapCode::Fputs),
-            8 => Some(TrapCode::Fputc),
-            9 => Some(TrapCode::Fputws),
-            10 => Some(TrapCode::Fseek),
-            11 => Some(TrapCode::Ftell),
+            1 => Some(TrapCode::Trip),
+            2 => Some(TrapCode::Fopen),
+            3 => Some(TrapCode::Fclose),
+            4 => Some(TrapCode::Fread),
+            5 => Some(TrapCode::Fgets),
+            6 => Some(TrapCode::Fgetws),
+            7 => Some(TrapCode::Fwrite),
+            8 => Some(TrapCode::Fputs),
+            9 => Some(TrapCode::Fputc),
+            10 => Some(TrapCode::Fputws),
+            11 => Some(TrapCode::Fseek),
+            12 => Some(TrapCode::Ftell),
             _ => None,
         }
     }
@@ -846,6 +848,7 @@ impl MMix {
     fn handle_trap(&mut self, trap_code: TrapCode, arg: u8) -> bool {
         match trap_code {
             TrapCode::Halt => self.handle_halt(arg),
+            TrapCode::Trip => self.handle_trip(arg),
             TrapCode::Fopen => self.handle_fopen(arg),
             TrapCode::Fclose => self.handle_fclose(arg),
             TrapCode::Fread => self.handle_fread(arg),
@@ -871,7 +874,37 @@ impl MMix {
         false
     }
 
-    /// TRAP 1: Fopen - open a file
+    /// TRAP 1: Trip - cause a dynamic trap
+    /// This saves state and jumps to the handler at rTT (if set)
+    fn handle_trip(&mut self, arg: u8) -> bool {
+        debug!("TRAP: Trip");
+
+        let handler_addr = self.get_special(SpecialReg::RTT);
+
+        if handler_addr == 0 {
+            eprintln!(
+                "TRIP trap at PC={:#018x} - rTT not set, treating as NOP",
+                self.pc
+            );
+            self.advance_pc();
+            return true;
+        }
+
+        // Save interrupted state to special registers
+        // rW: where interrupted (PC of next instruction)
+        self.set_special(SpecialReg::RW, self.pc.wrapping_add(4));
+        // rX: execution register (would be the instruction being executed)
+        // rY, rZ: operands (Y and Z fields, with X and opcode in high bits)
+        self.set_special(SpecialReg::RY, 0);
+        self.set_special(SpecialReg::RZ, arg as u64);
+
+        // Jump to trap handler
+        debug!("Jumping to TRIP handler at {:#018x}", handler_addr);
+        self.pc = handler_addr;
+        true
+    }
+
+    /// TRAP 2: Fopen - open a file
     /// Parameters in $255: filename address
     /// Auxiliary parameter: mode (0=read, 1=write, 2=append)
     /// Returns file descriptor in $255, or -1 on error

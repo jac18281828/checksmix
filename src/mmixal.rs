@@ -1,6 +1,10 @@
-use pest_derive::Parser;
 use std::collections::HashMap;
+use std::io::{stderr, stdin, stdout};
+use std::os::unix::io::AsRawFd;
 use tracing::{debug, instrument};
+
+use crate::mmix::TrapCode;
+use pest_derive::Parser;
 
 #[derive(Parser)]
 #[grammar = "mmixal.pest"]
@@ -978,24 +982,77 @@ impl MMixAssembler {
             SymbolType::Constant(0x6000000000000000),
         );
 
-        // Standard I/O handles
-        symbols.insert("StdIn".to_string(), SymbolType::Constant(0));
-        symbols.insert("StdOut".to_string(), SymbolType::Constant(1));
-        symbols.insert("StdErr".to_string(), SymbolType::Constant(2));
+        // will be 0,1 2 for stdin, stdout, stderr respectively
+        let stdin_file_no = stdin().as_raw_fd();
+        let stdout_file_no = stdout().as_raw_fd();
+        let stderr_file_no = stderr().as_raw_fd();
 
+        // Standard I/O handles
+        symbols.insert(
+            "StdIn".to_string(),
+            SymbolType::Constant(stdin_file_no as u64),
+        );
+        symbols.insert(
+            "StdOut".to_string(),
+            SymbolType::Constant(stdout_file_no as u64),
+        );
+        symbols.insert(
+            "StdErr".to_string(),
+            SymbolType::Constant(stderr_file_no as u64),
+        );
         // Common TRAP function codes (C library emulation)
-        symbols.insert("Halt".to_string(), SymbolType::Constant(0));
-        symbols.insert("Fopen".to_string(), SymbolType::Constant(1));
-        symbols.insert("Fclose".to_string(), SymbolType::Constant(2));
-        symbols.insert("Fread".to_string(), SymbolType::Constant(3));
-        symbols.insert("Fgets".to_string(), SymbolType::Constant(4));
-        symbols.insert("Fgetws".to_string(), SymbolType::Constant(5));
-        symbols.insert("Fwrite".to_string(), SymbolType::Constant(6));
-        symbols.insert("Fputs".to_string(), SymbolType::Constant(7));
-        symbols.insert("Fputc".to_string(), SymbolType::Constant(8));
-        symbols.insert("Fputws".to_string(), SymbolType::Constant(9));
-        symbols.insert("Fseek".to_string(), SymbolType::Constant(10));
-        symbols.insert("Ftell".to_string(), SymbolType::Constant(11));
+        symbols.insert(
+            "Halt".to_string(),
+            SymbolType::Constant(TrapCode::Halt as u64),
+        );
+        symbols.insert(
+            "Trip".to_string(),
+            SymbolType::Constant(TrapCode::Trip as u64),
+        );
+        symbols.insert(
+            "Fopen".to_string(),
+            SymbolType::Constant(TrapCode::Fopen as u64),
+        );
+        symbols.insert(
+            "Fclose".to_string(),
+            SymbolType::Constant(TrapCode::Fclose as u64),
+        );
+        symbols.insert(
+            "Fread".to_string(),
+            SymbolType::Constant(TrapCode::Fread as u64),
+        );
+        symbols.insert(
+            "Fgets".to_string(),
+            SymbolType::Constant(TrapCode::Fgets as u64),
+        );
+        symbols.insert(
+            "Fgetws".to_string(),
+            SymbolType::Constant(TrapCode::Fgetws as u64),
+        );
+        symbols.insert(
+            "Fwrite".to_string(),
+            SymbolType::Constant(TrapCode::Fwrite as u64),
+        );
+        symbols.insert(
+            "Fputs".to_string(),
+            SymbolType::Constant(TrapCode::Fputs as u64),
+        );
+        symbols.insert(
+            "Fputc".to_string(),
+            SymbolType::Constant(TrapCode::Fputc as u64),
+        );
+        symbols.insert(
+            "Fputws".to_string(),
+            SymbolType::Constant(TrapCode::Fputws as u64),
+        );
+        symbols.insert(
+            "Fseek".to_string(),
+            SymbolType::Constant(TrapCode::Fseek as u64),
+        );
+        symbols.insert(
+            "Ftell".to_string(),
+            SymbolType::Constant(TrapCode::Ftell as u64),
+        );
 
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);
