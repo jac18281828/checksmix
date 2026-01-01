@@ -1,3 +1,7 @@
+0.2.11 (2025-12-31)
+
+* implementing the traps
+
 0.2.10 (2025-12-27)
 
 * bug fixing, pop instruction
