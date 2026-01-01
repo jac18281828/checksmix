@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::time::SystemTime;
 
 use tracing::{debug, instrument, trace};
 
@@ -405,6 +406,7 @@ pub enum TrapCode {
     Fputws = 10, // Write wide string
     Fseek = 11,  // Seek in file
     Ftell = 12,  // Get file position
+    Time = 13,   // current time in microseconds since Unix epoch
 }
 
 impl TrapCode {
@@ -424,6 +426,7 @@ impl TrapCode {
             10 => Some(TrapCode::Fputws),
             11 => Some(TrapCode::Fseek),
             12 => Some(TrapCode::Ftell),
+            13 => Some(TrapCode::Time),
             _ => None,
         }
     }
@@ -860,6 +863,7 @@ impl MMix {
             TrapCode::Fputws => self.handle_fputws(arg),
             TrapCode::Fseek => self.handle_fseek(arg),
             TrapCode::Ftell => self.handle_ftell(arg),
+            TrapCode::Time => self.handle_time(arg),
         }
     }
 
@@ -1379,6 +1383,26 @@ impl MMix {
                 debug!(fd, "File not open");
             }
         }
+        self.advance_pc();
+        true
+    }
+
+    fn handle_time(&mut self, unit: u8) -> bool {
+        let start = SystemTime::UNIX_EPOCH;
+        let now = SystemTime::now();
+        let duration = now.duration_since(start).unwrap_or_default();
+
+        let time_value = match unit {
+            0 => duration.as_secs(),          // Seconds (default)
+            1 => duration.as_millis() as u64, // Milliseconds
+            2 => duration.as_micros() as u64, // Microseconds
+            _ => {
+                debug!("Invalid time unit: {}", unit);
+                0
+            }
+        };
+        debug!("TRAP: Time (unit={}) => {}", unit, time_value);
+        self.set_register(255, time_value);
         self.advance_pc();
         true
     }
@@ -8044,5 +8068,79 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_trap_time_microseconds() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Time, 2 (get time in microseconds)
+        mmix.write_tetra(0, 0x00000D02); // TRAP 0, 13, 2 (Time in microseconds)
+
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_pc(), 4); // PC advanced
+
+        let time_us = mmix.get_register(255);
+        // Time should be greater than 0 (some time has passed since Unix epoch)
+        assert!(time_us > 0);
+        // Time should be reasonable (after Jan 1, 2020)
+        // Jan 1, 2020 00:00:00 UTC = 1577836800 seconds = 1577836800000000 microseconds
+        assert!(time_us > 1_577_836_800_000_000);
+        // Time should be before year 3000 (approximately)
+        // Jan 1, 3000 00:00:00 UTC ≈ 32503680000 seconds ≈ 32503680000000000 microseconds
+        assert!(time_us < 32_503_680_000_000_000);
+    }
+
+    #[test]
+    fn test_trap_time_milliseconds() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Time, 1 (get time in milliseconds)
+        mmix.write_tetra(0, 0x00000D01); // TRAP 0, 13, 1 (Time in milliseconds)
+
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_pc(), 4);
+
+        let time_ms = mmix.get_register(255);
+        assert!(time_ms > 0);
+        // After Jan 1, 2020 in milliseconds
+        assert!(time_ms > 1_577_836_800_000);
+        // Before year 3000 in milliseconds
+        assert!(time_ms < 32_503_680_000_000);
+    }
+
+    #[test]
+    fn test_trap_time_seconds() {
+        let mut mmix = MMix::new();
+        // TRAP 0, Time, 0 (get time in seconds)
+        mmix.write_tetra(0, 0x00000D00); // TRAP 0, 13, 0 (Time in seconds)
+
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_pc(), 4);
+
+        let time_s = mmix.get_register(255);
+        assert!(time_s > 0);
+        // After Jan 1, 2020 in seconds
+        assert!(time_s > 1_577_836_800);
+        // Before year 3000 in seconds
+        assert!(time_s < 32_503_680_000);
+    }
+
+    #[test]
+    fn test_trap_time_monotonic() {
+        let mut mmix = MMix::new();
+        // Get time twice and ensure second is >= first (monotonic)
+        mmix.write_tetra(0, 0x00000D02); // TRAP 0, 13, 2 (microseconds)
+        mmix.execute_instruction();
+        let time1 = mmix.get_register(255);
+
+        // Reset PC and execute again
+        mmix.set_pc(0);
+        mmix.execute_instruction();
+        let time2 = mmix.get_register(255);
+
+        // Time should be monotonic (second time >= first time)
+        assert!(time2 >= time1);
     }
 }

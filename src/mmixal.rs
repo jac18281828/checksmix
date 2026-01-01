@@ -6,6 +6,12 @@ use tracing::{debug, instrument};
 use crate::mmix::TrapCode;
 use pest_derive::Parser;
 
+const DATA_SEGMENT_START: u64 = 0x2000000000000000;
+
+const POOL_SEGMENT_START: u64 = 0x4000000000000000;
+
+const STACK_SEGMENT_START: u64 = 0x6000000000000000;
+
 #[derive(Parser)]
 #[grammar = "mmixal.pest"]
 struct MMixalParser;
@@ -971,15 +977,15 @@ impl MMixAssembler {
         // Segment constants
         symbols.insert(
             "Data_Segment".to_string(),
-            SymbolType::Constant(0x2000000000000000),
+            SymbolType::Constant(DATA_SEGMENT_START),
         );
         symbols.insert(
             "Pool_Segment".to_string(),
-            SymbolType::Constant(0x4000000000000000),
+            SymbolType::Constant(POOL_SEGMENT_START),
         );
         symbols.insert(
             "Stack_Segment".to_string(),
-            SymbolType::Constant(0x6000000000000000),
+            SymbolType::Constant(STACK_SEGMENT_START),
         );
 
         // will be 0,1 2 for stdin, stdout, stderr respectively
@@ -1052,6 +1058,10 @@ impl MMixAssembler {
         symbols.insert(
             "Ftell".to_string(),
             SymbolType::Constant(TrapCode::Ftell as u64),
+        );
+        symbols.insert(
+            "Time".to_string(),
+            SymbolType::Constant(TrapCode::Time as u64),
         );
 
         // Preprocess the source to expand debug directives

@@ -1,3 +1,7 @@
+0.2.13 (2026-01-01)
+
+* Add trap for Time - seconds/millis/micros since epoch
+
 0.2.12 (2026-01-01)
 
 * bug fixes - print $255
