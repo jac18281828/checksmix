@@ -852,19 +852,21 @@ impl MMix {
     }
 
     /// TRAP 0: Halt - stop execution
+    /// Parameter in $255: exit code (though typically ignored, could use Z parameter)
     fn handle_halt(&mut self, _arg: u8) -> bool {
         debug!("TRAP: Halt");
-        eprintln!("HALT trap at PC={:#018x}", self.pc);
+        let exit_code = self.get_register(255);
+        eprintln!("HALT trap at PC={:#018x}, exit code={}", self.pc, exit_code);
         self.advance_pc();
         false
     }
 
     /// TRAP 1: Fopen - open a file
-    /// $0 = filename address, $1 = mode (0=read, 1=write, 2=append)
-    /// Returns file descriptor in $0, or -1 on error
-    fn handle_fopen(&mut self, _arg: u8) -> bool {
-        let filename_addr = self.get_register(0);
-        let mode = self.get_register(1) as u8;
+    /// Parameters in $255: filename address
+    /// Auxiliary parameter: mode (0=read, 1=write, 2=append)
+    /// Returns file descriptor in $255, or -1 on error
+    fn handle_fopen(&mut self, mode: u8) -> bool {
+        let filename_addr = self.get_register(255);
         let filename = self.read_cstring(filename_addr, 256);
 
         debug!(filename = %filename, mode, "TRAP: Fopen");
@@ -896,11 +898,11 @@ impl MMix {
                 if self.next_fd < 3 {
                     self.next_fd = 3;
                 }
-                self.set_register(0, fd as u64);
+                self.set_register(255, fd as u64);
                 debug!(fd, "File opened successfully");
             }
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!("File open failed");
             }
         }
@@ -909,18 +911,19 @@ impl MMix {
     }
 
     /// TRAP 2: Fclose - close a file
-    /// $0 = file descriptor
+    /// Parameter in $255: file descriptor
+    /// Returns 0 on success, -1 on error in $255
     fn handle_fclose(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
+        let fd = self.get_register(255) as u8;
         debug!(fd, "TRAP: Fclose");
 
         match self.file_handles.remove(&fd) {
             Some(_) => {
-                self.set_register(0, 0);
+                self.set_register(255, 0);
                 debug!(fd, "File closed successfully");
             }
             None => {
-                self.set_register(0, -1i64 as u64);
+                self.set_register(255, -1i64 as u64);
                 debug!(fd, "File not open");
             }
         }
@@ -929,12 +932,16 @@ impl MMix {
     }
 
     /// TRAP 3: Fread - read from file
-    /// $0 = file descriptor, $1 = buffer address, $2 = number of bytes
-    /// Returns number of bytes read in $0, or -1 on error
+    /// Parameter in $255: address of parameter block containing:
+    ///   OCTA 0: file descriptor
+    ///   OCTA 1: buffer address
+    ///   OCTA 2: number of bytes to read
+    /// Returns number of bytes read in $255, or -1 on error
     fn handle_fread(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let buffer_addr = self.get_register(1);
-        let size = self.get_register(2) as usize;
+        let param_addr = self.get_register(255);
+        let fd = self.read_octa(param_addr) as u8;
+        let buffer_addr = self.read_octa(param_addr.wrapping_add(8));
+        let size = self.read_octa(param_addr.wrapping_add(16)) as usize;
 
         debug!(
             fd,
@@ -951,17 +958,17 @@ impl MMix {
                         for (i, &byte) in buffer[..bytes_read].iter().enumerate() {
                             self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
                         }
-                        self.set_register(0, bytes_read as u64);
+                        self.set_register(255, bytes_read as u64);
                         debug!(bytes_read, "Read successful");
                     }
                     Err(_) => {
-                        self.set_register(0, (-1i64) as u64);
+                        self.set_register(255, (-1i64) as u64);
                         debug!("Read failed");
                     }
                 }
             }
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open for read");
             }
         }
@@ -970,12 +977,15 @@ impl MMix {
     }
 
     /// TRAP 4: Fgets - read a line from file (up to newline)
-    /// $0 = file descriptor, $1 = buffer address, $2 = maximum buffer size
-    /// Returns number of bytes read in $0, or -1 on error
-    fn handle_fgets(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let buffer_addr = self.get_register(1);
-        let max_size = self.get_register(2) as usize;
+    /// Parameter in $255: address of parameter block containing:
+    ///   OCTA 0: buffer address
+    ///   OCTA 1: maximum buffer size
+    /// Auxiliary parameter (Z): file descriptor (0=stdin)
+    /// Returns number of bytes read in $255, or -1 on error
+    fn handle_fgets(&mut self, fd: u8) -> bool {
+        let param_addr = self.get_register(255);
+        let buffer_addr = self.read_octa(param_addr);
+        let max_size = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
             fd,
@@ -1008,15 +1018,15 @@ impl MMix {
                         self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
                     }
                     self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
-                    self.set_register(0, bytes_read as u64);
+                    self.set_register(255, bytes_read as u64);
                     debug!(bytes_read, "Fgets successful");
                 } else {
-                    self.set_register(0, 0);
+                    self.set_register(255, 0);
                     debug!("EOF reached");
                 }
             }
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open for read");
             }
         }
@@ -1025,11 +1035,15 @@ impl MMix {
     }
 
     /// TRAP 5: Fgetws - read a wide string from file (same as Fgets for now)
-    /// $0 = file descriptor, $1 = buffer address, $2 = maximum buffer size
-    fn handle_fgetws(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let buffer_addr = self.get_register(1);
-        let max_size = self.get_register(2) as usize;
+    /// Parameter in $255: address of parameter block containing:
+    ///   OCTA 0: buffer address
+    ///   OCTA 1: maximum buffer size
+    /// Auxiliary parameter (Z): file descriptor
+    /// Returns number of bytes read in $255, or -1 on error
+    fn handle_fgetws(&mut self, fd: u8) -> bool {
+        let param_addr = self.get_register(255);
+        let buffer_addr = self.read_octa(param_addr);
+        let max_size = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
             fd,
@@ -1062,15 +1076,15 @@ impl MMix {
                         self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
                     }
                     self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
-                    self.set_register(0, bytes_read as u64);
+                    self.set_register(255, bytes_read as u64);
                     debug!(bytes_read, "Fgetws successful");
                 } else {
-                    self.set_register(0, 0);
+                    self.set_register(255, 0);
                     debug!("EOF reached");
                 }
             }
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open for read");
             }
         }
@@ -1079,12 +1093,16 @@ impl MMix {
     }
 
     /// TRAP 6: Fwrite - write to file
-    /// $0 = file descriptor, $1 = buffer address, $2 = number of bytes
-    /// Returns number of bytes written in $0, or -1 on error
+    /// Parameter in $255: address of parameter block containing:
+    ///   OCTA 0: file descriptor
+    ///   OCTA 1: buffer address
+    ///   OCTA 2: number of bytes to write
+    /// Returns number of bytes written in $255, or -1 on error
     fn handle_fwrite(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let buffer_addr = self.get_register(1);
-        let size = self.get_register(2) as usize;
+        let param_addr = self.get_register(255);
+        let fd = self.read_octa(param_addr) as u8;
+        let buffer_addr = self.read_octa(param_addr.wrapping_add(8));
+        let size = self.read_octa(param_addr.wrapping_add(16)) as usize;
 
         debug!(
             fd,
@@ -1101,16 +1119,16 @@ impl MMix {
         match self.file_handles.get_mut(&fd) {
             Some(file) => match file.write_all(&buffer) {
                 Ok(_) => {
-                    self.set_register(0, size as u64);
+                    self.set_register(255, size as u64);
                     debug!(size, "Write successful");
                 }
                 Err(_) => {
-                    self.set_register(0, (-1i64) as u64);
+                    self.set_register(255, (-1i64) as u64);
                     debug!("Write failed");
                 }
             },
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open for write");
             }
         }
@@ -1119,9 +1137,11 @@ impl MMix {
     }
 
     /// TRAP 7: Fputs - write null-terminated string
-    /// $0 = string address, arg = file descriptor (1=stdout, 2=stderr)
+    /// Parameter in $255: string address
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
+    /// Returns character count in $255
     fn handle_fputs(&mut self, arg: u8) -> bool {
-        let str_addr = self.get_register(0);
+        let str_addr = self.get_register(255);
         let mut output = String::new();
         let mut addr = str_addr;
 
@@ -1138,6 +1158,7 @@ impl MMix {
             }
         }
 
+        let char_count = output.len() as u64;
         match arg {
             1 => print!("{}", output),
             2 => eprint!("{}", output),
@@ -1145,41 +1166,43 @@ impl MMix {
         }
 
         debug!(arg, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputs");
+        self.set_register(255, char_count);
         self.advance_pc();
         true
     }
 
-    /// TRAP 8: Fputc - write a character to file
-    /// $0 = file descriptor, $1 = character
-    fn handle_fputc(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let ch = self.get_register(1) as u8;
+    /// TRAP 8: Fputc - write a character
+    /// Parameter in $255: character code
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
+    /// Returns 0 on success, -1 on error in $255
+    fn handle_fputc(&mut self, fd_arg: u8) -> bool {
+        let ch = (self.get_register(255) & 0xFF) as u8;
 
-        debug!(fd, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
+        debug!(fd = fd_arg, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
 
-        match fd {
+        match fd_arg {
             1 => {
                 print!("{}", ch as char);
-                self.set_register(0, 0);
+                self.set_register(255, 0);
             }
             2 => {
                 eprint!("{}", ch as char);
-                self.set_register(0, 0);
+                self.set_register(255, 0);
             }
-            _ => match self.file_handles.get_mut(&fd) {
+            _ => match self.file_handles.get_mut(&fd_arg) {
                 Some(file) => match file.write_all(&[ch]) {
                     Ok(_) => {
-                        self.set_register(0, 0);
+                        self.set_register(255, 0);
                         debug!("Fputc successful");
                     }
                     Err(_) => {
-                        self.set_register(0, (-1i64) as u64);
+                        self.set_register(255, (-1i64) as u64);
                         debug!("Fputc write failed");
                     }
                 },
                 None => {
-                    self.set_register(0, (-1i64) as u64);
-                    debug!(fd, "File not open for write");
+                    self.set_register(255, (-1i64) as u64);
+                    debug!(fd = fd_arg, "File not open for write");
                 }
             },
         }
@@ -1188,10 +1211,11 @@ impl MMix {
     }
 
     /// TRAP 9: Fputws - write a wide string to file (same as Fputs for now)
-    /// $0 = file descriptor, $1 = string address
-    fn handle_fputws(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let str_addr = self.get_register(1);
+    /// Parameter in $255: string address
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
+    /// Returns character count in $255, or -1 on error
+    fn handle_fputws(&mut self, fd: u8) -> bool {
+        let str_addr = self.get_register(255);
         let mut output = String::new();
         let mut addr = str_addr;
 
@@ -1208,28 +1232,29 @@ impl MMix {
             }
         }
 
+        let char_count = output.len() as u64;
         match fd {
             1 => {
                 print!("{}", output);
-                self.set_register(0, 0);
+                self.set_register(255, char_count);
             }
             2 => {
                 eprint!("{}", output);
-                self.set_register(0, 0);
+                self.set_register(255, char_count);
             }
             _ => match self.file_handles.get_mut(&fd) {
                 Some(file) => match file.write_all(output.as_bytes()) {
                     Ok(_) => {
-                        self.set_register(0, 0);
+                        self.set_register(255, char_count);
                         debug!("Fputws successful");
                     }
                     Err(_) => {
-                        self.set_register(0, (-1i64) as u64);
+                        self.set_register(255, (-1i64) as u64);
                         debug!("Fputws write failed");
                     }
                 },
                 None => {
-                    self.set_register(0, (-1i64) as u64);
+                    self.set_register(255, (-1i64) as u64);
                     debug!(fd, "File not open for write");
                 }
             },
@@ -1240,12 +1265,16 @@ impl MMix {
     }
 
     /// TRAP 10: Fseek - seek in file
-    /// $0 = file descriptor, $1 = offset (as i64), $2 = whence (0=start, 1=current, 2=end)
-    /// Returns new position in $0, or -1 on error
+    /// Parameter in $255: address of parameter block containing:
+    ///   OCTA 0: file descriptor
+    ///   OCTA 1: offset (as i64)
+    ///   OCTA 2: whence (0=start, 1=current, 2=end)
+    /// Returns new position in $255, or -1 on error
     fn handle_fseek(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
-        let offset = self.get_register(1) as i64;
-        let whence = self.get_register(2) as u8;
+        let param_addr = self.get_register(255);
+        let fd = self.read_octa(param_addr) as u8;
+        let offset = self.read_octa(param_addr.wrapping_add(8)) as i64;
+        let whence = self.read_octa(param_addr.wrapping_add(16)) as u8;
 
         debug!(fd, offset, whence, "TRAP: Fseek");
 
@@ -1257,7 +1286,7 @@ impl MMix {
                     2 => SeekFrom::End(offset),
                     _ => {
                         debug!("Invalid seek whence: {}", whence);
-                        self.set_register(0, (-1i64) as u64);
+                        self.set_register(255, (-1i64) as u64);
                         self.advance_pc();
                         return true;
                     }
@@ -1265,17 +1294,17 @@ impl MMix {
 
                 match file.seek(seek_from) {
                     Ok(pos) => {
-                        self.set_register(0, pos);
+                        self.set_register(255, pos);
                         debug!(pos, "Seek successful");
                     }
                     Err(_) => {
-                        self.set_register(0, (-1i64) as u64);
+                        self.set_register(255, (-1i64) as u64);
                         debug!("Seek failed");
                     }
                 }
             }
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open");
             }
         }
@@ -1284,26 +1313,26 @@ impl MMix {
     }
 
     /// TRAP 11: Ftell - get file position
-    /// $0 = file descriptor
-    /// Returns current position in $0, or -1 on error
+    /// Parameter in $255: file descriptor
+    /// Returns current position in $255, or -1 on error
     fn handle_ftell(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(0) as u8;
+        let fd = self.get_register(255) as u8;
 
         debug!(fd, "TRAP: Ftell");
 
         match self.file_handles.get_mut(&fd) {
             Some(file) => match file.stream_position() {
                 Ok(pos) => {
-                    self.set_register(0, pos);
+                    self.set_register(255, pos);
                     debug!(pos, "Ftell successful");
                 }
                 Err(_) => {
-                    self.set_register(0, (-1i64) as u64);
+                    self.set_register(255, (-1i64) as u64);
                     debug!("Ftell failed");
                 }
             },
             None => {
-                self.set_register(0, (-1i64) as u64);
+                self.set_register(255, (-1i64) as u64);
                 debug!(fd, "File not open");
             }
         }
@@ -7688,12 +7717,12 @@ mod tests {
     fn test_trap_fputc_stdout() {
         let mut mmix = MMix::new();
         // TRAP 0, Fputc, 1 (write character to stdout)
-        mmix.set_register(0, 1); // file descriptor = stdout
-        mmix.set_register(1, b'X' as u64); // character 'X'
+        // Character should be in $255
+        mmix.set_register(255, b'X' as u64); // character 'X' in $255
         mmix.write_tetra(0, 0x00000801); // TRAP 0, 8, 1
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 0); // Success
+        assert_eq!(mmix.get_register(255), 0); // Success (return code 0 in $255)
         assert_eq!(mmix.get_pc(), 4);
     }
 
@@ -7708,12 +7737,11 @@ mod tests {
             mmix.write_byte(str_addr + i as u64, byte);
         }
 
-        mmix.set_register(0, 1); // file descriptor
-        mmix.set_register(1, str_addr);
-        mmix.write_tetra(0, 0x00000901); // TRAP 0, 9, 1 (Fputws)
+        mmix.set_register(255, str_addr); // $255 contains string address
+        mmix.write_tetra(0, 0x00000901); // TRAP 0, 9, 1 (Fputws to stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 0); // Success
+        assert_eq!(mmix.get_register(255), 11); // Character count returned in $255
     }
 
     #[test]
@@ -7743,13 +7771,12 @@ mod tests {
             mmix.write_byte(filename_addr + i as u64, byte);
         }
 
-        mmix.set_register(0, filename_addr); // filename address
-        mmix.set_register(1, 1); // mode = write
-        mmix.write_tetra(0, 0x00000100); // TRAP 0, 1, 0
+        mmix.set_register(255, filename_addr); // $255 contains filename address
+        mmix.write_tetra(0, 0x00000101); // TRAP 0, 1, 1 (Fopen with mode 1=write in Z)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
-        let fd = mmix.get_register(0) as u8;
+        let fd = mmix.get_register(255) as u8; // File descriptor returned in $255
         assert!(fd > 2 && fd < 255); // Valid FD (not stdin/out/err)
         assert_eq!(mmix.get_pc(), 4);
     }
@@ -7775,13 +7802,16 @@ mod tests {
         }
 
         // Write 12 bytes (excluding null terminator)
-        mmix.set_register(0, fd as u64); // file descriptor
-        mmix.set_register(1, data_addr);
-        mmix.set_register(2, 12); // number of bytes
+        // Set up parameter block for Fwrite at address 5000
+        let param_addr = 5000u64;
+        mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
+        mmix.write_octa(param_addr + 8, data_addr); // OCTA 1: buffer address
+        mmix.write_octa(param_addr + 16, 12); // OCTA 2: number of bytes
+        mmix.set_register(255, param_addr); // $255 points to parameter block
         mmix.write_tetra(0, 0x00000600); // TRAP 0, 6, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 12); // Bytes written
+        assert_eq!(mmix.get_register(255), 12); // Bytes written returned in $255
 
         // Verify file contents
         let contents = fs::read_to_string(test_file).unwrap();
@@ -7806,14 +7836,17 @@ mod tests {
 
         // Read into buffer at address 3000
         let buffer_addr = 3000u64;
-        mmix.set_register(0, fd as u64); // file descriptor
-        mmix.set_register(1, buffer_addr);
-        mmix.set_register(2, 20); // max bytes to read
+        // Set up parameter block for Fread at address 4000
+        let param_addr = 4000u64;
+        mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
+        mmix.write_octa(param_addr + 8, buffer_addr); // OCTA 1: buffer address
+        mmix.write_octa(param_addr + 16, 20); // OCTA 2: max bytes to read
+        mmix.set_register(255, param_addr); // $255 points to parameter block
         mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
-        let bytes_read = mmix.get_register(0);
+        let bytes_read = mmix.get_register(255);
         assert_eq!(bytes_read, 12); // "Test Content" is 12 bytes
 
         // Verify read data
@@ -7842,14 +7875,16 @@ mod tests {
 
         // Read line into buffer
         let buffer_addr = 4000u64;
-        mmix.set_register(0, fd as u64);
-        mmix.set_register(1, buffer_addr);
-        mmix.set_register(2, 50); // max size
-        mmix.write_tetra(0, 0x00000400); // TRAP 0, 4, 0
+        // Set up parameter block for Fgets at address 5000
+        let param_addr = 5000u64;
+        mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
+        mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
+        mmix.set_register(255, param_addr); // $255 points to parameter block
+        mmix.write_tetra(0, 0x00000403); // TRAP 0, 4, 3 (Fgets from fd 3)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
-        let bytes_read = mmix.get_register(0);
+        let bytes_read = mmix.get_register(255);
         // Read line includes the newline character, so "First Line\n" = 11 bytes
         assert_eq!(bytes_read, 11);
 
@@ -7867,11 +7902,11 @@ mod tests {
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
-        mmix.set_register(0, fd as u64);
+        mmix.set_register(255, fd as u64); // $255 contains file descriptor
         mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 0); // Success
+        assert_eq!(mmix.get_register(255), 0); // Success returned in $255
         assert!(!mmix.file_handles.contains_key(&fd)); // File removed
 
         // Clean up
@@ -7882,11 +7917,11 @@ mod tests {
     fn test_trap_fclose_error() {
         let mut mmix = MMix::new();
         // Try to close non-existent file
-        mmix.set_register(0, 99u64); // Non-existent FD
+        mmix.set_register(255, 99u64); // Non-existent FD in $255
         mmix.write_tetra(0, 0x00000200); // TRAP 0, 2, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), (-1i64) as u64); // Error
+        assert_eq!(mmix.get_register(255), (-1i64) as u64); // Error returned in $255
     }
 
     #[test]
@@ -7902,13 +7937,15 @@ mod tests {
         mmix.file_handles.insert(fd, file);
 
         // Seek to position 5
-        mmix.set_register(0, fd as u64);
-        mmix.set_register(1, 5i64 as u64); // offset
-        mmix.set_register(2, 0); // whence = start
+        let param_addr = 5000u64;
+        mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
+        mmix.write_octa(param_addr + 8, 5i64 as u64); // OCTA 1: offset
+        mmix.write_octa(param_addr + 16, 0); // OCTA 2: whence = start
+        mmix.set_register(255, param_addr); // $255 points to parameter block
         mmix.write_tetra(0, 0x00000A00); // TRAP 0, 10, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 5); // New position
+        assert_eq!(mmix.get_register(255), 5); // New position returned in $255
 
         // Clean up
         let _ = fs::remove_file(test_file);
@@ -7927,11 +7964,11 @@ mod tests {
         mmix.file_handles.insert(fd, file);
 
         // Get current position (should be 0)
-        mmix.set_register(0, fd as u64);
+        mmix.set_register(255, fd as u64); // $255 contains file descriptor
         mmix.write_tetra(0, 0x00000B00); // TRAP 0, 11, 0
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(0), 0); // Position 0
+        assert_eq!(mmix.get_register(255), 0); // Position 0 returned in $255
 
         // Clean up
         let _ = fs::remove_file(test_file);
@@ -7950,14 +7987,16 @@ mod tests {
         mmix.file_handles.insert(fd, file);
 
         let buffer_addr = 5000u64;
-        mmix.set_register(0, fd as u64);
-        mmix.set_register(1, buffer_addr);
-        mmix.set_register(2, 50);
-        mmix.write_tetra(0, 0x00000500); // TRAP 0, 5, 0
+        // Set up parameter block for Fgetws at address 6000
+        let param_addr = 6000u64;
+        mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
+        mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
+        mmix.set_register(255, param_addr); // $255 points to parameter block
+        mmix.write_tetra(0, 0x00000503); // TRAP 0, 5, 3 (Fgetws from fd 3)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
 
-        let bytes_read = mmix.get_register(0);
+        let bytes_read = mmix.get_register(255); // Return value in $255
         assert!(bytes_read > 0);
 
         // Clean up

@@ -2352,7 +2352,7 @@ Test186Skip
 % ========================================
 % All tests passed!
 % ========================================
-TestPass        SETI $0,PassMsg
+TestPass        SETI $255,PassMsg
         TRAP    0,Fputs,StdOut
         SETI Result,#FFFF    % Success marker
         TRAP    0,Halt,0        % Halt successfully
@@ -2360,7 +2360,7 @@ TestPass        SETI $0,PassMsg
 % ========================================
 % Test failed
 % ========================================
-TestFail        SETI $0,FailMsg
+TestFail        SETI $255,FailMsg
         TRAP    0,Fputs,StdOut
         SETI Result,#DEAD    % Failure marker
         OR      FailNum,TestNum,Zero    % Copy TestNum to FailNum
