@@ -542,7 +542,6 @@ struct FrameInfo {
 
 pub struct MMix {
     /// 256 general-purpose registers, each 64 bits
-    /// Register $255 is special: its value is always zero
     general_regs: [u64; 256],
 
     /// 32 special-purpose registers, each 64 bits
@@ -607,21 +606,13 @@ impl MMix {
     }
 
     /// Get the value of a general-purpose register.
-    /// Register $255 always returns 0.
     pub fn get_register(&self, reg: u8) -> u64 {
-        if reg == 255 {
-            0 // $255 is always zero
-        } else {
-            self.general_regs[reg as usize]
-        }
+        self.general_regs[reg as usize]
     }
 
     /// Set the value of a general-purpose register.
-    /// Writes to $255 are ignored (it remains zero).
     pub fn set_register(&mut self, reg: u8, value: u64) {
-        if reg != 255 {
-            self.general_regs[reg as usize] = value;
-        }
+        self.general_regs[reg as usize] = value;
     }
 
     /// Get the value of a special-purpose register.
@@ -887,7 +878,6 @@ impl MMix {
                 .open(&filename)
                 .ok(),
             2 => OpenOptions::new()
-                .write(true)
                 .create(true)
                 .append(true)
                 .open(&filename)
@@ -3671,13 +3661,6 @@ mod tests {
     }
 
     #[test]
-    fn test_register_255_always_zero() {
-        let mut mmix = MMix::new();
-        mmix.set_register(255, 42);
-        assert_eq!(mmix.get_register(255), 0);
-    }
-
-    #[test]
     fn test_general_registers() {
         let mut mmix = MMix::new();
         mmix.set_register(1, 0x123456789ABCDEF0);
@@ -4196,11 +4179,11 @@ mod tests {
     #[test]
     fn test_incl_register_255() {
         let mut mmix = MMix::new();
-        // INCL $255, YZ=0x0102 - should not modify $255
+        // INCL $255, YZ=0x0102 - should modify $255 like any other register
         mmix.write_tetra(0, 0xE7FF0102);
 
         mmix.execute_instruction();
-        assert_eq!(mmix.get_register(255), 0); // Still zero
+        assert_eq!(mmix.get_register(255), 0x0102); // Should have the immediate value
     }
 
     #[test]

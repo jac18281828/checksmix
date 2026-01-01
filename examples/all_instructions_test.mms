@@ -24,6 +24,7 @@ Temp    IS      $254    % Temporary register (canonical t register)
 Zero    IS      $255    % ZERO register
 
 Main    SETI TestNum,0       % Initialize test counter
+        SETI Zero,0         % Initialize $255 to 0 (constant zero)
 
 % ========================================
 % Test 1: SET and immediate load instructions
@@ -547,9 +548,10 @@ Test43  ADDUI   TestNum,TestNum,1       % Increment test counter
         JMP     TestFail
 
 % ========================================
-% Test 44: $255 is ZERO register check
+% Test 44: Register $255 as normal register
 % ========================================
 Test44  ADDUI   TestNum,TestNum,1       % Increment test counter
+        SETI $255,0         % Initialize $255 to 0
         SETI $10,12345
         ADD     Result,$10,Zero
         SETI Expect,12345

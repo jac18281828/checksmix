@@ -1,4 +1,3 @@
-Zero    IS      $255
         LOC     #100
 
 Main    SETI $1,100          

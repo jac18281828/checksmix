@@ -26,7 +26,8 @@ Node3   OCTA    3               % node3.value = 3
 
 Zero    IS      $255        
 
-Start   SETI $5,0                % sum = 0
+Start   SETI    $5,0                % sum = 0
+        SETI    $255,0              % $255 = 0
         LDA     $1,Node1            % head = address of node1
 
         % -------- traversal: sum all values --------
