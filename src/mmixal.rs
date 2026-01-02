@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::io::{stderr, stdin, stdout};
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use tracing::{debug, instrument};
 
 use crate::mmix::TrapCode;
@@ -11,6 +14,30 @@ const DATA_SEGMENT_START: u64 = 0x2000000000000000;
 const POOL_SEGMENT_START: u64 = 0x4000000000000000;
 
 const STACK_SEGMENT_START: u64 = 0x6000000000000000;
+
+#[cfg(unix)]
+fn stdio_raw_identifiers() -> (u64, u64, u64) {
+    (
+        stdin().as_raw_fd() as u64,
+        stdout().as_raw_fd() as u64,
+        stderr().as_raw_fd() as u64,
+    )
+}
+
+#[cfg(windows)]
+fn stdio_raw_identifiers() -> (u64, u64, u64) {
+    (
+        stdin().as_raw_handle() as usize as u64,
+        stdout().as_raw_handle() as usize as u64,
+        stderr().as_raw_handle() as usize as u64,
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stdio_raw_identifiers() -> (u64, u64, u64) {
+    // Fallback: conventional descriptor ordering
+    (0, 1, 2)
+}
 
 #[derive(Parser)]
 #[grammar = "mmixal.pest"]
@@ -1021,24 +1048,13 @@ impl MMixAssembler {
             SymbolType::Constant(STACK_SEGMENT_START),
         );
 
-        // will be 0,1 2 for stdin, stdout, stderr respectively
-        let stdin_file_no = stdin().as_raw_fd();
-        let stdout_file_no = stdout().as_raw_fd();
-        let stderr_file_no = stderr().as_raw_fd();
+        // OS-specific raw stdio identifiers (fds on Unix, handles on Windows)
+        let (stdin_file_no, stdout_file_no, stderr_file_no) = stdio_raw_identifiers();
 
         // Standard I/O handles
-        symbols.insert(
-            "StdIn".to_string(),
-            SymbolType::Constant(stdin_file_no as u64),
-        );
-        symbols.insert(
-            "StdOut".to_string(),
-            SymbolType::Constant(stdout_file_no as u64),
-        );
-        symbols.insert(
-            "StdErr".to_string(),
-            SymbolType::Constant(stderr_file_no as u64),
-        );
+        symbols.insert("StdIn".to_string(), SymbolType::Constant(stdin_file_no));
+        symbols.insert("StdOut".to_string(), SymbolType::Constant(stdout_file_no));
+        symbols.insert("StdErr".to_string(), SymbolType::Constant(stderr_file_no));
         // Common TRAP function codes (C library emulation)
         symbols.insert(
             "Halt".to_string(),
