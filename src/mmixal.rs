@@ -970,6 +970,39 @@ impl MMixAssembler {
         debug!("Preprocessed source:\n{}", result);
         result
     }
+
+    /// Count the actual number of bytes in a string literal, accounting for escape sequences
+    fn count_string_bytes(content: &str) -> usize {
+        let mut count = 0;
+        let mut chars = content.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                // Escape sequence - check what follows
+                if let Some(next_ch) = chars.next() {
+                    match next_ch {
+                        'n' | 'r' | 't' | '0' | '\\' | '\'' | '"' => {
+                            // These all represent single bytes
+                            count += 1;
+                        }
+                        _ => {
+                            // Unknown escape - count as the character itself
+                            count += 1;
+                        }
+                    }
+                } else {
+                    // Backslash at end of string
+                    count += 1;
+                }
+            } else {
+                // Regular character
+                count += 1;
+            }
+        }
+
+        count
+    }
+
     pub fn new(source: &str, filename: &str) -> Self {
         let mut symbols = HashMap::new();
 
@@ -1449,7 +1482,7 @@ impl MMixAssembler {
 
         match directive.as_rule() {
             Rule::directive_byte => {
-                // Count total bytes from all values (strings expand)
+                // Count total bytes from all values (strings expand, escape sequences counted correctly)
                 let mut total_size = 0u64;
                 let byte_values = parts.next().ok_or("Missing byte values")?;
 
@@ -1458,12 +1491,13 @@ impl MMixAssembler {
                     let first = value_parts.next().unwrap();
 
                     if first.as_rule() == Rule::string_literal {
-                        // String: count characters + process escape sequences
+                        // String: count bytes accounting for escape sequences
                         let text = first.as_str();
                         // Remove surrounding quotes
                         let content = &text[1..text.len() - 1];
-                        total_size += content.len() as u64;
-                        debug!("BYTE string: \"{}\" = {} bytes", content, content.len());
+                        let byte_count = Self::count_string_bytes(content);
+                        total_size += byte_count as u64;
+                        debug!("BYTE string: \"{}\" = {} bytes", content, byte_count);
                     } else {
                         // Single value (number or expr)
                         total_size += 1;
