@@ -1,3 +1,7 @@
+0.2.14 (2026-01-01)
+
+* add register symbols
+
 0.2.13 (2026-01-01)
 
 * Add trap for Time - seconds/millis/micros since epoch
