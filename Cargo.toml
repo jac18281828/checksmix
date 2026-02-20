@@ -28,6 +28,6 @@ pest = "2.7"
 pest_derive = "2.8"
 lyn = "0.1.0"
 tracing = "0.1.44"
-regex = "1.10"
+regex = "1.12"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.6", features = ["derive"] }
