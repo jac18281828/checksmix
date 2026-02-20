@@ -24,7 +24,7 @@ strip = true
 panic = "abort"
 
 [dependencies]
-pest = "2.7"
+pest = "2.8"
 pest_derive = "2.7"
 lyn = "0.1.0"
 tracing = "0.1.44"
