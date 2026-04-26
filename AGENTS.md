@@ -60,6 +60,6 @@ Do not mark work complete until all gates pass.
 
 1. Work on a branch (`claude/<topic>`); never commit directly to `main`.
 2. FF-merge into `main` (`git merge --ff-only`); no force pushes to `main`.
-3. Create a signed annotated tag `vX.Y.Z` on the merge commit and push it — the `publish-crate` workflow publishes on tag push.
+3. Create a signed annotated tag `X.Y.Z` on the merge commit and push it — the `publish-crate` workflow publishes on tag push.
 4. Bump `crates/core/Cargo.toml` and `crates/cli/Cargo.toml` to the next patch on the branch; commit as `docs: X.Y.Z`; push the branch.
 5. The tag version matches the code version *at the tagged commit*; the `docs: X.Y.Z` commit prepares the *next* release.
