@@ -2387,7 +2387,62 @@ Test189 ADDUI   TestNum,TestNum,1
         FEQLE   Result,$10,$11         % |10-11| = 1 ≤ 2 → 1
         SETI Expect,1
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test190
+        JMP     TestFail
+
+% ========================================
+% Test 190: directed rounding (ROUND_UP) changes FADD result
+%   1.0 + 2^-53 rounds to 1.0 in default mode (ties-to-even),
+%   but to next_up(1.0) under ROUND_UP — they must differ.
+% ========================================
+Test190 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,1             % 1.0
+        GETA    $13,FpStdData
+        LDOI    $11,$13,0              % 2^-53 from data
+        PUTI    rA,0                   % ROUND_NEAR
+        FADD    $12,$10,$11            % 1.0 (rounds to even)
+        PUTI    rA,2                   % ROUND_UP
+        FADD    $14,$10,$11            % next_up(1.0)
+        FEQL    Result,$12,$14         % expect 0 (different)
+        SETI    Expect,0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test191
+        PUTI    rA,0
+        JMP     TestFail
+
+% ========================================
+% Test 191: signaling NaN raises rA.I (#08)
+% ========================================
+Test191 ADDUI   TestNum,TestNum,1
+        PUTI    rA,0                   % clear flags
+        GETA    $13,FpStdData
+        LDOI    $10,$13,8              % sNaN bit pattern
+        FLOTI   $11,Zero,1             % 1.0
+        FADD    $12,$10,$11            % NaN, raises I
+        GET     Result,rA
+        SETI    $15,#08                % I bit
+        AND     Result,Result,$15
+        SETI    Expect,#08
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test192
+        PUTI    rA,0
+        JMP     TestFail
+
+% ========================================
+% Test 192: inexact (X = #04) flag on 1.0 / 3.0
+% ========================================
+Test192 ADDUI   TestNum,TestNum,1
+        PUTI    rA,0                   % clear flags
+        FLOTI   $10,Zero,1
+        FLOTI   $11,Zero,3
+        FDIV    $12,$10,$11            % 1/3 inexact
+        GET     Result,rA
+        SETI    $15,#04                % X bit
+        AND     Result,Result,$15
+        SETI    Expect,#04
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
+        PUTI    rA,0
         JMP     TestFail
 
 % ========================================
@@ -2443,6 +2498,14 @@ ShortFloatData
         TETRA   0                       % Offset 12 (for STSFI test)
         OCTA    #400921FB60000000       % 3.14159265 converted to 64-bit (expected for offset 0)
         OCTA    #401921FB60000000       % 6.28318530 converted to 64-bit (expected for offset 4)
+
+% Data for FP standards tests (Tests 190–192)
+%   offset 0:  2^-53, the half-ULP increment above 1.0 in f64
+%   offset 8:  signaling NaN (exponent all 1s, mantissa 0x...0001, bit 51 = 0)
+        OCTA    0
+FpStdData
+        OCTA    #3CA0000000000000
+        OCTA    #7FF0000000000001
 
 % Data for virtual translation tests
         OCTA    0

@@ -817,15 +817,38 @@ impl MMix {
         }
     }
 
-    /// Compute rA event flags for a binary IEEE 754 operation `result = op(a, b)`.
-    /// Inexact (X) is reported only when at least one operand is denormal or the
-    /// rounded result clearly differs from a wider-precision recomputation; that
-    /// generic detection is intractable in pure f64, so X is left to the per-op
-    /// callers (FIX/FIXU/SFLOT/STSF) where it is precisely defined.
+    /// True iff `x` is a signaling NaN per IEEE 754 binary64 (exponent all 1s,
+    /// mantissa nonzero, high mantissa bit clear).
+    #[inline]
+    fn is_signaling_nan(x: f64) -> bool {
+        let bits = x.to_bits();
+        let exp = (bits >> 52) & 0x7FF;
+        let mant = bits & 0x000F_FFFF_FFFF_FFFF;
+        exp == 0x7FF && mant != 0 && (mant & (1u64 << 51)) == 0
+    }
+
+    /// Force any NaN to its quiet form by setting the high mantissa bit. Leaves
+    /// non-NaN values unchanged. Used to suppress sNaN propagation per IEEE 754.
+    #[inline]
+    fn quiet_nan(x: f64) -> f64 {
+        if x.is_nan() {
+            f64::from_bits(x.to_bits() | (1u64 << 51))
+        } else {
+            x
+        }
+    }
+
+    /// Compute rA event flags for a binary IEEE 754 operation. The X flag is
+    /// reported by callers that supply an exact residual (`finalize_fp_binop`).
+    /// D is raised on denormalized **operands** only — subnormal results are
+    /// covered by U.
     #[inline]
     fn fp_arith_flags(a: f64, b: f64, result: f64) -> u64 {
         let mut flags = 0u64;
-        if a.is_subnormal() || b.is_subnormal() || result.is_subnormal() {
+        if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
+            flags |= RA_I;
+        }
+        if a.is_subnormal() || b.is_subnormal() {
             flags |= RA_D;
         }
         if !a.is_nan() && !b.is_nan() && result.is_nan() {
@@ -842,21 +865,141 @@ impl MMix {
         flags
     }
 
-    /// Compute rA event flags for a unary IEEE 754 operation `result = op(a)`.
+    /// Veltkamp-Knuth 2Sum: returns `(s, err)` such that `s + err == a + b`
+    /// exactly, where `s = a + b` rounded to nearest-even. Valid for all
+    /// finite operands (no overflow case here — caller checks `s.is_finite()`).
     #[inline]
-    fn fp_unop_flags(a: f64, result: f64) -> u64 {
+    fn two_sum(a: f64, b: f64) -> (f64, f64) {
+        let s = a + b;
+        let bb = s - a;
+        let err = (a - (s - bb)) + (b - bb);
+        (s, err)
+    }
+
+    /// Apply MMIX rA rounding mode to `r` (the round-to-nearest-even result of
+    /// some op) given an exact residual `err` whose sign equals
+    /// `sign(true_result - r)`. `err == 0` means the result is exact.
+    #[inline]
+    fn apply_directed_rounding(r: f64, err: f64, mode: u64) -> f64 {
+        if err == 0.0 || !r.is_finite() {
+            return r;
+        }
+        match mode & 0x3 {
+            0 => r,
+            1 => {
+                if r > 0.0 && err < 0.0 {
+                    r.next_down()
+                } else if r < 0.0 && err > 0.0 {
+                    r.next_up()
+                } else {
+                    r
+                }
+            }
+            2 => {
+                if err > 0.0 {
+                    r.next_up()
+                } else {
+                    r
+                }
+            }
+            3 => {
+                if err < 0.0 {
+                    r.next_down()
+                } else {
+                    r
+                }
+            }
+            _ => r,
+        }
+    }
+
+    /// On overflow (finite operands → infinite hardware result), directed
+    /// rounding modes ROUND_OFF and the "wrong-sign" infinity for ±∞ modes
+    /// must clamp to ±MAX instead of leaving ±Inf.
+    #[inline]
+    fn clamp_overflow_for_mode(r: f64, mode: u64) -> f64 {
+        if !r.is_infinite() {
+            return r;
+        }
+        match (r.is_sign_positive(), mode & 0x3) {
+            (true, 1) | (true, 3) => f64::MAX,
+            (false, 1) | (false, 2) => -f64::MAX,
+            _ => r,
+        }
+    }
+
+    /// Finalize a binary FP op given the round-to-nearest-even result `r_near`
+    /// and an exact residual `err` (`sign(err) == sign(true - r_near)`, `err==0`
+    /// means exact). Returns `(adjusted_result, flags)`. Centralizes sNaN
+    /// quieting, overflow clamping per rA mode, X / I / O / U / D / W detection.
+    fn finalize_fp_binop(&self, a: f64, b: f64, r_near: f64, err: f64) -> (f64, u64) {
+        let mode = self.get_special(SpecialReg::RA) & 0x3;
         let mut flags = 0u64;
-        if a.is_subnormal() || result.is_subnormal() {
+        if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
+            flags |= RA_I;
+        }
+        if a.is_subnormal() || b.is_subnormal() {
             flags |= RA_D;
         }
-        if !a.is_nan() && result.is_nan() {
-            flags |= RA_I;
-        } else if a.is_finite() && result.is_infinite() {
-            flags |= RA_O;
-        } else if !a.is_nan() && a != 0.0 && (result == 0.0 || result.is_subnormal()) {
+        let result = if r_near.is_nan() {
+            if !a.is_nan() && !b.is_nan() {
+                flags |= RA_I;
+            }
+            Self::quiet_nan(r_near)
+        } else if r_near.is_infinite() && a.is_finite() && b.is_finite() {
+            flags |= RA_O | RA_X;
+            Self::clamp_overflow_for_mode(r_near, mode)
+        } else if r_near.is_finite() {
+            if err != 0.0 {
+                flags |= RA_X;
+            }
+            Self::apply_directed_rounding(r_near, err, mode)
+        } else {
+            r_near
+        };
+        if result.is_finite()
+            && !a.is_nan()
+            && !b.is_nan()
+            && a != 0.0
+            && b != 0.0
+            && (result == 0.0 || result.is_subnormal())
+        {
             flags |= RA_U;
         }
-        flags
+        (result, flags)
+    }
+
+    /// Finalize a unary FP op (FSQRT). Same shape as `finalize_fp_binop`.
+    fn finalize_fp_unop(&self, a: f64, r_near: f64, err: f64) -> (f64, u64) {
+        let mode = self.get_special(SpecialReg::RA) & 0x3;
+        let mut flags = 0u64;
+        if Self::is_signaling_nan(a) {
+            flags |= RA_I;
+        }
+        if a.is_subnormal() {
+            flags |= RA_D;
+        }
+        let result = if r_near.is_nan() {
+            if !a.is_nan() {
+                flags |= RA_I;
+            }
+            Self::quiet_nan(r_near)
+        } else if r_near.is_infinite() && a.is_finite() {
+            flags |= RA_O | RA_X;
+            Self::clamp_overflow_for_mode(r_near, mode)
+        } else if r_near.is_finite() {
+            if err != 0.0 {
+                flags |= RA_X;
+            }
+            Self::apply_directed_rounding(r_near, err, mode)
+        } else {
+            r_near
+        };
+        if result.is_finite() && !a.is_nan() && a != 0.0 && (result == 0.0 || result.is_subnormal())
+        {
+            flags |= RA_U;
+        }
+        (result, flags)
     }
 
     /// IEEE 754 floating-point remainder: `r = a − round-half-to-even(a/b) · b`.
@@ -1611,8 +1754,10 @@ impl MMix {
             Opcode::FADD => {
                 let a = Self::u64_to_f64(self.get_register(y));
                 let b = Self::u64_to_f64(self.get_register(z));
-                let r = a + b;
-                self.raise_fp_flags(Self::fp_arith_flags(a, b, r));
+                let r_near = a + b;
+                let (_, err) = Self::two_sum(a, b);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err);
+                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
                 true
@@ -1650,8 +1795,10 @@ impl MMix {
             Opcode::FSUB => {
                 let a = Self::u64_to_f64(self.get_register(y));
                 let b = Self::u64_to_f64(self.get_register(z));
-                let r = a - b;
-                self.raise_fp_flags(Self::fp_arith_flags(a, b, r));
+                let r_near = a - b;
+                let (_, err) = Self::two_sum(a, -b);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err);
+                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
                 true
@@ -1733,8 +1880,11 @@ impl MMix {
             Opcode::FMUL => {
                 let a = Self::u64_to_f64(self.get_register(y));
                 let b = Self::u64_to_f64(self.get_register(z));
-                let r = a * b;
-                self.raise_fp_flags(Self::fp_arith_flags(a, b, r));
+                let r_near = a * b;
+                // FMA gives the exact residual: a*b - r_near.
+                let err = a.mul_add(b, -r_near);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err);
+                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
                 true
@@ -1789,17 +1939,30 @@ impl MMix {
                 if b == 0.0 && !a.is_nan() && a != 0.0 {
                     self.raise_fp_flags(RA_Z);
                 }
-                let r = a / b;
-                self.raise_fp_flags(Self::fp_arith_flags(a, b, r));
+                let r_near = a / b;
+                // residual = a - r_near*b is exact via FMA.
+                // sign(true - r_near) = sign(residual) * sign(b).
+                let residual = (-r_near).mul_add(b, a);
+                let err = if b.is_sign_negative() {
+                    -residual
+                } else {
+                    residual
+                };
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err);
+                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
                 true
             }
             Opcode::FSQRT => {
-                // FSQRT $X, $Z. Negative non-zero input → NaN with I raised.
-                let v = Self::u64_to_f64(self.get_register(z));
-                let r = v.sqrt();
-                self.raise_fp_flags(Self::fp_unop_flags(v, r));
+                let a = Self::u64_to_f64(self.get_register(z));
+                let r_near = a.sqrt();
+                // residual = a - r_near^2, exact via FMA.
+                // sign(true - r_near) = sign(residual) when r_near >= 0 (always
+                // true here since sqrt returns ≥0 or NaN).
+                let err = (-r_near).mul_add(r_near, a);
+                let (r, flags) = self.finalize_fp_unop(a, r_near, err);
+                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
                 true
@@ -8649,5 +8812,324 @@ mod tests {
         use crate::mmixal::MMixInstruction;
         let bytes = encode_instruction_bytes(&MMixInstruction::FEQLE(1, 2, 3));
         assert_eq!(bytes, vec![0x13, 1, 2, 3]);
+    }
+
+    // ==================== sNaN handling ====================
+
+    /// IEEE 754 binary64 sNaN: exponent all 1s, mantissa nonzero, bit 51 clear.
+    const SNAN_BITS: u64 = 0x7FF0_0000_0000_0001;
+    const QNAN_BITS: u64 = 0x7FF8_0000_0000_0001;
+
+    #[test]
+    fn test_is_signaling_nan_classifies_correctly() {
+        assert!(MMix::is_signaling_nan(f64::from_bits(SNAN_BITS)));
+        assert!(!MMix::is_signaling_nan(f64::from_bits(QNAN_BITS)));
+        assert!(!MMix::is_signaling_nan(f64::NAN));
+        assert!(!MMix::is_signaling_nan(1.0));
+        assert!(!MMix::is_signaling_nan(f64::INFINITY));
+    }
+
+    #[test]
+    fn test_quiet_nan_sets_high_mantissa_bit() {
+        let q = MMix::quiet_nan(f64::from_bits(SNAN_BITS));
+        assert!(q.is_nan());
+        assert_eq!(q.to_bits() & (1 << 51), 1 << 51);
+        // Non-NaN passes through unchanged.
+        assert_eq!(MMix::quiet_nan(1.5).to_bits(), 1.5f64.to_bits());
+    }
+
+    #[test]
+    fn test_fadd_snan_raises_i_and_quiets() {
+        let mut mmix = MMix::new();
+        mmix.set_register(2, SNAN_BITS);
+        mmix.set_register(3, 1.0f64.to_bits());
+        mmix.write_tetra(0, 0x04010203); // FADD $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+        let result = mmix.get_register(1);
+        // Result must be a NaN, and must be quiet.
+        assert!(f64::from_bits(result).is_nan());
+        assert_eq!(result & (1 << 51), 1 << 51);
+    }
+
+    #[test]
+    fn test_fadd_qnan_does_not_raise_i() {
+        let mut mmix = MMix::new();
+        mmix.set_register(2, QNAN_BITS);
+        mmix.set_register(3, 1.0f64.to_bits());
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        // qNaN propagation is silent — I must not be raised.
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_I, 0);
+        assert!(f64::from_bits(mmix.get_register(1)).is_nan());
+    }
+
+    #[test]
+    fn test_fmul_snan_raises_i() {
+        let mut mmix = MMix::new();
+        mmix.set_register(2, 2.0f64.to_bits());
+        mmix.set_register(3, SNAN_BITS);
+        mmix.write_tetra(0, 0x10010203); // FMUL
+        assert!(mmix.execute_instruction());
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+    }
+
+    #[test]
+    fn test_fsqrt_snan_raises_i() {
+        let mut mmix = MMix::new();
+        mmix.set_register(3, SNAN_BITS);
+        mmix.write_tetra(0, 0x15010003); // FSQRT
+        assert!(mmix.execute_instruction());
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+    }
+
+    // ==================== Directed rounding for FP arithmetic ====================
+
+    /// Build an operand pair whose true sum lies strictly between two adjacent
+    /// f64 values: 1.0 + 2^-53. Round-to-nearest-even gives 1.0 (mantissa LSB
+    /// of 1.0 is even); ROUND_UP must produce 1.0 + 2^-52.
+    fn one_plus_half_ulp() -> (f64, f64) {
+        let a = 1.0f64;
+        let half_ulp = f64::from_bits(0x3CA0_0000_0000_0000); // 2^-53
+        (a, half_ulp)
+    }
+
+    #[test]
+    fn test_fadd_round_near_default() {
+        let mut mmix = MMix::new();
+        let (a, b) = one_plus_half_ulp();
+        mmix.set_register(2, a.to_bits());
+        mmix.set_register(3, b.to_bits());
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(f64::from_bits(mmix.get_register(1)), 1.0);
+        // Inexact must be raised because the sum was rounded.
+        assert!((mmix.get_special(SpecialReg::RA) & RA_X) != 0);
+    }
+
+    #[test]
+    fn test_fadd_round_up_bumps_to_next_f64() {
+        let mut mmix = MMix::new();
+        let (a, b) = one_plus_half_ulp();
+        mmix.set_register(2, a.to_bits());
+        mmix.set_register(3, b.to_bits());
+        mmix.set_special(SpecialReg::RA, 2); // ROUND_UP
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        let r = f64::from_bits(mmix.get_register(1));
+        assert!(r > 1.0, "expected r > 1.0, got {}", r);
+        assert_eq!(r, 1.0f64.next_up());
+    }
+
+    #[test]
+    fn test_fadd_round_down_keeps_below() {
+        let mut mmix = MMix::new();
+        let (a, b) = one_plus_half_ulp();
+        mmix.set_register(2, a.to_bits());
+        mmix.set_register(3, b.to_bits());
+        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(f64::from_bits(mmix.get_register(1)), 1.0);
+    }
+
+    #[test]
+    fn test_fadd_round_off_toward_zero_negative() {
+        let mut mmix = MMix::new();
+        // -(1 + 2^-53) under round-up should keep -1.0 (less negative).
+        // Under ROUND_OFF (toward 0), also -1.0.
+        let (a, b) = one_plus_half_ulp();
+        mmix.set_register(2, (-a).to_bits());
+        mmix.set_register(3, (-b).to_bits());
+        mmix.set_special(SpecialReg::RA, 1); // ROUND_OFF
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(f64::from_bits(mmix.get_register(1)), -1.0);
+    }
+
+    #[test]
+    fn test_fmul_directed_rounding() {
+        let mut mmix = MMix::new();
+        // 1/3 in f64 is inexact; (1/3) * 3 ≠ 1 exactly, gives a nearby f64.
+        // The exact product 0.333…·3 = 0.999… so result is just below 1.
+        let third = 1.0f64 / 3.0;
+        mmix.set_register(2, third.to_bits());
+        mmix.set_register(3, 3.0f64.to_bits());
+        // Default: round-to-nearest gives 1.0.
+        mmix.write_tetra(0, 0x10010203); // FMUL
+        assert!(mmix.execute_instruction());
+        let near_result = f64::from_bits(mmix.get_register(1));
+
+        // Reset and try ROUND_DOWN (toward -∞): result must be ≤ near_result
+        // and strictly less than 1.
+        let mut mmix = MMix::new();
+        mmix.set_register(2, third.to_bits());
+        mmix.set_register(3, 3.0f64.to_bits());
+        mmix.set_special(SpecialReg::RA, 3);
+        mmix.write_tetra(0, 0x10010203);
+        assert!(mmix.execute_instruction());
+        let down_result = f64::from_bits(mmix.get_register(1));
+        assert!(down_result < 1.0, "ROUND_DOWN gave {}", down_result);
+        assert!(down_result <= near_result);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_X) != 0);
+    }
+
+    #[test]
+    fn test_fdiv_directed_rounding() {
+        let mut mmix = MMix::new();
+        // 1.0 / 3.0 is inexact. Default → nearest. ROUND_UP must give a value
+        // strictly greater than the nearest result.
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 3.0f64.to_bits());
+        mmix.write_tetra(0, 0x14010203); // FDIV
+        assert!(mmix.execute_instruction());
+        let near = f64::from_bits(mmix.get_register(1));
+
+        let mut mmix = MMix::new();
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 3.0f64.to_bits());
+        mmix.set_special(SpecialReg::RA, 2); // ROUND_UP
+        mmix.write_tetra(0, 0x14010203);
+        assert!(mmix.execute_instruction());
+        let up = f64::from_bits(mmix.get_register(1));
+        assert!(up > near, "ROUND_UP={} should exceed nearest={}", up, near);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_X) != 0);
+    }
+
+    #[test]
+    fn test_fdiv_directed_rounding_negative_divisor() {
+        let mut mmix = MMix::new();
+        // 1.0 / -3.0 — verify sign-of-divisor handling in residual.
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, (-3.0f64).to_bits());
+        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN
+        mmix.write_tetra(0, 0x14010203);
+        assert!(mmix.execute_instruction());
+        let r = f64::from_bits(mmix.get_register(1));
+        // True 1/-3 ≈ -0.333…; ROUND_DOWN must give a value ≤ true (more negative).
+        assert!(r < -0.333, "ROUND_DOWN of 1/-3 was {}", r);
+    }
+
+    #[test]
+    fn test_fsqrt_directed_rounding() {
+        let mut mmix = MMix::new();
+        // sqrt(2) is irrational. ROUND_UP and ROUND_DOWN must straddle the
+        // nearest result.
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.write_tetra(0, 0x15010003); // FSQRT
+        assert!(mmix.execute_instruction());
+        let near = f64::from_bits(mmix.get_register(1));
+
+        let mut mmix = MMix::new();
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.set_special(SpecialReg::RA, 2); // UP
+        mmix.write_tetra(0, 0x15010003);
+        assert!(mmix.execute_instruction());
+        let up = f64::from_bits(mmix.get_register(1));
+
+        let mut mmix = MMix::new();
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.set_special(SpecialReg::RA, 3); // DOWN
+        mmix.write_tetra(0, 0x15010003);
+        assert!(mmix.execute_instruction());
+        let down = f64::from_bits(mmix.get_register(1));
+
+        assert!(down <= near && near <= up);
+        assert!(down < up);
+    }
+
+    // ==================== Inexact (X) flag for arithmetic ====================
+
+    #[test]
+    fn test_fadd_exact_no_x_flag() {
+        let mut mmix = MMix::new();
+        // 1.0 + 2.0 is exact; X must not be raised.
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_X, 0);
+    }
+
+    #[test]
+    fn test_fmul_exact_no_x_flag() {
+        let mut mmix = MMix::new();
+        // 1.5 × 4.0 = 6.0 exactly.
+        mmix.set_register(2, 1.5f64.to_bits());
+        mmix.set_register(3, 4.0f64.to_bits());
+        mmix.write_tetra(0, 0x10010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_X, 0);
+    }
+
+    #[test]
+    fn test_fdiv_exact_no_x_flag() {
+        let mut mmix = MMix::new();
+        // 12.0 / 4.0 = 3.0 exactly.
+        mmix.set_register(2, 12.0f64.to_bits());
+        mmix.set_register(3, 4.0f64.to_bits());
+        mmix.write_tetra(0, 0x14010203);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_X, 0);
+    }
+
+    // ==================== D flag scope ====================
+
+    #[test]
+    fn test_d_flag_only_on_subnormal_operand() {
+        let mut mmix = MMix::new();
+        // Subnormal operand → D set.
+        mmix.set_register(2, f64::MIN_POSITIVE.to_bits() >> 4); // shifts into subnormal
+        mmix.set_register(3, 1.0f64.to_bits());
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        assert!((mmix.get_special(SpecialReg::RA) & RA_D) != 0);
+    }
+
+    #[test]
+    fn test_d_flag_clear_when_only_result_subnormal() {
+        let mut mmix = MMix::new();
+        // MIN_POSITIVE / 2.0 underflows to a subnormal, but operands are
+        // normal — D must NOT be raised (U covers it).
+        mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.write_tetra(0, 0x14010203); // FDIV
+        assert!(mmix.execute_instruction());
+        let ra = mmix.get_special(SpecialReg::RA);
+        let r = f64::from_bits(mmix.get_register(1));
+        assert!(r.is_subnormal(), "expected subnormal result, got {}", r);
+        assert_eq!(
+            ra & RA_D,
+            0,
+            "D should be clear when only result is subnormal"
+        );
+        assert!((ra & RA_U) != 0, "U should be set on underflow");
+    }
+
+    // ==================== Overflow with directed rounding ====================
+
+    #[test]
+    fn test_overflow_round_off_clamps_to_max() {
+        let mut mmix = MMix::new();
+        mmix.set_register(2, f64::MAX.to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.set_special(SpecialReg::RA, 1); // ROUND_OFF (toward 0)
+        mmix.write_tetra(0, 0x04010203); // FADD
+        assert!(mmix.execute_instruction());
+        let r = f64::from_bits(mmix.get_register(1));
+        assert_eq!(r, f64::MAX);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_O) != 0);
+    }
+
+    #[test]
+    fn test_overflow_round_down_negative_keeps_neg_inf() {
+        let mut mmix = MMix::new();
+        mmix.set_register(2, f64::MIN.to_bits()); // most-negative finite
+        mmix.set_register(3, f64::MIN.to_bits());
+        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN (toward -∞)
+        mmix.write_tetra(0, 0x04010203);
+        assert!(mmix.execute_instruction());
+        let r = f64::from_bits(mmix.get_register(1));
+        assert!(r.is_infinite() && r.is_sign_negative());
     }
 }
