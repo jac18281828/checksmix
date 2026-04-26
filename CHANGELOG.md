@@ -1,3 +1,14 @@
+0.2.16 (2026-04-25)
+
+* FADD, FSUB, FMUL, FDIV, FSQRT now honor all four rA rounding modes (NEAR / OFF / UP / DOWN) — previously every result used hardware round-to-nearest-even regardless of mode
+* Direction is detected via 2Sum (add/sub) and FMA-residual (mul/div/sqrt), giving exact rounding without dropping to a softfloat crate
+* Inexact (X) flag now correctly raised on inexact FADD/FSUB/FMUL/FDIV/FSQRT
+* Overflow under directed modes clamps to ±MAX (ROUND_OFF, ROUND_UP/DOWN against the wrong infinity sign) instead of always producing ±∞
+* Signaling NaN inputs raise rA.I and propagate as quiet NaN; quiet NaN inputs remain silent (per IEEE 754)
+* rA.D is now raised only for denormalized **operands** — subnormal results are reported by U as the spec intends
+* AGENTS.md release section now points at the actual workflow (`deploy-crate`) and the actual single root `Cargo.toml`
+* New unit and `.mms` smoke tests cover sNaN, all four rounding modes on arithmetic, inexact detection, D-flag scope, and overflow clamping
+
 0.2.15 (2026-04-25)
 
 * portable raw-fd / raw-handle setup for Unix and Windows hosts
