@@ -1,3 +1,12 @@
+0.2.20 (2026-04-26)
+
+* `checksmix` now supports three subcommands: `run` (default, preserves all existing behaviour), `check` (parse + dry-encode one or more `.mms` files; silent on success, `<file>:<line>:<col>: …` on failure, exit 1), and `build` (assemble to `.mmo`, prints only the output path, no verbose debug dump)
+* Bare invocation without a subcommand (`checksmix file.mms`) continues to work identically; `--unsigned` remains on `run` only
+* `build -o OUT.mmo` / `build --output OUT.mmo` sets the output path; default is the first input's basename with `.mmo`
+* Shared `assemble_sources` helper unifies file-reading, `MMixAssembler::new` + `add_source` + `parse` across all three source-touching paths
+* CLI parse tests cover subcommand routing, flag scoping (`--unsigned` rejected on `check`/`build`, `-o` rejected on `run`), and multi-file operands
+* Integration tests cover: clean two-file `check` (exit 0, no stdout), undefined-symbol `check` (exit 1, `file:line:col` in stderr), duplicate-`:Global` `check` (both filenames in error), `build` round-trip (`.mmo` produced, `run` of result succeeds), bare `.mmo` run regression, and multi-source `run`
+
 0.2.18 (2026-04-26)
 
 * Multi-source assembly: `checksmix a.mms b.mms ...` and `mmixasm a.mms b.mms ... -o out.mmo` load all inputs into one shared symbol space and one byte stream, as if the files were concatenated; symbols, GREG state, and `current_addr` carry across files in command-line order
