@@ -1,3 +1,12 @@
+0.2.17 (2026-04-26)
+
+* Fputs/Fputc/Fputws now route to any open file descriptor (previously fds returned by Fopen were silently dropped while $255 still reported a successful byte count); on write failure or unknown fd they return -1
+* Output traps emit raw bytes — bytes ≥ 0x80 are no longer widened via `byte as char` into UTF-8 sequences, so a write of 0xFF produces one byte instead of `0xC3 0xBF`
+* Halt flushes stdout before returning so buffered Fputs/Fputc output is not discarded when the runner calls `process::exit`
+* Fputs/Fputws walk the source string with `wrapping_add` so a string address near `u64::MAX` cannot panic
+* Trap-code doc comments from Fclose onward were off-by-one against the `TrapCode` enum and have been corrected
+* Existing Fputs/Fputc unit tests used the wrong opcode (Fwrite/Fputs) and stored the string address in $0; corrected, and new tests cover Fputs/Fputc/Fputws to a real Fopen'd fd, raw high-byte output, and -1 returns on unknown fds
+
 0.2.16 (2026-04-25)
 
 * FADD, FSUB, FMUL, FDIV, FSQRT now honor all four rA rounding modes (NEAR / OFF / UP / DOWN) — previously every result used hardware round-to-nearest-even regardless of mode
