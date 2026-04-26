@@ -1,3 +1,15 @@
+0.2.15 (2026-04-25)
+
+* portable raw-fd / raw-handle setup for Unix and Windows hosts
+* AGENTS.md release process and cleanup
+* FCMPE/FUNE/FEQLE now have parser, encoder, and grammar entries — the executor paths existed before but the assembler could not reach them
+* Floating-point ops raise rA event flags (I invalid, Z divide-by-zero, O overflow, U underflow, X inexact, D denormalized, W float-to-fix overflow)
+* FREM uses IEEE 754 round-half-to-even remainder, replacing Rust's truncated `%`
+* FIX, FIXU, SFLOT, SFLOTU, STSF, STSFI honor the rA rounding mode and report inexact/overflow/underflow
+* FINT rounding-mode codes 1 and 3 now match MMIXware (1 = ROUND_OFF / toward zero, 3 = ROUND_DOWN / toward −∞)
+* Floating-point unit tests cover NaN, infinity, denormals, zero divide, all four rounding modes, and assembler emission of the new opcodes
+* `examples/all_instructions_test.mms` exercises FCMPE/FUNE/FEQLE end-to-end via the smoke test
+
 0.2.14 (2026-01-01)
 
 * add register symbols

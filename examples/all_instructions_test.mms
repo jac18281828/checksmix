@@ -2342,8 +2342,49 @@ Test186 ADDUI   TestNum,TestNum,1
         % We'll jump over it to avoid potential issues
         JMP     Test186Skip
         RESUME  0               % This instruction exists for coverage
-Test186Skip     
+Test186Skip
         SETI Result,1
+        SETI Expect,1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test187
+        JMP     TestFail
+
+% ========================================
+% Test 187: FCMPE - Floating compare with epsilon (rE)
+% ========================================
+Test187 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,5             % $10 = 5.0
+        FLOTI   $11,Zero,5             % $11 = 5.0
+        FLOTI   $12,Zero,1             % $12 = 1.0 epsilon
+        PUT     rE,$12
+        FCMPE   Result,$10,$11         % 5.0 vs 5.0 within rE → 0
+        SETI Expect,0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test188
+        JMP     TestFail
+
+% ========================================
+% Test 188: FUNE - Floating unordered with epsilon
+% ========================================
+Test188 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,1
+        FLOTI   $11,Zero,2
+        PUT     rE,$10                 % rE = 1.0
+        FUNE    Result,$10,$11         % |1-2| = 1 ≤ 1 → 1
+        SETI Expect,1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test189
+        JMP     TestFail
+
+% ========================================
+% Test 189: FEQLE - Floating equivalence with epsilon
+% ========================================
+Test189 ADDUI   TestNum,TestNum,1
+        FLOTI   $10,Zero,10
+        FLOTI   $11,Zero,11
+        FLOTI   $12,Zero,2             % epsilon = 2.0
+        PUT     rE,$12
+        FEQLE   Result,$10,$11         % |10-11| = 1 ≤ 2 → 1
         SETI Expect,1
         CMP     Temp,Result,Expect
         PBZ     Temp,TestPass

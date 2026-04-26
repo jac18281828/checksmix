@@ -174,6 +174,9 @@ pub enum MMixInstruction {
     FCMP(u8, u8, u8),    // FCMP $X, $Y, $Z - floating compare
     FUN(u8, u8, u8),     // FUN $X, $Y, $Z - floating unordered
     FEQL(u8, u8, u8),    // FEQL $X, $Y, $Z - floating equal
+    FCMPE(u8, u8, u8),   // FCMPE $X, $Y, $Z - floating compare with epsilon (rE)
+    FUNE(u8, u8, u8),    // FUNE $X, $Y, $Z - floating unordered with epsilon (rE)
+    FEQLE(u8, u8, u8),   // FEQLE $X, $Y, $Z - floating equivalent with epsilon (rE)
     FADD(u8, u8, u8),    // FADD $X, $Y, $Z - floating add
     FIX(u8, u8, u8),     // FIX $X, $Y, $Z - convert float to fixed
     FSUB(u8, u8, u8),    // FSUB $X, $Y, $Z - floating subtract
@@ -2098,6 +2101,9 @@ impl MMixAssembler {
             "FCMP" => Ok(MMixInstruction::FCMP(x, y, z)),
             "FUN" => Ok(MMixInstruction::FUN(x, y, z)),
             "FEQL" => Ok(MMixInstruction::FEQL(x, y, z)),
+            "FCMPE" => Ok(MMixInstruction::FCMPE(x, y, z)),
+            "FUNE" => Ok(MMixInstruction::FUNE(x, y, z)),
+            "FEQLE" => Ok(MMixInstruction::FEQLE(x, y, z)),
             "FADD" => Ok(MMixInstruction::FADD(x, y, z)),
             "FSUB" => Ok(MMixInstruction::FSUB(x, y, z)),
             "FMUL" => Ok(MMixInstruction::FMUL(x, y, z)),
@@ -3554,5 +3560,48 @@ mod tests {
         let mut asm = MMixAssembler::new("SRUI $3, $1, 1", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::SRUI(3, 1, 1));
+    }
+
+    #[test]
+    fn test_parse_fcmpe() {
+        let mut asm = MMixAssembler::new("FCMPE $1, $2, $3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FCMPE(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_fune() {
+        let mut asm = MMixAssembler::new("FUNE $4, $5, $6", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FUNE(4, 5, 6));
+    }
+
+    #[test]
+    fn test_parse_feqle() {
+        let mut asm = MMixAssembler::new("FEQLE $7, $8, $9", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FEQLE(7, 8, 9));
+    }
+
+    /// Verify the longest-first grammar still matches the shorter mnemonics.
+    #[test]
+    fn test_parse_fcmp_after_fcmpe_added() {
+        let mut asm = MMixAssembler::new("FCMP $1, $2, $3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FCMP(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_feql_after_feqle_added() {
+        let mut asm = MMixAssembler::new("FEQL $1, $2, $3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FEQL(1, 2, 3));
+    }
+
+    #[test]
+    fn test_parse_fun_after_fune_added() {
+        let mut asm = MMixAssembler::new("FUN $1, $2, $3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::FUN(1, 2, 3));
     }
 }

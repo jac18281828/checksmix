@@ -731,6 +731,15 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::FMUL(x, y, z) => {
             bytes.extend_from_slice(&[0x10, *x, *y, *z]);
         }
+        MMixInstruction::FCMPE(x, y, z) => {
+            bytes.extend_from_slice(&[0x11, *x, *y, *z]);
+        }
+        MMixInstruction::FUNE(x, y, z) => {
+            bytes.extend_from_slice(&[0x12, *x, *y, *z]);
+        }
+        MMixInstruction::FEQLE(x, y, z) => {
+            bytes.extend_from_slice(&[0x13, *x, *y, *z]);
+        }
         MMixInstruction::FDIV(x, y, z) => {
             bytes.extend_from_slice(&[0x14, *x, *y, *z]);
         }
@@ -983,6 +992,21 @@ mod tests {
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::SFLOTUI(1, 2, 3)),
             vec![0x0F, 1, 2, 3]
+        );
+        // FCMPE - 0x11
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::FCMPE(1, 2, 3)),
+            vec![0x11, 1, 2, 3]
+        );
+        // FUNE - 0x12
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::FUNE(1, 2, 3)),
+            vec![0x12, 1, 2, 3]
+        );
+        // FEQLE - 0x13
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::FEQLE(1, 2, 3)),
+            vec![0x13, 1, 2, 3]
         );
     }
 

@@ -189,8 +189,11 @@ mnemonic_fmul = { ^"FMUL" }
 mnemonic_fdiv = { ^"FDIV" }
 mnemonic_fadd = { ^"FADD" }
 mnemonic_fsub = { ^"FSUB" }
+mnemonic_fcmpe = { ^"FCMPE" }
 mnemonic_fcmp = { ^"FCMP" }
+mnemonic_feqle = { ^"FEQLE" }
 mnemonic_feql = { ^"FEQL" }
+mnemonic_fune = { ^"FUNE" }
 mnemonic_fun = { ^"FUN" }
 
 // Bitwise operations (§10) - ordered longest first for exact matching
@@ -457,7 +460,8 @@ inst_neg_rri = {
 
 // Floating point instructions (3 operands) - ordered longest first
 inst_float_rrr = {
-    (mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
+    (mnemonic_fcmpe | mnemonic_feqle | mnemonic_fune |
+     mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
      mnemonic_fadd | mnemonic_fsub | mnemonic_fmul | mnemonic_fdiv |
      mnemonic_frem | mnemonic_fsqrt | mnemonic_fint |
      mnemonic_fixu | mnemonic_fix |
