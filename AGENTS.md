@@ -58,11 +58,11 @@ Do not mark work complete until all gates pass.
 
 ## Release
 
-1. Work on a branch (`claude/<topic>`); never commit directly to `main`.
-2. The release version X.Y.Z is whatever `Cargo.toml` already says — the previous cycle's `docs: X.Y.Z` bump set it. **Do not increment it again.**
-3. Update `CHANGELOG.md` on the branch with an `X.Y.Z` entry for the release being cut — the entry must land in the tagged commit so the published artifact ships with its own changelog.
-4. FF-merge into `main` (`git merge --ff-only`); no force pushes to `main`.
-5. Create a signed annotated tag `X.Y.Z` on the merge commit and push it — the `deploy-crate` workflow publishes on tag push.
-6. Bump `Cargo.toml` to the next patch on the branch; commit as `docs: X.Y.(Z+1)`; push the branch.
-7. The tag version matches the code version *at the tagged commit*; the `docs: X.Y.(Z+1)` commit just bumps `Cargo.toml` to start the next cycle (no CHANGELOG churn — that lands with the next release).
-8. Delete the branch locally (`git branch -D claude/<topic>`) and remotely (`git push origin --delete claude/<topic>`); switch back to `main`. The version-bump commit is intentionally not on `main` — use `-D` (force delete) when git warns the branch is not fully merged.
+The release version `X.Y.Z` is whatever `Cargo.toml` already says — the previous cycle bumped it. Do not bump it again for this release. All commits land on the branch; `main` only ever sees a fast-forward.
+
+1. Branch as `claude/<topic>`; never commit to `main` directly.
+2. Add an `X.Y.Z` entry to `CHANGELOG.md` and commit — this is the release commit.
+3. Tag `X.Y.Z` (signed, annotated) on the release commit.
+4. Bump `Cargo.toml` to `X.Y.(Z+1)` and commit as `docs: X.Y.(Z+1)`.
+5. FF-merge the branch into `main`; push `main` and the tag — the `deploy-crate` workflow publishes on tag push.
+6. Delete the branch (local and remote).
