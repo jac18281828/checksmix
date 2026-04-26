@@ -59,7 +59,8 @@ Do not mark work complete until all gates pass.
 ## Release
 
 1. Work on a branch (`claude/<topic>`); never commit directly to `main`.
-2. FF-merge into `main` (`git merge --ff-only`); no force pushes to `main`.
-3. Create a signed annotated tag `X.Y.Z` on the merge commit and push it — the `deploy-crate` workflow publishes on tag push.
-4. Bump `Cargo.toml` to the next patch on the branch; commit as `docs: X.Y.Z`; push the branch.
-5. The tag version matches the code version *at the tagged commit*; the `docs: X.Y.Z` commit prepares the *next* release.
+2. Update `CHANGELOG.md` on the branch with an `X.Y.Z` entry for the release being cut — the entry must land in the tagged commit so the published artifact ships with its own changelog.
+3. FF-merge into `main` (`git merge --ff-only`); no force pushes to `main`.
+4. Create a signed annotated tag `X.Y.Z` on the merge commit and push it — the `deploy-crate` workflow publishes on tag push.
+5. Bump `Cargo.toml` to the next patch on the branch; commit as `docs: X.Y.(Z+1)`; push the branch.
+6. The tag version matches the code version *at the tagged commit*; the `docs: X.Y.(Z+1)` commit just bumps `Cargo.toml` to start the next cycle (no CHANGELOG churn — that lands with the next release).
