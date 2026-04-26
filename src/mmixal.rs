@@ -920,10 +920,20 @@ impl TryFrom<u8> for Opcode {
 }
 
 pub struct MMixAssembler {
-    source: String,
-    filename: String,
+    /// Input translation units in command-line order: (filename, preprocessed source).
+    sources: Vec<(String, String)>,
+    /// Filename of the source currently being walked (set during each pass).
+    current_filename: String,
+    /// Active PREFIX value applied to unqualified identifiers.
+    /// Names starting with ':' bypass the prefix.
+    current_prefix: String,
     pub labels: HashMap<String, u64>,
     pub symbols: HashMap<String, SymbolType>, // For IS directive - symbolic names with type
+    /// First-definition site for user-defined labels: stored name -> (filename, line).
+    /// Predefined symbols are not tracked here, so user code may shadow them.
+    label_origins: HashMap<String, (String, usize)>,
+    /// First-definition site for user-defined IS/GREG symbols.
+    symbol_origins: HashMap<String, (String, usize)>,
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
@@ -1033,21 +1043,33 @@ impl MMixAssembler {
         count
     }
 
+    /// Insert a predefined symbol under both `name` and `:name` so it remains
+    /// reachable from inside any PREFIX region. Predefined entries are not
+    /// tracked in `symbol_origins`, so user code may shadow them without
+    /// triggering a redefinition error.
+    fn seed_predefined(symbols: &mut HashMap<String, SymbolType>, name: &str, ty: SymbolType) {
+        symbols.insert(name.to_string(), ty);
+        symbols.insert(format!(":{}", name), ty);
+    }
+
     pub fn new(source: &str, filename: &str) -> Self {
         let mut symbols = HashMap::new();
 
         // Standard MMIXAL predefined symbols
         // Segment constants
-        symbols.insert(
-            "Data_Segment".to_string(),
+        Self::seed_predefined(
+            &mut symbols,
+            "Data_Segment",
             SymbolType::Constant(DATA_SEGMENT_START),
         );
-        symbols.insert(
-            "Pool_Segment".to_string(),
+        Self::seed_predefined(
+            &mut symbols,
+            "Pool_Segment",
             SymbolType::Constant(POOL_SEGMENT_START),
         );
-        symbols.insert(
-            "Stack_Segment".to_string(),
+        Self::seed_predefined(
+            &mut symbols,
+            "Stack_Segment",
             SymbolType::Constant(STACK_SEGMENT_START),
         );
 
@@ -1055,114 +1077,146 @@ impl MMixAssembler {
         let (stdin_file_no, stdout_file_no, stderr_file_no) = stdio_raw_identifiers();
 
         // Standard I/O handles
-        symbols.insert("StdIn".to_string(), SymbolType::Constant(stdin_file_no));
-        symbols.insert("StdOut".to_string(), SymbolType::Constant(stdout_file_no));
-        symbols.insert("StdErr".to_string(), SymbolType::Constant(stderr_file_no));
+        Self::seed_predefined(&mut symbols, "StdIn", SymbolType::Constant(stdin_file_no));
+        Self::seed_predefined(&mut symbols, "StdOut", SymbolType::Constant(stdout_file_no));
+        Self::seed_predefined(&mut symbols, "StdErr", SymbolType::Constant(stderr_file_no));
         // Common TRAP function codes (C library emulation)
-        symbols.insert(
-            "Halt".to_string(),
-            SymbolType::Constant(TrapCode::Halt as u64),
-        );
-        symbols.insert(
-            "Trip".to_string(),
-            SymbolType::Constant(TrapCode::Trip as u64),
-        );
-        symbols.insert(
-            "Fopen".to_string(),
-            SymbolType::Constant(TrapCode::Fopen as u64),
-        );
-        symbols.insert(
-            "Fclose".to_string(),
-            SymbolType::Constant(TrapCode::Fclose as u64),
-        );
-        symbols.insert(
-            "Fread".to_string(),
-            SymbolType::Constant(TrapCode::Fread as u64),
-        );
-        symbols.insert(
-            "Fgets".to_string(),
-            SymbolType::Constant(TrapCode::Fgets as u64),
-        );
-        symbols.insert(
-            "Fgetws".to_string(),
-            SymbolType::Constant(TrapCode::Fgetws as u64),
-        );
-        symbols.insert(
-            "Fwrite".to_string(),
-            SymbolType::Constant(TrapCode::Fwrite as u64),
-        );
-        symbols.insert(
-            "Fputs".to_string(),
-            SymbolType::Constant(TrapCode::Fputs as u64),
-        );
-        symbols.insert(
-            "Fputc".to_string(),
-            SymbolType::Constant(TrapCode::Fputc as u64),
-        );
-        symbols.insert(
-            "Fputws".to_string(),
-            SymbolType::Constant(TrapCode::Fputws as u64),
-        );
-        symbols.insert(
-            "Fseek".to_string(),
-            SymbolType::Constant(TrapCode::Fseek as u64),
-        );
-        symbols.insert(
-            "Ftell".to_string(),
-            SymbolType::Constant(TrapCode::Ftell as u64),
-        );
-        symbols.insert(
-            "Time".to_string(),
-            SymbolType::Constant(TrapCode::Time as u64),
-        );
+        for (name, code) in [
+            ("Halt", TrapCode::Halt),
+            ("Trip", TrapCode::Trip),
+            ("Fopen", TrapCode::Fopen),
+            ("Fclose", TrapCode::Fclose),
+            ("Fread", TrapCode::Fread),
+            ("Fgets", TrapCode::Fgets),
+            ("Fgetws", TrapCode::Fgetws),
+            ("Fwrite", TrapCode::Fwrite),
+            ("Fputs", TrapCode::Fputs),
+            ("Fputc", TrapCode::Fputc),
+            ("Fputws", TrapCode::Fputws),
+            ("Fseek", TrapCode::Fseek),
+            ("Ftell", TrapCode::Ftell),
+            ("Time", TrapCode::Time),
+        ] {
+            Self::seed_predefined(&mut symbols, name, SymbolType::Constant(code as u64));
+        }
 
         // Special register names (for use with GET and PUT instructions)
-        symbols.insert("rB".to_string(), SymbolType::Constant(0)); // rB - Bootstrap register
-        symbols.insert("rD".to_string(), SymbolType::Constant(1)); // rD - Dividend register
-        symbols.insert("rE".to_string(), SymbolType::Constant(2)); // rE - Epsilon register
-        symbols.insert("rH".to_string(), SymbolType::Constant(3)); // rH - Himult register
-        symbols.insert("rJ".to_string(), SymbolType::Constant(4)); // rJ - Return-jump register
-        symbols.insert("rM".to_string(), SymbolType::Constant(5)); // rM - Multiplex mask register
-        symbols.insert("rR".to_string(), SymbolType::Constant(6)); // rR - Remainder register
-        symbols.insert("rBB".to_string(), SymbolType::Constant(7)); // rBB - Bootstrap register (kernel)
-        symbols.insert("rC".to_string(), SymbolType::Constant(8)); // rC - Continuation register
-        symbols.insert("rN".to_string(), SymbolType::Constant(9)); // rN - Serial number
-        symbols.insert("rO".to_string(), SymbolType::Constant(10)); // rO - Register stack offset
-        symbols.insert("rS".to_string(), SymbolType::Constant(11)); // rS - Register stack pointer
-        symbols.insert("rI".to_string(), SymbolType::Constant(12)); // rI - Interval counter
-        symbols.insert("rT".to_string(), SymbolType::Constant(13)); // rT - Trap address register
-        symbols.insert("rTT".to_string(), SymbolType::Constant(14)); // rTT - Dynamic trap address register
-        symbols.insert("rK".to_string(), SymbolType::Constant(15)); // rK - Interrupt mask register
-        symbols.insert("rQ".to_string(), SymbolType::Constant(16)); // rQ - Interrupt request register
-        symbols.insert("rU".to_string(), SymbolType::Constant(17)); // rU - Usage counter
-        symbols.insert("rV".to_string(), SymbolType::Constant(18)); // rV - Virtual translation register
-        symbols.insert("rG".to_string(), SymbolType::Constant(19)); // rG - Global threshold register
-        symbols.insert("rL".to_string(), SymbolType::Constant(20)); // rL - Local threshold register
-        symbols.insert("rA".to_string(), SymbolType::Constant(21)); // rA - Arithmetic status register
-        symbols.insert("rF".to_string(), SymbolType::Constant(22)); // rF - Failure location register
-        symbols.insert("rP".to_string(), SymbolType::Constant(23)); // rP - Prediction register
-        symbols.insert("rW".to_string(), SymbolType::Constant(24)); // rW - Where-interrupted register (user)
-        symbols.insert("rX".to_string(), SymbolType::Constant(25)); // rX - Execution register (user)
-        symbols.insert("rY".to_string(), SymbolType::Constant(26)); // rY - Y operand (user)
-        symbols.insert("rZ".to_string(), SymbolType::Constant(27)); // rZ - Z operand (user)
-        symbols.insert("rWW".to_string(), SymbolType::Constant(28)); // rWW - Where-interrupted register (kernel)
-        symbols.insert("rXX".to_string(), SymbolType::Constant(29)); // rXX - Execution register (kernel)
-        symbols.insert("rYY".to_string(), SymbolType::Constant(30)); // rYY - Y operand (kernel)
-        symbols.insert("rZZ".to_string(), SymbolType::Constant(31)); // rZZ - Z operand (kernel)
+        for (name, num) in [
+            ("rB", 0u64),
+            ("rD", 1),
+            ("rE", 2),
+            ("rH", 3),
+            ("rJ", 4),
+            ("rM", 5),
+            ("rR", 6),
+            ("rBB", 7),
+            ("rC", 8),
+            ("rN", 9),
+            ("rO", 10),
+            ("rS", 11),
+            ("rI", 12),
+            ("rT", 13),
+            ("rTT", 14),
+            ("rK", 15),
+            ("rQ", 16),
+            ("rU", 17),
+            ("rV", 18),
+            ("rG", 19),
+            ("rL", 20),
+            ("rA", 21),
+            ("rF", 22),
+            ("rP", 23),
+            ("rW", 24),
+            ("rX", 25),
+            ("rY", 26),
+            ("rZ", 27),
+            ("rWW", 28),
+            ("rXX", 29),
+            ("rYY", 30),
+            ("rZZ", 31),
+        ] {
+            Self::seed_predefined(&mut symbols, name, SymbolType::Constant(num));
+        }
 
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);
 
         Self {
-            source: preprocessed_source,
-            filename: filename.to_string(),
+            sources: vec![(filename.to_string(), preprocessed_source)],
+            current_filename: filename.to_string(),
+            current_prefix: String::new(),
             labels: HashMap::new(),
             symbols,
+            label_origins: HashMap::new(),
+            symbol_origins: HashMap::new(),
             instructions: Vec::new(),
             current_addr: 0,
             next_greg: 254, // Start allocating from $254, count down
             greg_inits: Vec::new(),
         }
+    }
+
+    /// Append another translation unit. Files are processed in the order they
+    /// are added; symbols, labels, GREG state, and `current_addr` carry over,
+    /// so the result is identical to assembling the concatenation of inputs.
+    pub fn add_source(&mut self, source: &str, filename: &str) {
+        let preprocessed = Self::preprocess_debug(source);
+        self.sources.push((filename.to_string(), preprocessed));
+    }
+
+    /// Apply the active PREFIX to a raw identifier. Names starting with ':'
+    /// (the global namespace marker) are returned verbatim.
+    fn qualify_name(&self, raw: &str) -> String {
+        if raw.starts_with(':') {
+            raw.to_string()
+        } else {
+            format!("{}{}", self.current_prefix, raw)
+        }
+    }
+
+    /// Define a label (instruction/data/standalone) at the current address.
+    /// Returns an error if the qualified name was already defined by user code.
+    fn define_label(&mut self, raw: &str, addr: u64, line: usize) -> Result<(), String> {
+        let name = self.qualify_name(raw);
+        if let Some((prev_file, prev_line)) = self.label_origins.get(&name) {
+            return Err(format!(
+                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                self.current_filename, line, name, prev_file, prev_line
+            ));
+        }
+        if let Some((prev_file, prev_line)) = self.symbol_origins.get(&name) {
+            return Err(format!(
+                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                self.current_filename, line, name, prev_file, prev_line
+            ));
+        }
+        self.label_origins
+            .insert(name.clone(), (self.current_filename.clone(), line));
+        self.labels.insert(name, addr);
+        Ok(())
+    }
+
+    /// Define an IS- or GREG-bound symbol. Returns an error if the qualified
+    /// name was already defined by user code (predefined symbols are not
+    /// tracked, so user code may shadow them as before).
+    fn define_symbol(&mut self, raw: &str, ty: SymbolType, line: usize) -> Result<(), String> {
+        let name = self.qualify_name(raw);
+        if let Some((prev_file, prev_line)) = self.symbol_origins.get(&name) {
+            return Err(format!(
+                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                self.current_filename, line, name, prev_file, prev_line
+            ));
+        }
+        if let Some((prev_file, prev_line)) = self.label_origins.get(&name) {
+            return Err(format!(
+                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                self.current_filename, line, name, prev_file, prev_line
+            ));
+        }
+        self.symbol_origins
+            .insert(name.clone(), (self.current_filename.clone(), line));
+        self.symbols.insert(name, ty);
+        Ok(())
     }
 
     /// Format Pest parse errors in a user-friendly way
@@ -1211,7 +1265,7 @@ impl MMixAssembler {
         )
     }
 
-    #[instrument(skip(self), fields(source_len = self.source.len()))]
+    #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
         debug!("Starting MMIXAL parsing (two-pass)");
         match self.parse_two_pass() {
@@ -1231,26 +1285,31 @@ impl MMixAssembler {
     /// Two-pass assembler:
     /// Pass 1: Collect all labels and their addresses, process IS directives
     /// Pass 2: Generate instructions with resolved label references
+    ///
+    /// Each pass walks every translation unit in command-line order, threading
+    /// `current_addr`, `current_prefix`, and the symbol tables across files so
+    /// the result matches assembling the concatenation of the inputs. The
+    /// PREFIX state is reset at the start of each pass.
     #[instrument(skip(self))]
     fn parse_two_pass(&mut self) -> Result<(), String> {
         use pest::Parser;
 
-        let source = self.source.clone();
+        let sources = self.sources.clone();
         debug!("Pass 1: Collecting labels and symbols");
+        self.current_prefix.clear();
 
-        // Pass 1: Scan for labels and symbols
-        let pairs = MMixalParser::parse(Rule::program, &source).map_err(|e| {
-            // Format Pest error in a user-friendly way
-            Self::format_parse_error(&e, &self.filename)
-        })?;
-        for pair in pairs {
-            if pair.as_rule() == Rule::program {
-                for line_pair in pair.into_inner() {
-                    if line_pair.as_rule() == Rule::line {
-                        // A line may contain a statement or be empty
-                        for stmt_pair in line_pair.into_inner() {
-                            if stmt_pair.as_rule() == Rule::statement {
-                                self.first_pass_statement(stmt_pair)?;
+        for (filename, source) in &sources {
+            self.current_filename = filename.clone();
+            let pairs = MMixalParser::parse(Rule::program, source)
+                .map_err(|e| Self::format_parse_error(&e, filename))?;
+            for pair in pairs {
+                if pair.as_rule() == Rule::program {
+                    for line_pair in pair.into_inner() {
+                        if line_pair.as_rule() == Rule::line {
+                            for stmt_pair in line_pair.into_inner() {
+                                if stmt_pair.as_rule() == Rule::statement {
+                                    self.first_pass_statement(stmt_pair)?;
+                                }
                             }
                         }
                     }
@@ -1264,22 +1323,24 @@ impl MMixAssembler {
             self.symbols.len()
         );
 
-        // Reset current address for second pass
         let saved_addr = self.current_addr;
         self.current_addr = 0;
+        self.current_prefix.clear();
 
         debug!("Pass 2: Generating instructions");
 
-        // Pass 2: Generate instructions with resolved references
-        let pairs = MMixalParser::parse(Rule::program, &source).map_err(|e| format!("{}", e))?;
-        for pair in pairs {
-            if pair.as_rule() == Rule::program {
-                for line_pair in pair.into_inner() {
-                    if line_pair.as_rule() == Rule::line {
-                        // A line may contain a statement or be empty
-                        for stmt_pair in line_pair.into_inner() {
-                            if stmt_pair.as_rule() == Rule::statement {
-                                self.second_pass_statement(stmt_pair)?;
+        for (filename, source) in &sources {
+            self.current_filename = filename.clone();
+            let pairs = MMixalParser::parse(Rule::program, source)
+                .map_err(|e| Self::format_parse_error(&e, filename))?;
+            for pair in pairs {
+                if pair.as_rule() == Rule::program {
+                    for line_pair in pair.into_inner() {
+                        if line_pair.as_rule() == Rule::line {
+                            for stmt_pair in line_pair.into_inner() {
+                                if stmt_pair.as_rule() == Rule::statement {
+                                    self.second_pass_statement(stmt_pair)?;
+                                }
                             }
                         }
                     }
@@ -1291,48 +1352,48 @@ impl MMixAssembler {
         Ok(())
     }
 
-    /// First pass: collect labels and process IS directives
+    /// First pass: collect labels and process IS/PREFIX directives.
+    /// Redefinition errors are reported here; the second pass overwrites
+    /// silently because every label collected here will be re-encountered
+    /// at the same address.
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn first_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let mut label_name: Option<String> = None;
+        let mut pending_label: Option<(String, usize)> = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::label_def => {
+                    let (line, _) = inner_pair.line_col();
                     let ident = inner_pair.into_inner().next().unwrap();
-                    label_name = Some(ident.as_str().to_string());
+                    pending_label = Some((ident.as_str().to_string(), line));
                 }
                 Rule::instruction => {
-                    // Just advance current_addr by instruction size
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
-                    if let Some(label) = label_name.take() {
-                        debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Collected label");
-                        self.labels.insert(label, self.current_addr);
+                    if let Some((raw, line)) = pending_label.take() {
+                        self.define_label(&raw, self.current_addr, line)?;
                     }
                     self.current_addr += size;
                 }
                 Rule::directive => {
-                    // Handle the grouped directive rule by extracting the actual directive
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
                             let size = self.data_directive_size(directive_pair.clone())?;
-                            if let Some(label) = label_name.take() {
-                                debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Collected label");
-                                self.labels.insert(label, self.current_addr);
+                            if let Some((raw, line)) = pending_label.take() {
+                                self.define_label(&raw, self.current_addr, line)?;
                             }
                             self.current_addr += size;
                         }
                         Rule::loc_directive => {
                             self.parse_loc_directive(directive_pair)?;
-                            if let Some(label) = label_name.take() {
-                                self.labels.insert(label, self.current_addr);
+                            if let Some((raw, line)) = pending_label.take() {
+                                self.define_label(&raw, self.current_addr, line)?;
                             }
                         }
                         Rule::greg_directive => {
-                            // GREG allocates a global register
-                            // If there's a label, it should map to the register number, not an address
+                            // GREG allocates a global register; an attached
+                            // label aliases the register, not an address.
                             let allocated_reg = if self.next_greg == 0 {
                                 return Err(
                                     "Too many GREG directives - ran out of global registers"
@@ -1344,22 +1405,25 @@ impl MMixAssembler {
                                 reg
                             };
 
-                            if let Some(label) = label_name.take() {
-                                // Map the label to the register (as register alias, not address)
-                                self.symbols
-                                    .insert(label, SymbolType::Register(allocated_reg));
+                            if let Some((raw, line)) = pending_label.take() {
+                                self.define_symbol(
+                                    &raw,
+                                    SymbolType::Register(allocated_reg),
+                                    line,
+                                )?;
                             }
 
-                            // Parse to get the init value (will be processed again in second pass)
                             let mut greg_parts = directive_pair.clone().into_inner();
                             let _directive = greg_parts.next();
                             let value = self.parse_number(greg_parts.next().unwrap())?;
                             self.greg_inits.push((allocated_reg, value));
                         }
                         Rule::is_directive => {
-                            // Process IS directive immediately
-                            self.parse_is_directive(directive_pair)?;
-                            // Note: IS directive doesn't advance current_addr
+                            self.parse_is_directive(directive_pair, true)?;
+                            // IS directive doesn't advance current_addr.
+                        }
+                        Rule::prefix_directive => {
+                            self.parse_prefix_directive(directive_pair);
                         }
                         _ => {}
                     }
@@ -1368,16 +1432,18 @@ impl MMixAssembler {
             }
         }
 
-        // Handle standalone labels (labels not followed by instruction or directive)
-        if let Some(label) = label_name {
-            debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Collected standalone label");
-            self.labels.insert(label, self.current_addr);
+        // Standalone labels (no instruction or directive on the line)
+        if let Some((raw, line)) = pending_label {
+            self.define_label(&raw, self.current_addr, line)?;
         }
 
         Ok(())
     }
 
-    /// Second pass: generate actual instructions with resolved labels
+    /// Second pass: generate actual instructions with resolved labels.
+    /// Labels and IS-bound symbols are re-inserted (overwriting the pass-1
+    /// values with the same value) without redefinition checking, since
+    /// PREFIX state is replayed identically and produces the same names.
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn second_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
         let mut label_name: Option<String> = None;
@@ -1390,28 +1456,23 @@ impl MMixAssembler {
                     label_name = Some(ident.as_str().to_string());
                 }
                 Rule::instruction => {
-                    // Define label before processing instruction
-                    if let Some(label) = label_name.take() {
-                        debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Defined label");
-                        self.labels.insert(label, self.current_addr);
+                    if let Some(raw) = label_name.take() {
+                        let qualified = self.qualify_name(&raw);
+                        self.labels.insert(qualified, self.current_addr);
                     }
                     inst = Some(self.parse_instruction(inner_pair)?);
                 }
                 Rule::directive => {
-                    // Handle the grouped directive rule by extracting the actual directive
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
-                            // Define label before processing data directive
-                            if let Some(label) = label_name.take() {
-                                debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Defined label");
-                                self.labels.insert(label, self.current_addr);
+                            if let Some(raw) = label_name.take() {
+                                let qualified = self.qualify_name(&raw);
+                                self.labels.insert(qualified, self.current_addr);
                             }
-                            // Data directives might expand to multiple bytes (e.g., BYTE "string")
                             let instructions = self.parse_data_directive(directive_pair)?;
                             for instruction in instructions {
                                 let size = Self::instruction_size(&instruction);
-                                debug!(inst = ?instruction, addr = format!("0x{:X}", self.current_addr), size, "Added instruction");
                                 self.instructions.push((self.current_addr, instruction));
                                 self.current_addr += size;
                             }
@@ -1420,19 +1481,22 @@ impl MMixAssembler {
                             self.parse_loc_directive(directive_pair)?;
                         }
                         Rule::greg_directive => {
-                            // GREG was already processed in first pass
-                            // Verify that any label was properly added to symbols
-                            if let Some(label) = label_name.take()
-                                && !self.symbols.contains_key(&label)
-                            {
-                                return Err(format!(
-                                    "Internal error: GREG label '{}' not found in symbols from first pass",
-                                    label
-                                ));
+                            // GREG was already processed in first pass.
+                            if let Some(raw) = label_name.take() {
+                                let qualified = self.qualify_name(&raw);
+                                if !self.symbols.contains_key(&qualified) {
+                                    return Err(format!(
+                                        "Internal error: GREG label '{}' not found in symbols from first pass",
+                                        qualified
+                                    ));
+                                }
                             }
                         }
                         Rule::is_directive => {
-                            self.parse_is_directive(directive_pair)?;
+                            self.parse_is_directive(directive_pair, false)?;
+                        }
+                        Rule::prefix_directive => {
+                            self.parse_prefix_directive(directive_pair);
                         }
                         _ => {}
                     }
@@ -1448,10 +1512,10 @@ impl MMixAssembler {
             self.current_addr += size;
         }
 
-        // Handle standalone labels (labels not followed by instruction or directive)
-        if let Some(label) = label_name {
-            debug!(label = %label, addr = format!("0x{:X}", self.current_addr), "Defined standalone label");
-            self.labels.insert(label, self.current_addr);
+        // Standalone labels (no instruction or directive on the line)
+        if let Some(raw) = label_name {
+            let qualified = self.qualify_name(&raw);
+            self.labels.insert(qualified, self.current_addr);
         }
 
         Ok(())
@@ -3052,9 +3116,15 @@ impl MMixAssembler {
         Ok(())
     }
 
-    fn parse_is_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+    fn parse_is_directive(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+        checking: bool,
+    ) -> Result<(), String> {
         let mut parts = pair.into_inner();
-        let symbol_name = parts.next().unwrap().as_str().to_string();
+        let lhs = parts.next().unwrap();
+        let (line, _) = lhs.line_col();
+        let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
 
@@ -3070,8 +3140,20 @@ impl MMixAssembler {
             _ => return Err("IS directive requires register or expr_value".to_string()),
         };
 
-        self.symbols.insert(symbol_name, symbol_type);
+        if checking {
+            self.define_symbol(&raw_name, symbol_type, line)?;
+        } else {
+            let qualified = self.qualify_name(&raw_name);
+            self.symbols.insert(qualified, symbol_type);
+        }
         Ok(())
+    }
+
+    fn parse_prefix_directive(&mut self, pair: pest::iterators::Pair<Rule>) {
+        let mut parts = pair.into_inner();
+        let _directive = parts.next(); // Skip "PREFIX" keyword
+        let arg = parts.next().expect("prefix_arg required by grammar");
+        self.current_prefix = arg.as_str().to_string();
     }
 
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
@@ -3091,21 +3173,21 @@ impl MMixAssembler {
 
         // Check if it's a symbolic name from IS directive
         if !text.starts_with('$') {
-            // Try to resolve as symbol - must be a register type
-            if let Some(&symbol_type) = self.symbols.get(text) {
+            let qualified = self.qualify_name(text);
+            if let Some(&symbol_type) = self.symbols.get(&qualified) {
                 match symbol_type {
                     SymbolType::Register(reg) => return Ok(reg),
                     SymbolType::Constant(value) => {
                         return Err(format!(
-                            "Line {}:{}: Symbol '{}' is a numeric constant ({}), cannot use as register",
-                            line, col, text, value
+                            "{}:{}:{}: Symbol '{}' is a numeric constant ({}), cannot use as register",
+                            self.current_filename, line, col, qualified, value
                         ));
                     }
                 }
             }
             return Err(format!(
-                "Line {}:{}: Undefined symbol '{}' (expected register like $0 or register alias)",
-                line, col, text
+                "{}:{}:{}: Undefined symbol '{}' (expected register like $0 or register alias)",
+                self.current_filename, line, col, qualified
             ));
         }
 
@@ -3194,36 +3276,23 @@ impl MMixAssembler {
             Rule::dec_literal => text
                 .parse::<u64>()
                 .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e)),
-            Rule::symbol => {
-                // Try to resolve as symbol from IS directive or label
-                if let Some(&symbol_type) = self.symbols.get(text) {
+            Rule::symbol | Rule::identifier | Rule::global_id => {
+                let qualified = self.qualify_name(text);
+                if let Some(&symbol_type) = self.symbols.get(&qualified) {
                     match symbol_type {
                         SymbolType::Constant(value) => Ok(value),
                         SymbolType::Register(reg) => Err(format!(
-                            "Line {}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
-                            line, col, text, reg
+                            "{}:{}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
+                            self.current_filename, line, col, qualified, reg
                         )),
                     }
-                } else if let Some(&label_addr) = self.labels.get(text) {
+                } else if let Some(&label_addr) = self.labels.get(&qualified) {
                     Ok(label_addr)
                 } else {
-                    Err(format!("Line {}:{}: Undefined symbol: {}", line, col, text))
-                }
-            }
-            Rule::identifier => {
-                // Backward compatibility: identifier same as symbol
-                if let Some(&symbol_type) = self.symbols.get(text) {
-                    match symbol_type {
-                        SymbolType::Constant(value) => Ok(value),
-                        SymbolType::Register(reg) => Err(format!(
-                            "Line {}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
-                            line, col, text, reg
-                        )),
-                    }
-                } else if let Some(&label_addr) = self.labels.get(text) {
-                    Ok(label_addr)
-                } else {
-                    Err(format!("Line {}:{}: Undefined symbol: {}", line, col, text))
+                    Err(format!(
+                        "{}:{}:{}: Undefined symbol: {}",
+                        self.current_filename, line, col, qualified
+                    ))
                 }
             }
             _ => Err(format!(
@@ -3603,5 +3672,153 @@ mod tests {
         let mut asm = MMixAssembler::new("FUN $1, $2, $3", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::FUN(1, 2, 3));
+    }
+
+    // ---- Multi-source assembly + global-':' symbol tests ----
+
+    #[test]
+    fn test_global_symbol_label_and_operand() {
+        // `:Foo` parses both as a label definition and as an operand reference.
+        let src = "\
+            LOC #100\n\
+            Main BNZ $1,:Foo\n\
+            :Foo HALT\n";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get(":Foo").copied(), Some(0x104));
+        assert_eq!(asm.labels.get("Main").copied(), Some(0x100));
+        // ':Foo' and 'Foo' are distinct names; only the colon-form was defined.
+        assert!(!asm.labels.contains_key("Foo"));
+    }
+
+    #[test]
+    fn test_multi_source_main_calls_lib() {
+        let main_src = "\
+            LOC #100\n\
+            Main PUSHJ $0,:Lib\n\
+                 HALT\n";
+        let lib_src = "\
+            LOC #200\n\
+            :Lib POP 0,0\n";
+        let mut asm = MMixAssembler::new(main_src, "main.mms");
+        asm.add_source(lib_src, "lib.mms");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Main").copied(), Some(0x100));
+        assert_eq!(asm.labels.get(":Lib").copied(), Some(0x200));
+
+        // Two LOC regions both produced instructions.
+        let addrs: Vec<u64> = asm.instructions.iter().map(|(a, _)| *a).collect();
+        assert!(addrs.contains(&0x100));
+        assert!(addrs.contains(&0x200));
+    }
+
+    #[test]
+    fn test_multi_source_main_redefined() {
+        let a = "\
+            LOC #100\n\
+            Main HALT\n";
+        let b = "\
+            LOC #200\n\
+            Main HALT\n";
+        let mut asm = MMixAssembler::new(a, "a.mms");
+        asm.add_source(b, "b.mms");
+        let err = asm.parse().expect_err("expected redefinition error");
+        assert!(err.contains("'Main'"), "err: {}", err);
+        assert!(err.contains("a.mms"), "err: {}", err);
+        assert!(err.contains("b.mms"), "err: {}", err);
+        assert!(err.contains("redefined"), "err: {}", err);
+    }
+
+    #[test]
+    fn test_multi_source_global_symbol_redefined() {
+        let a = "\
+            LOC #100\n\
+            :Foo HALT\n";
+        let b = "\
+            LOC #200\n\
+            :Foo HALT\n";
+        let mut asm = MMixAssembler::new(a, "a.mms");
+        asm.add_source(b, "b.mms");
+        let err = asm.parse().expect_err("expected redefinition error");
+        assert!(err.contains("':Foo'"), "err: {}", err);
+        assert!(err.contains("a.mms"), "err: {}", err);
+        assert!(err.contains("b.mms"), "err: {}", err);
+    }
+
+    #[test]
+    fn test_redefinition_across_label_and_is() {
+        // A label and an IS-bound symbol with the same qualified name collide.
+        let src = "\
+            LOC #100\n\
+            Foo HALT\n\
+            Foo IS 5\n";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        let err = asm.parse().expect_err("expected redefinition error");
+        assert!(err.contains("'Foo'"), "err: {}", err);
+        assert!(err.contains("redefined"), "err: {}", err);
+    }
+
+    // ---- PREFIX directive tests ----
+
+    #[test]
+    fn test_prefix_qualifies_unqualified_symbol() {
+        let src = "\
+            PREFIX Sub_\n\
+            Bar IS 5\n";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.symbols.get("Sub_Bar").copied(),
+            Some(SymbolType::Constant(5))
+        );
+        assert!(!asm.symbols.contains_key("Bar"));
+    }
+
+    #[test]
+    fn test_prefix_colon_opts_out() {
+        let src = "\
+            PREFIX Sub_\n\
+            :Foo IS 9\n";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.symbols.get(":Foo").copied(),
+            Some(SymbolType::Constant(9))
+        );
+        assert!(!asm.symbols.contains_key("Sub_:Foo"));
+    }
+
+    #[test]
+    fn test_prefix_persists_across_files() {
+        // PREFIX set in file A applies to definitions in file B.
+        let a = "PREFIX P_\n";
+        let b = "\
+            LOC #100\n\
+            Bar HALT\n";
+        let mut asm = MMixAssembler::new(a, "a.mms");
+        asm.add_source(b, "b.mms");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("P_Bar").copied(), Some(0x100));
+        assert!(!asm.labels.contains_key("Bar"));
+    }
+
+    #[test]
+    fn test_prefix_reset_to_global() {
+        // `PREFIX :` makes unqualified names resolve under the global root.
+        let src = "\
+            PREFIX P_\n\
+            Bar IS 1\n\
+            PREFIX :\n\
+            Baz IS 2\n";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.symbols.get("P_Bar").copied(),
+            Some(SymbolType::Constant(1))
+        );
+        assert_eq!(
+            asm.symbols.get(":Baz").copied(),
+            Some(SymbolType::Constant(2))
+        );
     }
 }

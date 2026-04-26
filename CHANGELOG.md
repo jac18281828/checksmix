@@ -1,3 +1,13 @@
+0.2.18 (2026-04-26)
+
+* Multi-source assembly: `checksmix a.mms b.mms ...` and `mmixasm a.mms b.mms ... -o out.mmo` load all inputs into one shared symbol space and one byte stream, as if the files were concatenated; symbols, GREG state, and `current_addr` carry across files in command-line order
+* Grammar: identifiers may carry a leading `:` marking a linkage-visible (global) symbol; `:Foo` and `Foo` are distinct names, both as label definitions and as operand references
+* New `PREFIX` directive: `PREFIX P_` qualifies subsequent unqualified names as `P_<name>`; names starting with `:` opt out and are stored verbatim. PREFIX state persists across files in the same run and resets at the start of each pass
+* Predefined symbols (TRAP codes, special registers, segment constants) are reachable as both `Halt` and `:Halt` so they remain available from inside any `PREFIX` region
+* Duplicate-symbol detection: redefining `Main`, a global `:Foo`, an IS-bound symbol, or a GREG label now reports `<file>:<line>: symbol '<name>' redefined (first defined at <prev-file>:<prev-line>)`; predefined symbols may still be shadowed by user code
+* `mmixasm` accepts one or more inputs; `-o/--output` flag explicit (output defaults to first input's basename with `.mmo`)
+* `checksmix` dispatches by extension when given a single input and assembles multiple `.mms` inputs together when given more than one (mixing extensions is an error)
+
 0.2.17 (2026-04-26)
 
 * Fputs/Fputc/Fputws now route to any open file descriptor (previously fds returned by Fopen were silently dropped while $255 still reported a successful byte count); on write failure or unknown fd they return -1

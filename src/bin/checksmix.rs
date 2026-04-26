@@ -17,8 +17,11 @@ struct Cli {
     #[arg(long)]
     unsigned: bool,
 
-    /// Program file to execute (.mix/.mixal/.mms/.mmo)
-    program_file: String,
+    /// Program file(s) to execute. A single file dispatches by extension
+    /// (.mix/.mixal/.mms/.mmo); multiple files must all be .mms and are
+    /// assembled into one shared symbol space before execution.
+    #[arg(required = true, num_args = 1..)]
+    program_files: Vec<String>,
 }
 
 fn main() {
@@ -34,25 +37,43 @@ fn main() {
         ValueFormat::Signed
     };
 
-    let path = Path::new(&opts.program_file);
-    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if opts.program_files.len() == 1 {
+        let program_file = &opts.program_files[0];
+        let path = Path::new(program_file);
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
-    match extension {
-        "mix" | "mixal" => run_mix(&opts.program_file),
-        "mms" => run_mms(&opts.program_file, value_format),
-        "mmo" => run_mmo(&opts.program_file, value_format),
-        _ => {
-            eprintln!(
-                "Unknown file extension: .{}",
-                if extension.is_empty() {
-                    "(none)"
-                } else {
-                    extension
-                }
-            );
-            eprintln!("Supported extensions: .mix, .mixal, .mms, .mmo");
-            process::exit(1);
+        match extension {
+            "mix" | "mixal" => run_mix(program_file),
+            "mms" => run_mms(std::slice::from_ref(program_file), value_format),
+            "mmo" => run_mmo(program_file, value_format),
+            _ => {
+                eprintln!(
+                    "Unknown file extension: .{}",
+                    if extension.is_empty() {
+                        "(none)"
+                    } else {
+                        extension
+                    }
+                );
+                eprintln!("Supported extensions: .mix, .mixal, .mms, .mmo");
+                process::exit(1);
+            }
         }
+    } else {
+        for f in &opts.program_files {
+            let ext = Path::new(f)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if ext != "mms" {
+                eprintln!(
+                    "When passing multiple inputs, all files must be .mms (got '{}')",
+                    f
+                );
+                process::exit(1);
+            }
+        }
+        run_mms(&opts.program_files, value_format);
     }
 }
 
@@ -95,17 +116,32 @@ fn run_mix(filename: &str) {
     println!("Execution completed.");
 }
 
-fn run_mms(filename: &str, value_format: ValueFormat) {
-    let input = fs::read_to_string(filename).unwrap_or_else(|err| {
-        eprintln!("Error reading file '{}': {}", filename, err);
-        process::exit(1);
-    });
+fn run_mms(filenames: &[String], value_format: ValueFormat) {
+    let mut sources = Vec::with_capacity(filenames.len());
+    for f in filenames {
+        let input = fs::read_to_string(f).unwrap_or_else(|err| {
+            eprintln!("Error reading file '{}': {}", f, err);
+            process::exit(1);
+        });
+        sources.push((f.clone(), input));
+    }
 
     println!("=== MMIX Assembler ===");
-    println!("=== Parsing assembly from: {} ===", filename);
+    if sources.len() == 1 {
+        println!("=== Parsing assembly from: {} ===", sources[0].0);
+    } else {
+        println!("=== Parsing {} assembly inputs ===", sources.len());
+        for (f, _) in &sources {
+            println!("  {}", f);
+        }
+    }
     println!();
 
-    let mut assembler = MMixAssembler::new(&input, filename);
+    let (first_file, first_src) = &sources[0];
+    let mut assembler = MMixAssembler::new(first_src, first_file);
+    for (f, src) in sources.iter().skip(1) {
+        assembler.add_source(src, f);
+    }
 
     if let Err(e) = assembler.parse() {
         eprintln!("Error: {}", e);

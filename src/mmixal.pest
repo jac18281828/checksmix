@@ -7,6 +7,11 @@ COMMENT = _{ (";" | "%") ~ (!"\n" ~ ANY)* }
 // Symbols/identifiers for labels and symbolic names
 symbol = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
+// Identifier that may carry a leading ':' marking a global (linkage-visible)
+// symbol. The ':' is part of the stored name; references to ':Foo' and 'Foo'
+// are distinct keys in the symbol table.
+global_id = @{ ":"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
 // Numeric literals: decimal, hex (#... or 0x...), octal (0...)
 // @ represents current location
 at_symbol = @{ "@" }
@@ -17,8 +22,9 @@ char_literal = @{ "'" ~ ( "\\" ~ ( "n" | "r" | "t" | "0" | "\\" | "'" ) | (!"'" 
 number_literal = { at_symbol | hex_literal | oct_literal | dec_literal | char_literal }
 signed_number_literal = { "-" ~ (hex_literal | oct_literal | dec_literal) }
 
-// Expression value: can be a numeric literal or a symbol (label/constant)
-expr_value = { signed_number_literal | number_literal | symbol }
+// Expression value: can be a numeric literal or a symbol (label/constant).
+// Uses global_id so a leading ':' is preserved when referencing a global.
+expr_value = { signed_number_literal | number_literal | global_id }
 
 // Registers: $0-$255 or symbolic names from IS directive  
 register_num = @{ "$" ~ ASCII_DIGIT+ }
@@ -27,9 +33,9 @@ register = { register_num | symbol }
 // Identifiers (kept for backward compatibility in some contexts)
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Label definition: symbol optionally followed by colon
-// In standard MMIXAL, labels can appear with or without colons
-label_def = { symbol ~ ":"? }
+// Label definition: identifier (optionally global, with leading ':')
+// optionally followed by a trailing colon (legacy MMIXAL syntax).
+label_def = { global_id ~ ":"? }
 
 // String literal for BYTE directive
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
@@ -44,6 +50,11 @@ directive_octa = @{ (^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD") ~ !ASCII_ALPHANUME
 directive_loc = @{ ^"LOC" ~ !ASCII_ALPHANUMERIC }
 directive_is = @{ ^"IS" ~ !ASCII_ALPHANUMERIC }
 directive_greg = @{ ^"GREG" ~ !ASCII_ALPHANUMERIC }
+directive_prefix = @{ ^"PREFIX" ~ !ASCII_ALPHANUMERIC }
+
+// PREFIX argument: any identifier-like sequence allowing ':' so users can
+// write `PREFIX foo:` (Knuth idiom) or `PREFIX :` (reset to root namespace).
+prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
 // BYTE can take strings or comma-separated values
 byte_value = { string_literal | expr_value }
@@ -59,12 +70,14 @@ data_directive = {
 greg_directive = { directive_greg ~ expr_value }
 
 loc_directive = { directive_loc ~ expr_value }
-is_directive = { symbol ~ directive_is ~ (register | expr_value) }
+is_directive = { global_id ~ directive_is ~ (register | expr_value) }
+prefix_directive = { directive_prefix ~ prefix_arg }
 
 // Group all directives under a single rule
 // Note: debug directives are handled by preprocessor, not grammar
 directive = {
-    is_directive
+    prefix_directive
+  | is_directive
   | loc_directive
   | greg_directive
   | data_directive

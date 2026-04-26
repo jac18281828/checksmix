@@ -14,12 +14,13 @@ use tracing_subscriber::{EnvFilter, fmt};
     author
 )]
 struct Cli {
-    /// Input MMIX assembly file (.mms)
-    #[arg(value_name = "INPUT.mms")]
-    input: PathBuf,
+    /// Input MMIX assembly file(s) (.mms). Multiple inputs are loaded into
+    /// one shared symbol space, as if their contents were concatenated.
+    #[arg(value_name = "INPUT.mms", required = true, num_args = 1..)]
+    inputs: Vec<PathBuf>,
 
-    /// Output MMO file (defaults to INPUT basename with .mmo)
-    #[arg(value_name = "OUTPUT.mmo")]
+    /// Output MMO file (defaults to first input's basename with .mmo)
+    #[arg(short = 'o', long = "output", value_name = "OUTPUT.mmo")]
     output: Option<PathBuf>,
 }
 
@@ -30,39 +31,41 @@ fn main() {
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     let cli = Cli::parse();
-    let input_file = cli.input;
+    let inputs = cli.inputs;
     let output_file = cli
         .output
-        .unwrap_or_else(|| input_file.with_extension("mmo"));
+        .unwrap_or_else(|| inputs[0].with_extension("mmo"));
 
-    // Read the input file
-    let source = fs::read_to_string(&input_file).unwrap_or_else(|err| {
-        eprintln!("Error reading '{}': {}", input_file.display(), err);
-        process::exit(1);
-    });
+    let mut sources: Vec<(String, String)> = Vec::with_capacity(inputs.len());
+    for path in &inputs {
+        let src = fs::read_to_string(path).unwrap_or_else(|err| {
+            eprintln!("Error reading '{}': {}", path.display(), err);
+            process::exit(1);
+        });
+        let name = path
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        sources.push((name, src));
+    }
 
-    println!("Assembling: {}", input_file.display());
+    if sources.len() == 1 {
+        println!("Assembling: {}", sources[0].0);
+    } else {
+        println!("Assembling {} inputs:", sources.len());
+        for (n, _) in &sources {
+            println!("  {}", n);
+        }
+    }
 
-    // Parse the assembly
-    let input_name = input_file.to_str().unwrap_or("input.mms");
-    let mut assembler = MMixAssembler::new(&source, input_name);
+    let (first_name, first_src) = &sources[0];
+    let mut assembler = MMixAssembler::new(first_src, first_name);
+    for (n, s) in sources.iter().skip(1) {
+        assembler.add_source(s, n);
+    }
 
     if let Err(e) = assembler.parse() {
-        // Format error in standard assembler format: filename:line:column: message
-        // If error already has "Line X:Y:" prefix, reformat it
-        if e.starts_with("Line ") {
-            if let Some(rest) = e.strip_prefix("Line ") {
-                if let Some((line_col, msg)) = rest.split_once(": ") {
-                    eprintln!("{}:{}: {}", input_name, line_col, msg);
-                } else {
-                    eprintln!("{}: {}", input_name, e);
-                }
-            } else {
-                eprintln!("{}: {}", input_name, e);
-            }
-        } else {
-            eprintln!("{}: {}", input_name, e);
-        }
+        eprintln!("{}", e);
         process::exit(1);
     }
 
