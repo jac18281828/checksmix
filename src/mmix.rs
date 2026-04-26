@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write, stderr, stdout};
 use std::time::SystemTime;
 
 use tracing::{debug, instrument, trace};
@@ -1129,6 +1129,10 @@ impl MMix {
         debug!("TRAP: Halt");
         let exit_code = self.get_register(255);
         self.exit_code = exit_code;
+        // Flush stdout: process::exit will not run destructors, so any
+        // buffered output from earlier Fputs/Fputc/Fputws calls would
+        // otherwise be discarded when stdout is piped to a non-tty.
+        let _ = stdout().flush();
         eprintln!("HALT trap at PC={:#018x}, exit code={}", self.pc, exit_code);
         self.advance_pc();
         false
@@ -1213,7 +1217,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 2: Fclose - close a file
+    /// TRAP 3: Fclose - close a file
     /// Parameter in $255: file descriptor
     /// Returns 0 on success, -1 on error in $255
     fn handle_fclose(&mut self, _arg: u8) -> bool {
@@ -1234,7 +1238,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 3: Fread - read from file
+    /// TRAP 4: Fread - read from file
     /// Parameter in $255: address of parameter block containing:
     ///   OCTA 0: file descriptor
     ///   OCTA 1: buffer address
@@ -1279,7 +1283,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 4: Fgets - read a line from file (up to newline)
+    /// TRAP 5: Fgets - read a line from file (up to newline)
     /// Parameter in $255: address of parameter block containing:
     ///   OCTA 0: buffer address
     ///   OCTA 1: maximum buffer size
@@ -1337,7 +1341,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 5: Fgetws - read a wide string from file (same as Fgets for now)
+    /// TRAP 6: Fgetws - read a wide string from file (same as Fgets for now)
     /// Parameter in $255: address of parameter block containing:
     ///   OCTA 0: buffer address
     ///   OCTA 1: maximum buffer size
@@ -1395,7 +1399,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 6: Fwrite - write to file
+    /// TRAP 7: Fwrite - write to file
     /// Parameter in $255: address of parameter block containing:
     ///   OCTA 0: file descriptor
     ///   OCTA 1: buffer address
@@ -1439,135 +1443,103 @@ impl MMix {
         true
     }
 
-    /// TRAP 7: Fputs - write null-terminated string
-    /// Parameter in $255: string address
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
-    /// Returns character count in $255
-    fn handle_fputs(&mut self, arg: u8) -> bool {
-        let str_addr = self.get_register(255);
-        let mut output = String::new();
+    /// Read a NUL-terminated byte string from memory starting at `addr`.
+    /// Bytes are returned verbatim (no UTF-8 widening). Truncated at `max_len`
+    /// bytes if no NUL is found, with a warning. Walks memory using wrapping
+    /// arithmetic so str_addr near u64::MAX cannot panic.
+    fn read_byte_string(&self, str_addr: u64, max_len: usize, label: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
         let mut addr = str_addr;
-
         loop {
             let byte = self.read_byte(addr);
             if byte == 0 {
                 break;
             }
-            output.push(byte as char);
-            addr += 1;
-            if addr.wrapping_sub(str_addr) > 10000 {
-                eprintln!("Warning: Fputs string too long, truncating");
+            bytes.push(byte);
+            if bytes.len() >= max_len {
+                eprintln!("Warning: {} string too long, truncating", label);
                 break;
             }
+            addr = addr.wrapping_add(1);
         }
-
-        let char_count = output.len() as u64;
-        match arg {
-            1 => print!("{}", output),
-            2 => eprint!("{}", output),
-            _ => debug!(arg, "Fputs to unsupported file descriptor"),
-        }
-
-        debug!(arg, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputs");
-        self.set_register(255, char_count);
-        self.advance_pc();
-        true
+        bytes
     }
 
-    /// TRAP 8: Fputc - write a character
-    /// Parameter in $255: character code
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
-    /// Returns 0 on success, -1 on error in $255
-    fn handle_fputc(&mut self, fd_arg: u8) -> bool {
-        let ch = (self.get_register(255) & 0xFF) as u8;
-
-        debug!(fd = fd_arg, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
-
-        match fd_arg {
-            1 => {
-                print!("{}", ch as char);
-                self.set_register(255, 0);
-            }
-            2 => {
-                eprint!("{}", ch as char);
-                self.set_register(255, 0);
-            }
-            _ => match self.file_handles.get_mut(&fd_arg) {
-                Some(file) => match file.write_all(&[ch]) {
-                    Ok(_) => {
-                        self.set_register(255, 0);
-                        debug!("Fputc successful");
-                    }
-                    Err(_) => {
-                        self.set_register(255, (-1i64) as u64);
-                        debug!("Fputc write failed");
-                    }
-                },
-                None => {
-                    self.set_register(255, (-1i64) as u64);
-                    debug!(fd = fd_arg, "File not open for write");
-                }
+    /// Write raw bytes to the destination identified by an MMIX file
+    /// descriptor: 1 = stdout, 2 = stderr, anything else looked up in
+    /// `file_handles`. `write_all` retries on short writes; the inner
+    /// stdout/stderr handle is locked once for the whole payload.
+    fn write_bytes_to_fd(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+        match fd {
+            1 => stdout().lock().write_all(bytes),
+            2 => stderr().lock().write_all(bytes),
+            _ => match self.file_handles.get_mut(&fd) {
+                Some(file) => file.write_all(bytes),
+                None => Err(std::io::Error::other("file descriptor not open")),
             },
         }
+    }
+
+    /// TRAP 8: Fputs - write null-terminated string
+    /// Parameter in $255: string address
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
+    /// a handle previously returned by Fopen)
+    /// Returns byte count written in $255, or -1 on error
+    fn handle_fputs(&mut self, fd: u8) -> bool {
+        let str_addr = self.get_register(255);
+        let bytes = self.read_byte_string(str_addr, 10000, "Fputs");
+        debug!(fd, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputs");
+        match self.write_bytes_to_fd(fd, &bytes) {
+            Ok(_) => self.set_register(255, bytes.len() as u64),
+            Err(_) => {
+                debug!(fd, "Fputs write failed");
+                self.set_register(255, (-1i64) as u64);
+            }
+        }
         self.advance_pc();
         true
     }
 
-    /// TRAP 9: Fputws - write a wide string to file (same as Fputs for now)
+    /// TRAP 9: Fputc - write a character
+    /// Parameter in $255: character code (low 8 bits)
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
+    /// a handle previously returned by Fopen)
+    /// Returns 0 on success, -1 on error in $255
+    fn handle_fputc(&mut self, fd: u8) -> bool {
+        let ch = (self.get_register(255) & 0xFF) as u8;
+        debug!(fd, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
+        match self.write_bytes_to_fd(fd, &[ch]) {
+            Ok(_) => self.set_register(255, 0),
+            Err(_) => {
+                debug!(fd, "Fputc write failed");
+                self.set_register(255, (-1i64) as u64);
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 10: Fputws - write a wide string to file (same as Fputs for now)
     /// Parameter in $255: string address
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr)
-    /// Returns character count in $255, or -1 on error
+    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
+    /// a handle previously returned by Fopen)
+    /// Returns byte count written in $255, or -1 on error
     fn handle_fputws(&mut self, fd: u8) -> bool {
         let str_addr = self.get_register(255);
-        let mut output = String::new();
-        let mut addr = str_addr;
-
-        loop {
-            let byte = self.read_byte(addr);
-            if byte == 0 {
-                break;
-            }
-            output.push(byte as char);
-            addr += 1;
-            if addr.wrapping_sub(str_addr) > 10000 {
-                eprintln!("Warning: Fputws string too long, truncating");
-                break;
+        let bytes = self.read_byte_string(str_addr, 10000, "Fputws");
+        debug!(fd, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputws");
+        match self.write_bytes_to_fd(fd, &bytes) {
+            Ok(_) => self.set_register(255, bytes.len() as u64),
+            Err(_) => {
+                debug!(fd, "Fputws write failed");
+                self.set_register(255, (-1i64) as u64);
             }
         }
-
-        let char_count = output.len() as u64;
-        match fd {
-            1 => {
-                print!("{}", output);
-                self.set_register(255, char_count);
-            }
-            2 => {
-                eprint!("{}", output);
-                self.set_register(255, char_count);
-            }
-            _ => match self.file_handles.get_mut(&fd) {
-                Some(file) => match file.write_all(output.as_bytes()) {
-                    Ok(_) => {
-                        self.set_register(255, char_count);
-                        debug!("Fputws successful");
-                    }
-                    Err(_) => {
-                        self.set_register(255, (-1i64) as u64);
-                        debug!("Fputws write failed");
-                    }
-                },
-                None => {
-                    self.set_register(255, (-1i64) as u64);
-                    debug!(fd, "File not open for write");
-                }
-            },
-        }
-        debug!(fd, "TRAP: Fputws");
         self.advance_pc();
         true
     }
 
-    /// TRAP 10: Fseek - seek in file
+    /// TRAP 11: Fseek - seek in file
     /// Parameter in $255: address of parameter block containing:
     ///   OCTA 0: file descriptor
     ///   OCTA 1: offset (as i64)
@@ -1615,7 +1587,7 @@ impl MMix {
         true
     }
 
-    /// TRAP 11: Ftell - get file position
+    /// TRAP 12: Ftell - get file position
     /// Parameter in $255: file descriptor
     /// Returns current position in $255, or -1 on error
     fn handle_ftell(&mut self, _arg: u8) -> bool {
@@ -8180,26 +8152,24 @@ mod tests {
     #[test]
     fn test_trap_fputs_stdout() {
         let mut mmix = MMix::new();
-        // TRAP 0, Fputs, 1 (write to stdout)
         let test_string = b"Hello, MMIX!\0";
         let str_addr = 1000u64;
 
-        // Write string to memory
         for (i, &byte) in test_string.iter().enumerate() {
             mmix.write_byte(str_addr + i as u64, byte);
         }
 
-        mmix.set_register(0, str_addr);
-        mmix.write_tetra(0, 0x00000701); // TRAP 0, 7, 1 (Fputs to stdout)
+        mmix.set_register(255, str_addr); // Fputs reads string address from $255
+        mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputs (8), 1 (stdout)
         let should_continue = mmix.execute_instruction();
-        assert!(should_continue); // Should continue
-        assert_eq!(mmix.get_pc(), 4); // PC advanced
+        assert!(should_continue);
+        assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(mmix.get_register(255), 12); // bytes written
     }
 
     #[test]
     fn test_trap_fputs_stderr() {
         let mut mmix = MMix::new();
-        // TRAP 0, Fputs, 2 (write to stderr)
         let test_string = b"Error message\0";
         let str_addr = 2000u64;
 
@@ -8207,20 +8177,19 @@ mod tests {
             mmix.write_byte(str_addr + i as u64, byte);
         }
 
-        mmix.set_register(0, str_addr);
-        mmix.write_tetra(0, 0x00000702); // TRAP 0, 7, 2 (Fputs to stderr)
+        mmix.set_register(255, str_addr);
+        mmix.write_tetra(0, 0x00000802); // TRAP 0, Fputs (8), 2 (stderr)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(mmix.get_register(255), 13);
     }
 
     #[test]
     fn test_trap_fputc_stdout() {
         let mut mmix = MMix::new();
-        // TRAP 0, Fputc, 1 (write character to stdout)
-        // Character should be in $255
-        mmix.set_register(255, b'X' as u64); // character 'X' in $255
-        mmix.write_tetra(0, 0x00000801); // TRAP 0, 8, 1
+        mmix.set_register(255, b'X' as u64);
+        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), 1 (stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success (return code 0 in $255)
@@ -8576,6 +8545,145 @@ mod tests {
 
         // Time should be monotonic (second time >= first time)
         assert!(time2 >= time1);
+    }
+
+    #[test]
+    fn test_trap_fputs_to_file_descriptor() {
+        // Fputs targeted at an Fopen'd fd must write the bytes through to
+        // that file, not silently no-op as it did when fd>2 was unsupported.
+        use std::fs;
+
+        let mut mmix = MMix::new();
+        let path = "/tmp/test_mmix_fputs_to_fd.txt";
+        let _ = fs::remove_file(path);
+
+        let file = fs::File::create(path).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        let test_string = b"Hello, file fd!\0";
+        let str_addr = 1500u64;
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+        mmix.set_register(255, str_addr);
+        // TRAP 0, Fputs (8), 3
+        mmix.write_tetra(0, 0x00000803);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), 15); // bytes written, not -1
+
+        // Drop the file handle so the OS flushes contents before reading.
+        mmix.file_handles.remove(&fd);
+        let contents = fs::read(path).unwrap();
+        assert_eq!(contents, b"Hello, file fd!");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_trap_fputs_unknown_fd_returns_error() {
+        // Fputs to a closed/unknown fd must report -1, not the byte count.
+        let mut mmix = MMix::new();
+        let test_string = b"data\0";
+        let str_addr = 200u64;
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+        mmix.set_register(255, str_addr);
+        // TRAP 0, Fputs (8), 99 (no such fd)
+        mmix.write_tetra(0, 0x00000863);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    }
+
+    #[test]
+    fn test_trap_fputs_high_bytes_to_file_are_raw() {
+        // Bytes 0x80..=0xFF must be written verbatim, not widened via UTF-8.
+        // Pre-fix code did `output.push(byte as char)`, so 0xFF on stdout
+        // came out as 0xC3 0xBF.
+        use std::fs;
+
+        let mut mmix = MMix::new();
+        let path = "/tmp/test_mmix_fputs_raw_bytes.bin";
+        let _ = fs::remove_file(path);
+        let file = fs::File::create(path).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        let bytes = [0xFFu8, 0x80, 0x41, 0x00];
+        let str_addr = 700u64;
+        for (i, &b) in bytes.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, b);
+        }
+        mmix.set_register(255, str_addr);
+        mmix.write_tetra(0, 0x00000803); // TRAP 0, Fputs (8), 3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), 3);
+
+        mmix.file_handles.remove(&fd);
+        let contents = fs::read(path).unwrap();
+        assert_eq!(contents, vec![0xFFu8, 0x80, 0x41]);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_trap_fputc_high_byte_to_file_is_raw() {
+        // Same regression as Fputs: a byte ≥ 0x80 must be written as one
+        // raw byte, not UTF-8-expanded.
+        use std::fs;
+
+        let mut mmix = MMix::new();
+        let path = "/tmp/test_mmix_fputc_raw.bin";
+        let _ = fs::remove_file(path);
+        let file = fs::File::create(path).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        mmix.set_register(255, 0xFF);
+        mmix.write_tetra(0, 0x00000903); // TRAP 0, Fputc (9), 3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), 0);
+
+        mmix.file_handles.remove(&fd);
+        let contents = fs::read(path).unwrap();
+        assert_eq!(contents, vec![0xFFu8]);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_trap_fputc_unknown_fd_returns_error() {
+        let mut mmix = MMix::new();
+        mmix.set_register(255, b'A' as u64);
+        // TRAP 0, Fputc (9), 99
+        mmix.write_tetra(0, 0x00000963);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    }
+
+    #[test]
+    fn test_trap_fputws_to_file_descriptor() {
+        use std::fs;
+
+        let mut mmix = MMix::new();
+        let path = "/tmp/test_mmix_fputws_to_fd.txt";
+        let _ = fs::remove_file(path);
+        let file = fs::File::create(path).unwrap();
+        let fd = 3u8;
+        mmix.file_handles.insert(fd, file);
+
+        let test_string = b"wide\0";
+        let str_addr = 800u64;
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+        mmix.set_register(255, str_addr);
+        mmix.write_tetra(0, 0x00000A03); // TRAP 0, Fputws (10), 3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), 4);
+
+        mmix.file_handles.remove(&fd);
+        let contents = fs::read(path).unwrap();
+        assert_eq!(contents, b"wide");
+        let _ = fs::remove_file(path);
     }
 
     // ==================== Floating-point: rA flag coverage ====================
