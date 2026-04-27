@@ -66,3 +66,5 @@ All commits land on the branch; `main` only ever sees a fast-forward.
 4. Bump `Cargo.toml` to `X.Y.(Z+1)` and commit as `docs: X.Y.(Z+1)`.
 5. FF-merge the branch into `main`; push `main` and the tag — the `deploy-crate` workflow publishes on tag push.
 6. Delete the feature branch (local and remote).
+
+The tag version matches the code version *at the tagged commit*; the `docs: X.Y.(Z+1)` commit prepares the *next* release.
