@@ -1,3 +1,12 @@
+0.2.21 (2026-04-30)
+
+* Auto-immediate selection: base mnemonics in the arithmetic, bitwise, bit-fiddle, shift, conditional-set, and zero-or-set families now accept either a register or a 0..255 immediate as their third operand and emit the matching RRR or RRI variant. `ADD $1,$2,5` now assembles to `ADDI`, `AND $1,$2,#FF` to `ANDI`, `SR $1,$2,3` to `SRI`, and so on — matching standard MMIXAL where there is no separate `ADDI` mnemonic
+* Existing `*I` mnemonics (`ADDI`, `ANDI`, `SRUI`, …) continue to work unchanged as accepted aliases that always force the immediate encoding, so existing `.mms` sources assemble byte-for-byte identically
+* Z-operand resolution: bare symbols at the Z slot are resolved against the symbol and label tables — register aliases (`R IS $4`) keep the RRR form, in-range constants (`K IS 7`) auto-select RRI, label addresses and out-of-range constants are rejected with `<file>:<line>:<col>: immediate operand N out of range 0..255 for <mnem>`
+* Strict 0..255 range check on the auto path; the explicit `*I` path retains its existing silent-wrap behaviour for negatives (so `ADDI $1,$2,-1 → ADDI(1,2,0xFF)` still holds)
+* Out of scope (separate tasks): loads/stores, `NEG`/`NEGU`, `PUSHGO`/`GO` and other specialty rules, float-immediate forms (`FLOTI`, `SFLOTI`, …), `MMIX.md` documentation, and removal of the `*I` mnemonics
+* 47 validation tests added covering every base mnemonic in scope (RRR + RRI), prefix-collision backtracking (ADD/ADDU, AND/ANDN, CSN/CSNN, ZSN/ZSNN, SR/SRU, 2/4/8/16-ADDU), boundary Z values (0, 255, #FF, 256, #100, -1, $255, char literals), symbol/label resolution at Z, cross-family routing, and a comprehensive byte-identical regression pairing every base mnemonic with its explicit `*I` sibling
+
 0.2.20 (2026-04-26)
 
 * `checksmix` now supports three subcommands: `run` (default, preserves all existing behaviour), `check` (parse + dry-encode one or more `.mms` files; silent on success, `<file>:<line>:<col>: …` on failure, exit 1), and `build` (assemble to `.mmo`, prints only the output path, no verbose debug dump)
