@@ -4119,4 +4119,584 @@ ZSEVI $7,$8,128
             );
         }
     }
+
+    // -----------------------------------------------------------------
+    // Extensive validation for the auto-immediate path.
+    // -----------------------------------------------------------------
+    // The auto rules introduce backtracking through prefix collisions
+    // (e.g. AND vs ANDI, ADD vs ADDU, CSN vs CSNN). The tests below
+    // pin down the routing for every base mnemonic in scope, exercise
+    // boundary Z values, exercise symbol-Z resolution paths, and
+    // confirm cross-family non-interference.
+
+    /// Assemble a snippet whose first instruction is the one under test
+    /// and assert it produced the expected enum variant. Snippets are
+    /// kept to one logical instruction so failures point at the case.
+    fn assert_first_instruction(src: &str, expected: MMixInstruction) {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e}"));
+        assert!(
+            !asm.instructions.is_empty(),
+            "no instructions produced for {src:?}"
+        );
+        assert_eq!(
+            asm.instructions[0].1, expected,
+            "wrong instruction for {src:?}"
+        );
+    }
+
+    fn assert_parse_error_contains(src: &str, needle: &str) {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        let err = asm
+            .parse()
+            .err()
+            .unwrap_or_else(|| panic!("expected error for {src:?}, but parse succeeded"));
+        assert!(
+            err.contains(needle),
+            "error for {src:?} missing {needle:?}: got {err}"
+        );
+    }
+
+    // ---- Family-wide auto-immediate coverage ------------------------
+
+    #[test]
+    fn test_auto_arith_full_coverage() {
+        // Every arithmetic base mnemonic + register form (RRR) and
+        // immediate form (RRI). Z=5 for stability; mnemonic prefixes
+        // (ADD/ADDU/2ADDU/...) must each route to their own variant.
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("ADD $1,$2,$3", MMixInstruction::ADD(1, 2, 3)),
+            ("ADD $1,$2,5", MMixInstruction::ADDI(1, 2, 5)),
+            ("ADDU $1,$2,$3", MMixInstruction::ADDU(1, 2, 3)),
+            ("ADDU $1,$2,5", MMixInstruction::ADDUI(1, 2, 5)),
+            ("2ADDU $1,$2,$3", MMixInstruction::ADDU2(1, 2, 3)),
+            ("2ADDU $1,$2,5", MMixInstruction::ADDU2I(1, 2, 5)),
+            ("4ADDU $1,$2,$3", MMixInstruction::ADDU4(1, 2, 3)),
+            ("4ADDU $1,$2,5", MMixInstruction::ADDU4I(1, 2, 5)),
+            ("8ADDU $1,$2,$3", MMixInstruction::ADDU8(1, 2, 3)),
+            ("8ADDU $1,$2,5", MMixInstruction::ADDU8I(1, 2, 5)),
+            ("16ADDU $1,$2,$3", MMixInstruction::ADDU16(1, 2, 3)),
+            ("16ADDU $1,$2,5", MMixInstruction::ADDU16I(1, 2, 5)),
+            ("SUB $1,$2,$3", MMixInstruction::SUB(1, 2, 3)),
+            ("SUB $1,$2,5", MMixInstruction::SUBI(1, 2, 5)),
+            ("SUBU $1,$2,$3", MMixInstruction::SUBU(1, 2, 3)),
+            ("SUBU $1,$2,5", MMixInstruction::SUBUI(1, 2, 5)),
+            ("MUL $1,$2,$3", MMixInstruction::MUL(1, 2, 3)),
+            ("MUL $1,$2,5", MMixInstruction::MULI(1, 2, 5)),
+            ("MULU $1,$2,$3", MMixInstruction::MULU(1, 2, 3)),
+            ("MULU $1,$2,5", MMixInstruction::MULUI(1, 2, 5)),
+            ("DIV $1,$2,$3", MMixInstruction::DIV(1, 2, 3)),
+            ("DIV $1,$2,5", MMixInstruction::DIVI(1, 2, 5)),
+            ("DIVU $1,$2,$3", MMixInstruction::DIVU(1, 2, 3)),
+            ("DIVU $1,$2,5", MMixInstruction::DIVUI(1, 2, 5)),
+            ("CMP $1,$2,$3", MMixInstruction::CMP(1, 2, 3)),
+            ("CMP $1,$2,5", MMixInstruction::CMPI(1, 2, 5)),
+            ("CMPU $1,$2,$3", MMixInstruction::CMPU(1, 2, 3)),
+            ("CMPU $1,$2,5", MMixInstruction::CMPUI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_bitwise_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("AND $1,$2,$3", MMixInstruction::AND(1, 2, 3)),
+            ("AND $1,$2,5", MMixInstruction::ANDI(1, 2, 5)),
+            ("OR $1,$2,$3", MMixInstruction::OR(1, 2, 3)),
+            ("OR $1,$2,5", MMixInstruction::ORI(1, 2, 5)),
+            ("XOR $1,$2,$3", MMixInstruction::XOR(1, 2, 3)),
+            ("XOR $1,$2,5", MMixInstruction::XORI(1, 2, 5)),
+            ("ANDN $1,$2,$3", MMixInstruction::ANDN(1, 2, 3)),
+            ("ANDN $1,$2,5", MMixInstruction::ANDNI(1, 2, 5)),
+            ("ORN $1,$2,$3", MMixInstruction::ORN(1, 2, 3)),
+            ("ORN $1,$2,5", MMixInstruction::ORNI(1, 2, 5)),
+            ("NAND $1,$2,$3", MMixInstruction::NAND(1, 2, 3)),
+            ("NAND $1,$2,5", MMixInstruction::NANDI(1, 2, 5)),
+            ("NOR $1,$2,$3", MMixInstruction::NOR(1, 2, 3)),
+            ("NOR $1,$2,5", MMixInstruction::NORI(1, 2, 5)),
+            ("NXOR $1,$2,$3", MMixInstruction::NXOR(1, 2, 3)),
+            ("NXOR $1,$2,5", MMixInstruction::NXORI(1, 2, 5)),
+            ("MUX $1,$2,$3", MMixInstruction::MUX(1, 2, 3)),
+            ("MUX $1,$2,5", MMixInstruction::MUXI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_bitfiddle_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("BDIF $1,$2,$3", MMixInstruction::BDIF(1, 2, 3)),
+            ("BDIF $1,$2,5", MMixInstruction::BDIFI(1, 2, 5)),
+            ("WDIF $1,$2,$3", MMixInstruction::WDIF(1, 2, 3)),
+            ("WDIF $1,$2,5", MMixInstruction::WDIFI(1, 2, 5)),
+            ("TDIF $1,$2,$3", MMixInstruction::TDIF(1, 2, 3)),
+            ("TDIF $1,$2,5", MMixInstruction::TDIFI(1, 2, 5)),
+            ("ODIF $1,$2,$3", MMixInstruction::ODIF(1, 2, 3)),
+            ("ODIF $1,$2,5", MMixInstruction::ODIFI(1, 2, 5)),
+            ("SADD $1,$2,$3", MMixInstruction::SADD(1, 2, 3)),
+            ("SADD $1,$2,5", MMixInstruction::SADDI(1, 2, 5)),
+            ("MOR $1,$2,$3", MMixInstruction::MOR(1, 2, 3)),
+            ("MOR $1,$2,5", MMixInstruction::MORI(1, 2, 5)),
+            ("MXOR $1,$2,$3", MMixInstruction::MXOR(1, 2, 3)),
+            ("MXOR $1,$2,5", MMixInstruction::MXORI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_shift_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("SL $1,$2,$3", MMixInstruction::SL(1, 2, 3)),
+            ("SL $1,$2,5", MMixInstruction::SLI(1, 2, 5)),
+            ("SLU $1,$2,$3", MMixInstruction::SLU(1, 2, 3)),
+            ("SLU $1,$2,5", MMixInstruction::SLUI(1, 2, 5)),
+            ("SR $1,$2,$3", MMixInstruction::SR(1, 2, 3)),
+            ("SR $1,$2,5", MMixInstruction::SRI(1, 2, 5)),
+            ("SRU $1,$2,$3", MMixInstruction::SRU(1, 2, 3)),
+            ("SRU $1,$2,5", MMixInstruction::SRUI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_conditional_set_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("CSN $1,$2,$3", MMixInstruction::CSN(1, 2, 3)),
+            ("CSN $1,$2,5", MMixInstruction::CSNI(1, 2, 5)),
+            ("CSZ $1,$2,$3", MMixInstruction::CSZ(1, 2, 3)),
+            ("CSZ $1,$2,5", MMixInstruction::CSZI(1, 2, 5)),
+            ("CSP $1,$2,$3", MMixInstruction::CSP(1, 2, 3)),
+            ("CSP $1,$2,5", MMixInstruction::CSPI(1, 2, 5)),
+            ("CSOD $1,$2,$3", MMixInstruction::CSOD(1, 2, 3)),
+            ("CSOD $1,$2,5", MMixInstruction::CSODI(1, 2, 5)),
+            ("CSNN $1,$2,$3", MMixInstruction::CSNN(1, 2, 3)),
+            ("CSNN $1,$2,5", MMixInstruction::CSNNI(1, 2, 5)),
+            ("CSNZ $1,$2,$3", MMixInstruction::CSNZ(1, 2, 3)),
+            ("CSNZ $1,$2,5", MMixInstruction::CSNZI(1, 2, 5)),
+            ("CSNP $1,$2,$3", MMixInstruction::CSNP(1, 2, 3)),
+            ("CSNP $1,$2,5", MMixInstruction::CSNPI(1, 2, 5)),
+            ("CSEV $1,$2,$3", MMixInstruction::CSEV(1, 2, 3)),
+            ("CSEV $1,$2,5", MMixInstruction::CSEVI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_zero_or_set_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("ZSN $1,$2,$3", MMixInstruction::ZSN(1, 2, 3)),
+            ("ZSN $1,$2,5", MMixInstruction::ZSNI(1, 2, 5)),
+            ("ZSZ $1,$2,$3", MMixInstruction::ZSZ(1, 2, 3)),
+            ("ZSZ $1,$2,5", MMixInstruction::ZSZI(1, 2, 5)),
+            ("ZSP $1,$2,$3", MMixInstruction::ZSP(1, 2, 3)),
+            ("ZSP $1,$2,5", MMixInstruction::ZSPI(1, 2, 5)),
+            ("ZSOD $1,$2,$3", MMixInstruction::ZSOD(1, 2, 3)),
+            ("ZSOD $1,$2,5", MMixInstruction::ZSODI(1, 2, 5)),
+            ("ZSNN $1,$2,$3", MMixInstruction::ZSNN(1, 2, 3)),
+            ("ZSNN $1,$2,5", MMixInstruction::ZSNNI(1, 2, 5)),
+            ("ZSNZ $1,$2,$3", MMixInstruction::ZSNZ(1, 2, 3)),
+            ("ZSNZ $1,$2,5", MMixInstruction::ZSNZI(1, 2, 5)),
+            ("ZSNP $1,$2,$3", MMixInstruction::ZSNP(1, 2, 3)),
+            ("ZSNP $1,$2,5", MMixInstruction::ZSNPI(1, 2, 5)),
+            ("ZSEV $1,$2,$3", MMixInstruction::ZSEV(1, 2, 3)),
+            ("ZSEV $1,$2,5", MMixInstruction::ZSEVI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    // ---- Mnemonic prefix-collision tests ----------------------------
+    // These pin down PEG backtracking for prefix-overlapping mnemonics
+    // (ADD vs ADDU vs ADDUI; AND vs ANDN vs ANDNI; CSN vs CSNN; etc.).
+
+    #[test]
+    fn test_prefix_robust_arith_signed_vs_unsigned() {
+        // ADD must not steal "ADDU"; ADDU must not steal "ADDUI" (the
+        // *I path must still match through inst_arith_rri).
+        assert_first_instruction("ADD $1,$2,$3", MMixInstruction::ADD(1, 2, 3));
+        assert_first_instruction("ADDU $1,$2,$3", MMixInstruction::ADDU(1, 2, 3));
+        assert_first_instruction("ADDI $1,$2,7", MMixInstruction::ADDI(1, 2, 7));
+        assert_first_instruction("ADDUI $1,$2,7", MMixInstruction::ADDUI(1, 2, 7));
+        assert_first_instruction("ADD $1,$2,7", MMixInstruction::ADDI(1, 2, 7));
+        assert_first_instruction("ADDU $1,$2,7", MMixInstruction::ADDUI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_numeric_arith() {
+        // 2ADDU through 16ADDU each must claim their own mnemonic and
+        // their *I variant must still route via the rri path.
+        assert_first_instruction("2ADDU $1,$2,$3", MMixInstruction::ADDU2(1, 2, 3));
+        assert_first_instruction("4ADDU $1,$2,$3", MMixInstruction::ADDU4(1, 2, 3));
+        assert_first_instruction("8ADDU $1,$2,$3", MMixInstruction::ADDU8(1, 2, 3));
+        assert_first_instruction("16ADDU $1,$2,$3", MMixInstruction::ADDU16(1, 2, 3));
+        assert_first_instruction("2ADDU $1,$2,5", MMixInstruction::ADDU2I(1, 2, 5));
+        assert_first_instruction("4ADDU $1,$2,5", MMixInstruction::ADDU4I(1, 2, 5));
+        assert_first_instruction("8ADDU $1,$2,5", MMixInstruction::ADDU8I(1, 2, 5));
+        assert_first_instruction("16ADDU $1,$2,5", MMixInstruction::ADDU16I(1, 2, 5));
+        assert_first_instruction("2ADDUI $1,$2,5", MMixInstruction::ADDU2I(1, 2, 5));
+        assert_first_instruction("4ADDUI $1,$2,5", MMixInstruction::ADDU4I(1, 2, 5));
+        assert_first_instruction("8ADDUI $1,$2,5", MMixInstruction::ADDU8I(1, 2, 5));
+        assert_first_instruction("16ADDUI $1,$2,5", MMixInstruction::ADDU16I(1, 2, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_bitwise_and_andn() {
+        // AND vs ANDN vs ANDI vs ANDNI: each must route to its own
+        // variant. Particularly important because mnemonic_and matches
+        // the "AND" prefix of all four; backtracking has to recover.
+        assert_first_instruction("AND $1,$2,$3", MMixInstruction::AND(1, 2, 3));
+        assert_first_instruction("ANDN $1,$2,$3", MMixInstruction::ANDN(1, 2, 3));
+        assert_first_instruction("AND $1,$2,7", MMixInstruction::ANDI(1, 2, 7));
+        assert_first_instruction("ANDN $1,$2,7", MMixInstruction::ANDNI(1, 2, 7));
+        assert_first_instruction("ANDI $1,$2,7", MMixInstruction::ANDI(1, 2, 7));
+        assert_first_instruction("ANDNI $1,$2,7", MMixInstruction::ANDNI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_bitwise_or_orn() {
+        assert_first_instruction("OR $1,$2,$3", MMixInstruction::OR(1, 2, 3));
+        assert_first_instruction("ORN $1,$2,$3", MMixInstruction::ORN(1, 2, 3));
+        assert_first_instruction("OR $1,$2,7", MMixInstruction::ORI(1, 2, 7));
+        assert_first_instruction("ORN $1,$2,7", MMixInstruction::ORNI(1, 2, 7));
+        assert_first_instruction("ORI $1,$2,7", MMixInstruction::ORI(1, 2, 7));
+        assert_first_instruction("ORNI $1,$2,7", MMixInstruction::ORNI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_shift_signed_vs_unsigned() {
+        assert_first_instruction("SL $1,$2,$3", MMixInstruction::SL(1, 2, 3));
+        assert_first_instruction("SLU $1,$2,$3", MMixInstruction::SLU(1, 2, 3));
+        assert_first_instruction("SR $1,$2,$3", MMixInstruction::SR(1, 2, 3));
+        assert_first_instruction("SRU $1,$2,$3", MMixInstruction::SRU(1, 2, 3));
+        assert_first_instruction("SL $1,$2,7", MMixInstruction::SLI(1, 2, 7));
+        assert_first_instruction("SLU $1,$2,7", MMixInstruction::SLUI(1, 2, 7));
+        assert_first_instruction("SR $1,$2,7", MMixInstruction::SRI(1, 2, 7));
+        assert_first_instruction("SRU $1,$2,7", MMixInstruction::SRUI(1, 2, 7));
+        assert_first_instruction("SLI $1,$2,7", MMixInstruction::SLI(1, 2, 7));
+        assert_first_instruction("SRUI $1,$2,7", MMixInstruction::SRUI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_conditional_csn_csnn() {
+        // CSN must not steal CSNN/CSNZ/CSNP. And the *I siblings must
+        // route via the rri path (CSNI vs CSNNI etc.).
+        assert_first_instruction("CSN $1,$2,$3", MMixInstruction::CSN(1, 2, 3));
+        assert_first_instruction("CSNN $1,$2,$3", MMixInstruction::CSNN(1, 2, 3));
+        assert_first_instruction("CSNZ $1,$2,$3", MMixInstruction::CSNZ(1, 2, 3));
+        assert_first_instruction("CSNP $1,$2,$3", MMixInstruction::CSNP(1, 2, 3));
+        assert_first_instruction("CSN $1,$2,7", MMixInstruction::CSNI(1, 2, 7));
+        assert_first_instruction("CSNN $1,$2,7", MMixInstruction::CSNNI(1, 2, 7));
+        assert_first_instruction("CSNZ $1,$2,7", MMixInstruction::CSNZI(1, 2, 7));
+        assert_first_instruction("CSNP $1,$2,7", MMixInstruction::CSNPI(1, 2, 7));
+        assert_first_instruction("CSNI $1,$2,7", MMixInstruction::CSNI(1, 2, 7));
+        assert_first_instruction("CSNNI $1,$2,7", MMixInstruction::CSNNI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_zero_or_set_zsn_zsnn() {
+        assert_first_instruction("ZSN $1,$2,$3", MMixInstruction::ZSN(1, 2, 3));
+        assert_first_instruction("ZSNN $1,$2,$3", MMixInstruction::ZSNN(1, 2, 3));
+        assert_first_instruction("ZSNZ $1,$2,$3", MMixInstruction::ZSNZ(1, 2, 3));
+        assert_first_instruction("ZSNP $1,$2,$3", MMixInstruction::ZSNP(1, 2, 3));
+        assert_first_instruction("ZSN $1,$2,7", MMixInstruction::ZSNI(1, 2, 7));
+        assert_first_instruction("ZSNN $1,$2,7", MMixInstruction::ZSNNI(1, 2, 7));
+        assert_first_instruction("ZSNZ $1,$2,7", MMixInstruction::ZSNZI(1, 2, 7));
+        assert_first_instruction("ZSNP $1,$2,7", MMixInstruction::ZSNPI(1, 2, 7));
+    }
+
+    // ---- Boundary value tests ---------------------------------------
+
+    #[test]
+    fn test_immediate_boundary_zero() {
+        assert_first_instruction("ADD $1,$2,0", MMixInstruction::ADDI(1, 2, 0));
+        assert_first_instruction("AND $1,$2,0", MMixInstruction::ANDI(1, 2, 0));
+        assert_first_instruction("SR $1,$2,0", MMixInstruction::SRI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_immediate_boundary_max_decimal_255() {
+        assert_first_instruction("ADD $1,$2,255", MMixInstruction::ADDI(1, 2, 255));
+        assert_first_instruction("OR $1,$2,255", MMixInstruction::ORI(1, 2, 255));
+        assert_first_instruction("ZSP $1,$2,255", MMixInstruction::ZSPI(1, 2, 255));
+    }
+
+    #[test]
+    fn test_immediate_boundary_max_hex_ff() {
+        assert_first_instruction("ADD $1,$2,#FF", MMixInstruction::ADDI(1, 2, 0xFF));
+        assert_first_instruction("XOR $1,$2,#FF", MMixInstruction::XORI(1, 2, 0xFF));
+        assert_first_instruction("CSN $1,$2,#FF", MMixInstruction::CSNI(1, 2, 0xFF));
+    }
+
+    #[test]
+    fn test_immediate_boundary_overflow_decimal_256() {
+        assert_parse_error_contains("ADD $1,$2,256", "out of range 0..255");
+        assert_parse_error_contains("AND $1,$2,256", "out of range 0..255");
+        assert_parse_error_contains("SRU $1,$2,256", "out of range 0..255");
+    }
+
+    #[test]
+    fn test_immediate_boundary_overflow_hex_100() {
+        assert_parse_error_contains("ADD $1,$2,#100", "out of range 0..255");
+    }
+
+    #[test]
+    fn test_immediate_boundary_overflow_large_value() {
+        // A genuinely large value must not silently truncate; it must
+        // be rejected by the auto-immediate range check.
+        assert_parse_error_contains("ADD $1,$2,#10000", "out of range 0..255");
+        assert_parse_error_contains("ADD $1,$2,1000000", "out of range 0..255");
+    }
+
+    #[test]
+    fn test_immediate_boundary_negative_rejected_in_auto() {
+        // The auto path is strict 0..=255. Negative literals (which
+        // wrap to large u64s) must be rejected. The explicit *I path
+        // keeps its silent-wrap behavior — see
+        // `test_parse_negative_literal_8bit_wrap`.
+        assert_parse_error_contains("ADD $1,$2,-1", "out of range 0..255");
+        assert_parse_error_contains("AND $1,$2,-128", "out of range 0..255");
+    }
+
+    #[test]
+    fn test_immediate_register_max_255() {
+        // $255 as Z must remain a register reference, not get
+        // confused with the immediate 255.
+        assert_first_instruction("ADD $1,$2,$255", MMixInstruction::ADD(1, 2, 255));
+        assert_first_instruction("AND $1,$2,$255", MMixInstruction::AND(1, 2, 255));
+    }
+
+    #[test]
+    fn test_immediate_char_literal() {
+        assert_first_instruction("ADD $1,$2,'A'", MMixInstruction::ADDI(1, 2, 65));
+        assert_first_instruction("AND $1,$2,'\\n'", MMixInstruction::ANDI(1, 2, 10));
+        assert_first_instruction("OR $1,$2,'\\0'", MMixInstruction::ORI(1, 2, 0));
+    }
+
+    // ---- Symbol/label resolution at the Z slot ----------------------
+
+    #[test]
+    fn test_symbol_z_constant_in_range() {
+        assert_first_instruction("K IS 0\nADD $1,$2,K", MMixInstruction::ADDI(1, 2, 0));
+        assert_first_instruction("K IS 255\nAND $1,$2,K", MMixInstruction::ANDI(1, 2, 255));
+        assert_first_instruction("K IS 42\nCSZ $1,$2,K", MMixInstruction::CSZI(1, 2, 42));
+    }
+
+    #[test]
+    fn test_symbol_z_constant_out_of_range() {
+        assert_parse_error_contains("K IS 256\nADD $1,$2,K", "out of range 0..255");
+        assert_parse_error_contains("K IS 1000\nAND $1,$2,K", "out of range 0..255");
+    }
+
+    #[test]
+    fn test_symbol_z_register_alias_zero() {
+        assert_first_instruction("Z IS $0\nADD $1,$2,Z", MMixInstruction::ADD(1, 2, 0));
+    }
+
+    #[test]
+    fn test_symbol_z_register_alias_max() {
+        assert_first_instruction("M IS $255\nAND $1,$2,M", MMixInstruction::AND(1, 2, 255));
+    }
+
+    #[test]
+    fn test_symbol_z_label_address_out_of_range() {
+        // A label whose address is above 255 must error rather than
+        // silently truncate, even though it grammatically parses as a
+        // bare identifier in the Z slot.
+        let src = "\
+LOC #200
+Foo  OCTA 0
+Main ADD $1,$2,Foo
+";
+        assert_parse_error_contains(src, "out of range 0..255");
+    }
+
+    #[test]
+    fn test_symbol_z_undefined_errors() {
+        assert_parse_error_contains("ADD $1,$2,Nope", "Undefined symbol");
+        assert_parse_error_contains("AND $1,$2,Nope", "Undefined symbol");
+    }
+
+    // ---- Cross-family non-interference ------------------------------
+    // Multiple base mnemonics from different families in one source —
+    // each must route to its own family's auto rule.
+
+    #[test]
+    fn test_cross_family_routing_in_one_program() {
+        let src = "\
+ADD  $1,$2,5
+AND  $3,$4,7
+SR   $5,$6,3
+BDIF $7,$8,9
+CSZ  $1,$2,1
+ZSP  $3,$4,2
+";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions
+                .iter()
+                .map(|(_, i)| i.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                MMixInstruction::ADDI(1, 2, 5),
+                MMixInstruction::ANDI(3, 4, 7),
+                MMixInstruction::SRI(5, 6, 3),
+                MMixInstruction::BDIFI(7, 8, 9),
+                MMixInstruction::CSZI(1, 2, 1),
+                MMixInstruction::ZSPI(3, 4, 2),
+            ]
+        );
+    }
+
+    // ---- Existing-test perturbation ---------------------------------
+    // Pick a handful of pre-existing register-form assertions and add
+    // matching auto-immediate assertions so that any future grammar
+    // change that breaks the auto path will be caught alongside the
+    // original tests.
+
+    #[test]
+    fn test_perturbation_and_xor_or() {
+        // Mirrors test_parse_and / test_parse_xor / test_parse_or but
+        // uses the auto-immediate path.
+        assert_first_instruction("AND $1,$2,#FF", MMixInstruction::ANDI(1, 2, 0xFF));
+        assert_first_instruction("XOR $5,$6,#0F", MMixInstruction::XORI(5, 6, 0x0F));
+        assert_first_instruction("OR $10,$20,#80", MMixInstruction::ORI(10, 20, 0x80));
+    }
+
+    #[test]
+    fn test_perturbation_bitfiddle_family() {
+        // Mirrors test_parse_bdif/wdif/tdif/odif/sadd/mor/mxor.
+        assert_first_instruction("BDIF $1,$2,#10", MMixInstruction::BDIFI(1, 2, 0x10));
+        assert_first_instruction("WDIF $1,$2,100", MMixInstruction::WDIFI(1, 2, 100));
+        assert_first_instruction("TDIF $1,$2,50", MMixInstruction::TDIFI(1, 2, 50));
+        assert_first_instruction("ODIF $1,$2,255", MMixInstruction::ODIFI(1, 2, 255));
+        assert_first_instruction("SADD $1,$2,0", MMixInstruction::SADDI(1, 2, 0));
+        assert_first_instruction("MOR $1,$2,128", MMixInstruction::MORI(1, 2, 128));
+        assert_first_instruction("MXOR $1,$2,64", MMixInstruction::MXORI(1, 2, 64));
+    }
+
+    #[test]
+    fn test_perturbation_shift_family() {
+        // Mirrors test_parse_sl / sli / slu / slui / sr / sri / sru / srui.
+        assert_first_instruction("SL $3,$1,8", MMixInstruction::SLI(3, 1, 8));
+        assert_first_instruction("SLU $1,$2,16", MMixInstruction::SLUI(1, 2, 16));
+        assert_first_instruction("SR $1,$2,4", MMixInstruction::SRI(1, 2, 4));
+        assert_first_instruction("SRU $1,$2,32", MMixInstruction::SRUI(1, 2, 32));
+    }
+
+    // ---- Comprehensive byte-identical regression --------------------
+    // Every base mnemonic in the six in-scope families paired with its
+    // explicit *I sibling. This is the strongest cross-validation that
+    // the auto path produces exactly the same encoded bytes as the
+    // legacy path.
+
+    #[test]
+    fn test_byte_identical_regression_all_families() {
+        let pairs: &[(&str, &str)] = &[
+            // Arithmetic
+            ("ADD $1,$2,5", "ADDI $1,$2,5"),
+            ("ADDU $1,$2,5", "ADDUI $1,$2,5"),
+            ("2ADDU $1,$2,5", "2ADDUI $1,$2,5"),
+            ("4ADDU $1,$2,5", "4ADDUI $1,$2,5"),
+            ("8ADDU $1,$2,5", "8ADDUI $1,$2,5"),
+            ("16ADDU $1,$2,5", "16ADDUI $1,$2,5"),
+            ("SUB $1,$2,5", "SUBI $1,$2,5"),
+            ("SUBU $1,$2,5", "SUBUI $1,$2,5"),
+            ("MUL $1,$2,5", "MULI $1,$2,5"),
+            ("MULU $1,$2,5", "MULUI $1,$2,5"),
+            ("DIV $1,$2,5", "DIVI $1,$2,5"),
+            ("DIVU $1,$2,5", "DIVUI $1,$2,5"),
+            ("CMP $1,$2,5", "CMPI $1,$2,5"),
+            ("CMPU $1,$2,5", "CMPUI $1,$2,5"),
+            // Bitwise
+            ("AND $1,$2,5", "ANDI $1,$2,5"),
+            ("OR $1,$2,5", "ORI $1,$2,5"),
+            ("XOR $1,$2,5", "XORI $1,$2,5"),
+            ("ANDN $1,$2,5", "ANDNI $1,$2,5"),
+            ("ORN $1,$2,5", "ORNI $1,$2,5"),
+            ("NAND $1,$2,5", "NANDI $1,$2,5"),
+            ("NOR $1,$2,5", "NORI $1,$2,5"),
+            ("NXOR $1,$2,5", "NXORI $1,$2,5"),
+            ("MUX $1,$2,5", "MUXI $1,$2,5"),
+            // Bit-fiddle
+            ("BDIF $1,$2,5", "BDIFI $1,$2,5"),
+            ("WDIF $1,$2,5", "WDIFI $1,$2,5"),
+            ("TDIF $1,$2,5", "TDIFI $1,$2,5"),
+            ("ODIF $1,$2,5", "ODIFI $1,$2,5"),
+            ("SADD $1,$2,5", "SADDI $1,$2,5"),
+            ("MOR $1,$2,5", "MORI $1,$2,5"),
+            ("MXOR $1,$2,5", "MXORI $1,$2,5"),
+            // Shift
+            ("SL $1,$2,5", "SLI $1,$2,5"),
+            ("SLU $1,$2,5", "SLUI $1,$2,5"),
+            ("SR $1,$2,5", "SRI $1,$2,5"),
+            ("SRU $1,$2,5", "SRUI $1,$2,5"),
+            // Conditional set
+            ("CSN $1,$2,5", "CSNI $1,$2,5"),
+            ("CSZ $1,$2,5", "CSZI $1,$2,5"),
+            ("CSP $1,$2,5", "CSPI $1,$2,5"),
+            ("CSOD $1,$2,5", "CSODI $1,$2,5"),
+            ("CSNN $1,$2,5", "CSNNI $1,$2,5"),
+            ("CSNZ $1,$2,5", "CSNZI $1,$2,5"),
+            ("CSNP $1,$2,5", "CSNPI $1,$2,5"),
+            ("CSEV $1,$2,5", "CSEVI $1,$2,5"),
+            // Zero or set
+            ("ZSN $1,$2,5", "ZSNI $1,$2,5"),
+            ("ZSZ $1,$2,5", "ZSZI $1,$2,5"),
+            ("ZSP $1,$2,5", "ZSPI $1,$2,5"),
+            ("ZSOD $1,$2,5", "ZSODI $1,$2,5"),
+            ("ZSNN $1,$2,5", "ZSNNI $1,$2,5"),
+            ("ZSNZ $1,$2,5", "ZSNZI $1,$2,5"),
+            ("ZSNP $1,$2,5", "ZSNPI $1,$2,5"),
+            ("ZSEV $1,$2,5", "ZSEVI $1,$2,5"),
+        ];
+
+        for (auto_src, explicit_src) in pairs {
+            let mut auto_asm = MMixAssembler::new(auto_src, "<auto>");
+            auto_asm
+                .parse()
+                .unwrap_or_else(|e| panic!("auto src {auto_src:?} failed: {e}"));
+            let mut explicit_asm = MMixAssembler::new(explicit_src, "<explicit>");
+            explicit_asm
+                .parse()
+                .unwrap_or_else(|e| panic!("explicit src {explicit_src:?} failed: {e}"));
+            let auto_bytes = auto_asm.encode_instruction_bytes(&auto_asm.instructions[0].1);
+            let explicit_bytes =
+                explicit_asm.encode_instruction_bytes(&explicit_asm.instructions[0].1);
+            assert_eq!(
+                auto_bytes,
+                explicit_bytes,
+                "byte mismatch: auto {auto_src:?} -> {:?} {:?} vs explicit {explicit_src:?} -> {:?} {:?}",
+                auto_asm.instructions[0].1,
+                auto_bytes,
+                explicit_asm.instructions[0].1,
+                explicit_bytes
+            );
+        }
+    }
+
+    // ---- Sanity: explicit *I path stays unchanged for negatives -----
+    // Lock in that `test_parse_negative_literal_8bit_wrap`'s policy
+    // (silent wrap of -1 to 0xFF on the *I path) is preserved while
+    // the auto path rejects the same input.
+    #[test]
+    fn test_explicit_i_negative_still_wraps() {
+        assert_first_instruction("ADDI $1,$2,-1", MMixInstruction::ADDI(1, 2, 0xFF));
+        assert_first_instruction("ANDI $1,$2,-1", MMixInstruction::ANDI(1, 2, 0xFF));
+        assert_first_instruction("SLUI $1,$2,-1", MMixInstruction::SLUI(1, 2, 0xFF));
+        // Auto path rejects:
+        assert_parse_error_contains("ADD $1,$2,-1", "out of range 0..255");
+    }
 }
