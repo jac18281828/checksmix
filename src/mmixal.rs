@@ -919,6 +919,14 @@ impl TryFrom<u8> for Opcode {
     }
 }
 
+/// Resolved Z operand for an auto-immediate base mnemonic. The parser uses
+/// this to choose between the RRR and RRI variants of an instruction.
+#[derive(Debug, Clone, Copy)]
+enum ZForm {
+    Reg(u8),
+    Imm(u8),
+}
+
 pub struct MMixAssembler {
     /// Input translation units in command-line order: (filename, preprocessed source).
     sources: Vec<(String, String)>,
@@ -1626,21 +1634,21 @@ impl MMixAssembler {
             Rule::inst_load_store_rri => self.parse_inst_load_store_rri(inner),
             Rule::inst_lda_rri => self.parse_inst_lda_rri(inner),
             Rule::inst_lda_ri => self.parse_inst_lda_ri(inner),
-            Rule::inst_arith_rrr => self.parse_inst_arith_rrr(inner),
+            Rule::inst_arith_auto => self.parse_inst_arith_auto(inner),
             Rule::inst_arith_rri => self.parse_inst_arith_rri(inner),
             Rule::inst_float_rrr => self.parse_inst_float_rrr(inner),
             Rule::inst_float_rri => self.parse_inst_float_rri(inner),
             Rule::inst_neg_rrr => self.parse_inst_neg_rrr(inner),
             Rule::inst_neg_rri => self.parse_inst_neg_rri(inner),
-            Rule::inst_bitwise_rrr => self.parse_inst_bitwise_rrr(inner),
+            Rule::inst_bitwise_auto => self.parse_inst_bitwise_auto(inner),
             Rule::inst_bitwise_rri => self.parse_inst_bitwise_rri(inner),
-            Rule::inst_bitfiddle_rrr => self.parse_inst_bitfiddle_rrr(inner),
+            Rule::inst_bitfiddle_auto => self.parse_inst_bitfiddle_auto(inner),
             Rule::inst_bitfiddle_rri => self.parse_inst_bitfiddle_rri(inner),
-            Rule::inst_shift_rrr => self.parse_inst_shift_rrr(inner),
+            Rule::inst_shift_auto => self.parse_inst_shift_auto(inner),
             Rule::inst_shift_rri => self.parse_inst_shift_rri(inner),
-            Rule::inst_conditional_set_rrr => self.parse_inst_conditional_set_rrr(inner),
+            Rule::inst_conditional_set_auto => self.parse_inst_conditional_set_auto(inner),
             Rule::inst_conditional_set_rri => self.parse_inst_conditional_set_rri(inner),
-            Rule::inst_zero_or_set_rrr => self.parse_inst_zero_or_set_rrr(inner),
+            Rule::inst_zero_or_set_auto => self.parse_inst_zero_or_set_auto(inner),
             Rule::inst_zero_or_set_rri => self.parse_inst_zero_or_set_rri(inner),
             Rule::inst_pbranch => self.parse_inst_pbranch(inner),
             Rule::inst_branch => self.parse_inst_branch(inner),
@@ -2051,34 +2059,50 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_arith_rrr(
+    fn parse_inst_arith_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "ADD" => Ok(MMixInstruction::ADD(x, y, z)),
-            "ADDU" => Ok(MMixInstruction::ADDU(x, y, z)),
-            "2ADDU" => Ok(MMixInstruction::ADDU2(x, y, z)),
-            "4ADDU" => Ok(MMixInstruction::ADDU4(x, y, z)),
-            "8ADDU" => Ok(MMixInstruction::ADDU8(x, y, z)),
-            "16ADDU" => Ok(MMixInstruction::ADDU16(x, y, z)),
-            "SUB" => Ok(MMixInstruction::SUB(x, y, z)),
-            "SUBU" => Ok(MMixInstruction::SUBU(x, y, z)),
-            "MUL" => Ok(MMixInstruction::MUL(x, y, z)),
-            "MULU" => Ok(MMixInstruction::MULU(x, y, z)),
-            "DIV" => Ok(MMixInstruction::DIV(x, y, z)),
-            "DIVU" => Ok(MMixInstruction::DIVU(x, y, z)),
-            "CMP" => Ok(MMixInstruction::CMP(x, y, z)),
-            "CMPU" => Ok(MMixInstruction::CMPU(x, y, z)),
-            _ => Err(format!("Unknown arithmetic instruction: {}", mnem.as_str())),
+        match (mnem.as_str(), z) {
+            ("ADD", ZForm::Reg(z)) => Ok(MMixInstruction::ADD(x, y, z)),
+            ("ADD", ZForm::Imm(z)) => Ok(MMixInstruction::ADDI(x, y, z)),
+            ("ADDU", ZForm::Reg(z)) => Ok(MMixInstruction::ADDU(x, y, z)),
+            ("ADDU", ZForm::Imm(z)) => Ok(MMixInstruction::ADDUI(x, y, z)),
+            ("2ADDU", ZForm::Reg(z)) => Ok(MMixInstruction::ADDU2(x, y, z)),
+            ("2ADDU", ZForm::Imm(z)) => Ok(MMixInstruction::ADDU2I(x, y, z)),
+            ("4ADDU", ZForm::Reg(z)) => Ok(MMixInstruction::ADDU4(x, y, z)),
+            ("4ADDU", ZForm::Imm(z)) => Ok(MMixInstruction::ADDU4I(x, y, z)),
+            ("8ADDU", ZForm::Reg(z)) => Ok(MMixInstruction::ADDU8(x, y, z)),
+            ("8ADDU", ZForm::Imm(z)) => Ok(MMixInstruction::ADDU8I(x, y, z)),
+            ("16ADDU", ZForm::Reg(z)) => Ok(MMixInstruction::ADDU16(x, y, z)),
+            ("16ADDU", ZForm::Imm(z)) => Ok(MMixInstruction::ADDU16I(x, y, z)),
+            ("SUB", ZForm::Reg(z)) => Ok(MMixInstruction::SUB(x, y, z)),
+            ("SUB", ZForm::Imm(z)) => Ok(MMixInstruction::SUBI(x, y, z)),
+            ("SUBU", ZForm::Reg(z)) => Ok(MMixInstruction::SUBU(x, y, z)),
+            ("SUBU", ZForm::Imm(z)) => Ok(MMixInstruction::SUBUI(x, y, z)),
+            ("MUL", ZForm::Reg(z)) => Ok(MMixInstruction::MUL(x, y, z)),
+            ("MUL", ZForm::Imm(z)) => Ok(MMixInstruction::MULI(x, y, z)),
+            ("MULU", ZForm::Reg(z)) => Ok(MMixInstruction::MULU(x, y, z)),
+            ("MULU", ZForm::Imm(z)) => Ok(MMixInstruction::MULUI(x, y, z)),
+            ("DIV", ZForm::Reg(z)) => Ok(MMixInstruction::DIV(x, y, z)),
+            ("DIV", ZForm::Imm(z)) => Ok(MMixInstruction::DIVI(x, y, z)),
+            ("DIVU", ZForm::Reg(z)) => Ok(MMixInstruction::DIVU(x, y, z)),
+            ("DIVU", ZForm::Imm(z)) => Ok(MMixInstruction::DIVUI(x, y, z)),
+            ("CMP", ZForm::Reg(z)) => Ok(MMixInstruction::CMP(x, y, z)),
+            ("CMP", ZForm::Imm(z)) => Ok(MMixInstruction::CMPI(x, y, z)),
+            ("CMPU", ZForm::Reg(z)) => Ok(MMixInstruction::CMPU(x, y, z)),
+            ("CMPU", ZForm::Imm(z)) => Ok(MMixInstruction::CMPUI(x, y, z)),
+            _ => Err(format!("Unknown arithmetic instruction: {}", mnem)),
         }
     }
 
@@ -2212,29 +2236,40 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_bitwise_rrr(
+    fn parse_inst_bitwise_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "AND" => Ok(MMixInstruction::AND(x, y, z)),
-            "OR" => Ok(MMixInstruction::OR(x, y, z)),
-            "XOR" => Ok(MMixInstruction::XOR(x, y, z)),
-            "ANDN" => Ok(MMixInstruction::ANDN(x, y, z)),
-            "ORN" => Ok(MMixInstruction::ORN(x, y, z)),
-            "NAND" => Ok(MMixInstruction::NAND(x, y, z)),
-            "NOR" => Ok(MMixInstruction::NOR(x, y, z)),
-            "NXOR" => Ok(MMixInstruction::NXOR(x, y, z)),
-            "MUX" => Ok(MMixInstruction::MUX(x, y, z)),
-            _ => Err(format!("Unknown bitwise instruction: {}", mnem.as_str())),
+        match (mnem.as_str(), z) {
+            ("AND", ZForm::Reg(z)) => Ok(MMixInstruction::AND(x, y, z)),
+            ("AND", ZForm::Imm(z)) => Ok(MMixInstruction::ANDI(x, y, z)),
+            ("OR", ZForm::Reg(z)) => Ok(MMixInstruction::OR(x, y, z)),
+            ("OR", ZForm::Imm(z)) => Ok(MMixInstruction::ORI(x, y, z)),
+            ("XOR", ZForm::Reg(z)) => Ok(MMixInstruction::XOR(x, y, z)),
+            ("XOR", ZForm::Imm(z)) => Ok(MMixInstruction::XORI(x, y, z)),
+            ("ANDN", ZForm::Reg(z)) => Ok(MMixInstruction::ANDN(x, y, z)),
+            ("ANDN", ZForm::Imm(z)) => Ok(MMixInstruction::ANDNI(x, y, z)),
+            ("ORN", ZForm::Reg(z)) => Ok(MMixInstruction::ORN(x, y, z)),
+            ("ORN", ZForm::Imm(z)) => Ok(MMixInstruction::ORNI(x, y, z)),
+            ("NAND", ZForm::Reg(z)) => Ok(MMixInstruction::NAND(x, y, z)),
+            ("NAND", ZForm::Imm(z)) => Ok(MMixInstruction::NANDI(x, y, z)),
+            ("NOR", ZForm::Reg(z)) => Ok(MMixInstruction::NOR(x, y, z)),
+            ("NOR", ZForm::Imm(z)) => Ok(MMixInstruction::NORI(x, y, z)),
+            ("NXOR", ZForm::Reg(z)) => Ok(MMixInstruction::NXOR(x, y, z)),
+            ("NXOR", ZForm::Imm(z)) => Ok(MMixInstruction::NXORI(x, y, z)),
+            ("MUX", ZForm::Reg(z)) => Ok(MMixInstruction::MUX(x, y, z)),
+            ("MUX", ZForm::Imm(z)) => Ok(MMixInstruction::MUXI(x, y, z)),
+            _ => Err(format!("Unknown bitwise instruction: {}", mnem)),
         }
     }
 
@@ -2264,30 +2299,36 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_bitfiddle_rrr(
+    fn parse_inst_bitfiddle_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "BDIF" => Ok(MMixInstruction::BDIF(x, y, z)),
-            "WDIF" => Ok(MMixInstruction::WDIF(x, y, z)),
-            "TDIF" => Ok(MMixInstruction::TDIF(x, y, z)),
-            "ODIF" => Ok(MMixInstruction::ODIF(x, y, z)),
-            "SADD" => Ok(MMixInstruction::SADD(x, y, z)),
-            "MOR" => Ok(MMixInstruction::MOR(x, y, z)),
-            "MXOR" => Ok(MMixInstruction::MXOR(x, y, z)),
-            _ => Err(format!(
-                "Unknown bit fiddling instruction: {}",
-                mnem.as_str()
-            )),
+        match (mnem.as_str(), z) {
+            ("BDIF", ZForm::Reg(z)) => Ok(MMixInstruction::BDIF(x, y, z)),
+            ("BDIF", ZForm::Imm(z)) => Ok(MMixInstruction::BDIFI(x, y, z)),
+            ("WDIF", ZForm::Reg(z)) => Ok(MMixInstruction::WDIF(x, y, z)),
+            ("WDIF", ZForm::Imm(z)) => Ok(MMixInstruction::WDIFI(x, y, z)),
+            ("TDIF", ZForm::Reg(z)) => Ok(MMixInstruction::TDIF(x, y, z)),
+            ("TDIF", ZForm::Imm(z)) => Ok(MMixInstruction::TDIFI(x, y, z)),
+            ("ODIF", ZForm::Reg(z)) => Ok(MMixInstruction::ODIF(x, y, z)),
+            ("ODIF", ZForm::Imm(z)) => Ok(MMixInstruction::ODIFI(x, y, z)),
+            ("SADD", ZForm::Reg(z)) => Ok(MMixInstruction::SADD(x, y, z)),
+            ("SADD", ZForm::Imm(z)) => Ok(MMixInstruction::SADDI(x, y, z)),
+            ("MOR", ZForm::Reg(z)) => Ok(MMixInstruction::MOR(x, y, z)),
+            ("MOR", ZForm::Imm(z)) => Ok(MMixInstruction::MORI(x, y, z)),
+            ("MXOR", ZForm::Reg(z)) => Ok(MMixInstruction::MXOR(x, y, z)),
+            ("MXOR", ZForm::Imm(z)) => Ok(MMixInstruction::MXORI(x, y, z)),
+            _ => Err(format!("Unknown bit fiddling instruction: {}", mnem)),
         }
     }
 
@@ -2318,24 +2359,30 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_shift_rrr(
+    fn parse_inst_shift_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "SL" => Ok(MMixInstruction::SL(x, y, z)),
-            "SLU" => Ok(MMixInstruction::SLU(x, y, z)),
-            "SR" => Ok(MMixInstruction::SR(x, y, z)),
-            "SRU" => Ok(MMixInstruction::SRU(x, y, z)),
-            _ => Err(format!("Unknown shift instruction: {}", mnem.as_str())),
+        match (mnem.as_str(), z) {
+            ("SL", ZForm::Reg(z)) => Ok(MMixInstruction::SL(x, y, z)),
+            ("SL", ZForm::Imm(z)) => Ok(MMixInstruction::SLI(x, y, z)),
+            ("SLU", ZForm::Reg(z)) => Ok(MMixInstruction::SLU(x, y, z)),
+            ("SLU", ZForm::Imm(z)) => Ok(MMixInstruction::SLUI(x, y, z)),
+            ("SR", ZForm::Reg(z)) => Ok(MMixInstruction::SR(x, y, z)),
+            ("SR", ZForm::Imm(z)) => Ok(MMixInstruction::SRI(x, y, z)),
+            ("SRU", ZForm::Reg(z)) => Ok(MMixInstruction::SRU(x, y, z)),
+            ("SRU", ZForm::Imm(z)) => Ok(MMixInstruction::SRUI(x, y, z)),
+            _ => Err(format!("Unknown shift instruction: {}", mnem)),
         }
     }
 
@@ -2360,31 +2407,38 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_conditional_set_rrr(
+    fn parse_inst_conditional_set_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "CSN" => Ok(MMixInstruction::CSN(x, y, z)),
-            "CSZ" => Ok(MMixInstruction::CSZ(x, y, z)),
-            "CSP" => Ok(MMixInstruction::CSP(x, y, z)),
-            "CSOD" => Ok(MMixInstruction::CSOD(x, y, z)),
-            "CSNN" => Ok(MMixInstruction::CSNN(x, y, z)),
-            "CSNZ" => Ok(MMixInstruction::CSNZ(x, y, z)),
-            "CSNP" => Ok(MMixInstruction::CSNP(x, y, z)),
-            "CSEV" => Ok(MMixInstruction::CSEV(x, y, z)),
-            _ => Err(format!(
-                "Unknown conditional set instruction: {}",
-                mnem.as_str()
-            )),
+        match (mnem.as_str(), z) {
+            ("CSN", ZForm::Reg(z)) => Ok(MMixInstruction::CSN(x, y, z)),
+            ("CSN", ZForm::Imm(z)) => Ok(MMixInstruction::CSNI(x, y, z)),
+            ("CSZ", ZForm::Reg(z)) => Ok(MMixInstruction::CSZ(x, y, z)),
+            ("CSZ", ZForm::Imm(z)) => Ok(MMixInstruction::CSZI(x, y, z)),
+            ("CSP", ZForm::Reg(z)) => Ok(MMixInstruction::CSP(x, y, z)),
+            ("CSP", ZForm::Imm(z)) => Ok(MMixInstruction::CSPI(x, y, z)),
+            ("CSOD", ZForm::Reg(z)) => Ok(MMixInstruction::CSOD(x, y, z)),
+            ("CSOD", ZForm::Imm(z)) => Ok(MMixInstruction::CSODI(x, y, z)),
+            ("CSNN", ZForm::Reg(z)) => Ok(MMixInstruction::CSNN(x, y, z)),
+            ("CSNN", ZForm::Imm(z)) => Ok(MMixInstruction::CSNNI(x, y, z)),
+            ("CSNZ", ZForm::Reg(z)) => Ok(MMixInstruction::CSNZ(x, y, z)),
+            ("CSNZ", ZForm::Imm(z)) => Ok(MMixInstruction::CSNZI(x, y, z)),
+            ("CSNP", ZForm::Reg(z)) => Ok(MMixInstruction::CSNP(x, y, z)),
+            ("CSNP", ZForm::Imm(z)) => Ok(MMixInstruction::CSNPI(x, y, z)),
+            ("CSEV", ZForm::Reg(z)) => Ok(MMixInstruction::CSEV(x, y, z)),
+            ("CSEV", ZForm::Imm(z)) => Ok(MMixInstruction::CSEVI(x, y, z)),
+            _ => Err(format!("Unknown conditional set instruction: {}", mnem)),
         }
     }
 
@@ -2416,31 +2470,38 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_zero_or_set_rrr(
+    fn parse_inst_zero_or_set_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "ZSN" => Ok(MMixInstruction::ZSN(x, y, z)),
-            "ZSZ" => Ok(MMixInstruction::ZSZ(x, y, z)),
-            "ZSP" => Ok(MMixInstruction::ZSP(x, y, z)),
-            "ZSOD" => Ok(MMixInstruction::ZSOD(x, y, z)),
-            "ZSNN" => Ok(MMixInstruction::ZSNN(x, y, z)),
-            "ZSNZ" => Ok(MMixInstruction::ZSNZ(x, y, z)),
-            "ZSNP" => Ok(MMixInstruction::ZSNP(x, y, z)),
-            "ZSEV" => Ok(MMixInstruction::ZSEV(x, y, z)),
-            _ => Err(format!(
-                "Unknown zero or set instruction: {}",
-                mnem.as_str()
-            )),
+        match (mnem.as_str(), z) {
+            ("ZSN", ZForm::Reg(z)) => Ok(MMixInstruction::ZSN(x, y, z)),
+            ("ZSN", ZForm::Imm(z)) => Ok(MMixInstruction::ZSNI(x, y, z)),
+            ("ZSZ", ZForm::Reg(z)) => Ok(MMixInstruction::ZSZ(x, y, z)),
+            ("ZSZ", ZForm::Imm(z)) => Ok(MMixInstruction::ZSZI(x, y, z)),
+            ("ZSP", ZForm::Reg(z)) => Ok(MMixInstruction::ZSP(x, y, z)),
+            ("ZSP", ZForm::Imm(z)) => Ok(MMixInstruction::ZSPI(x, y, z)),
+            ("ZSOD", ZForm::Reg(z)) => Ok(MMixInstruction::ZSOD(x, y, z)),
+            ("ZSOD", ZForm::Imm(z)) => Ok(MMixInstruction::ZSODI(x, y, z)),
+            ("ZSNN", ZForm::Reg(z)) => Ok(MMixInstruction::ZSNN(x, y, z)),
+            ("ZSNN", ZForm::Imm(z)) => Ok(MMixInstruction::ZSNNI(x, y, z)),
+            ("ZSNZ", ZForm::Reg(z)) => Ok(MMixInstruction::ZSNZ(x, y, z)),
+            ("ZSNZ", ZForm::Imm(z)) => Ok(MMixInstruction::ZSNZI(x, y, z)),
+            ("ZSNP", ZForm::Reg(z)) => Ok(MMixInstruction::ZSNP(x, y, z)),
+            ("ZSNP", ZForm::Imm(z)) => Ok(MMixInstruction::ZSNPI(x, y, z)),
+            ("ZSEV", ZForm::Reg(z)) => Ok(MMixInstruction::ZSEV(x, y, z)),
+            ("ZSEV", ZForm::Imm(z)) => Ok(MMixInstruction::ZSEVI(x, y, z)),
+            _ => Err(format!("Unknown zero or set instruction: {}", mnem)),
         }
     }
 
@@ -3156,6 +3217,76 @@ impl MMixAssembler {
         self.current_prefix = arg.as_str().to_string();
     }
 
+    /// Resolve the Z operand of a base mnemonic (auto-immediate path) into
+    /// either a register reference or an 8-bit immediate. The grammar allows Z
+    /// to be a `register` (which itself may be `$N` or a bare symbol that
+    /// could be a register alias *or* a constant) or an `expr_value` (literal
+    /// or symbol). Bare symbols are resolved against the symbol and label
+    /// tables; numeric values are range-checked against `0..=255`.
+    fn lower_z_operand(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+    ) -> Result<ZForm, String> {
+        let (line, col) = pair.line_col();
+        match pair.as_rule() {
+            Rule::register => {
+                let inner = pair
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .expect("register rule has at least one child");
+                match inner.as_rule() {
+                    Rule::register_num => {
+                        let n = self.parse_register(pair)?;
+                        Ok(ZForm::Reg(n))
+                    }
+                    Rule::symbol => {
+                        let raw = inner.as_str();
+                        let qualified = self.qualify_name(raw);
+                        if let Some(&sym) = self.symbols.get(&qualified) {
+                            match sym {
+                                SymbolType::Register(r) => Ok(ZForm::Reg(r)),
+                                SymbolType::Constant(v) => self.imm_in_range(v, mnem, line, col),
+                            }
+                        } else if let Some(&addr) = self.labels.get(&qualified) {
+                            self.imm_in_range(addr, mnem, line, col)
+                        } else {
+                            Err(format!(
+                                "{}:{}:{}: Undefined symbol '{}' in third operand of {}",
+                                self.current_filename, line, col, qualified, mnem
+                            ))
+                        }
+                    }
+                    other => Err(format!(
+                        "{}:{}:{}: Unexpected register inner rule {:?} for {}",
+                        self.current_filename, line, col, other, mnem
+                    )),
+                }
+            }
+            Rule::expr_value => {
+                let v = self.parse_number(pair)?;
+                self.imm_in_range(v, mnem, line, col)
+            }
+            other => Err(format!(
+                "{}:{}:{}: Unexpected Z operand rule {:?} for {}",
+                self.current_filename, line, col, other, mnem
+            )),
+        }
+    }
+
+    /// Range-check a resolved Z value as an 8-bit immediate (0..=255).
+    fn imm_in_range(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<ZForm, String> {
+        if v <= 0xFF {
+            Ok(ZForm::Imm(v as u8))
+        } else {
+            Err(format!(
+                "{}:{}:{}: immediate operand {} out of range 0..255 for {}",
+                self.current_filename, line, col, v, mnem
+            ))
+        }
+    }
+
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
         let (line, col) = pair.line_col();
 
@@ -3820,5 +3951,172 @@ mod tests {
             asm.symbols.get(":Baz").copied(),
             Some(SymbolType::Constant(2))
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Auto-immediate selection for base mnemonics (ADD, AND, SR, ...).
+    // -----------------------------------------------------------------
+    // The base mnemonic now accepts either a register or an in-range
+    // immediate as its third operand and emits the corresponding RRR or
+    // RRI MMixInstruction variant. The explicit *I mnemonics still work
+    // as before through their original code path.
+
+    #[test]
+    fn test_auto_arith_register_form_unchanged() {
+        // Regression: ADD with register Z still emits ADD, not ADDI.
+        let mut asm = MMixAssembler::new("ADD $1,$2,$3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADD(1, 2, 3));
+    }
+
+    #[test]
+    fn test_auto_arith_immediate_swap() {
+        // ADD with a literal Z now selects the ADDI variant automatically.
+        let mut asm = MMixAssembler::new("ADD $1,$2,5", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 5));
+    }
+
+    #[test]
+    fn test_auto_arith_explicit_addi_still_works() {
+        // The *I alias path is unchanged.
+        let mut asm = MMixAssembler::new("ADDI $1,$2,5", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 5));
+    }
+
+    #[test]
+    fn test_auto_arith_addi_rejects_register_z() {
+        // *I mnemonics must continue to reject a register third operand.
+        let mut asm = MMixAssembler::new("ADDI $1,$2,$3", "<test>");
+        assert!(asm.parse().is_err(), "ADDI with $Z should not parse");
+    }
+
+    #[test]
+    fn test_auto_arith_immediate_out_of_range() {
+        // A literal Z above 255 produces an out-of-range error.
+        let mut asm = MMixAssembler::new("ADD $1,$2,300", "<test>");
+        let err = asm.parse().expect_err("expected out-of-range error");
+        assert!(
+            err.contains("out of range 0..255"),
+            "error should mention range, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_auto_arith_symbol_resolves_to_immediate() {
+        // A symbol bound to a small constant should auto-select the RRI form.
+        let src = "K IS 7\nADD $1,$2,K";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_auto_arith_symbol_resolves_to_register_alias() {
+        // A symbol bound to a register alias should keep the RRR form.
+        let src = "R IS $4\nADD $1,$2,R";
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADD(1, 2, 4));
+    }
+
+    // Family coverage: one representative test per other family.
+
+    #[test]
+    fn test_auto_bitwise_and_with_hex_immediate() {
+        let mut asm = MMixAssembler::new("AND $1,$2,#FF", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 0xFF));
+    }
+
+    #[test]
+    fn test_auto_shift_sr_with_decimal_immediate() {
+        let mut asm = MMixAssembler::new("SR $1,$2,3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SRI(1, 2, 3));
+    }
+
+    #[test]
+    fn test_auto_bitfiddle_bdif_register_form() {
+        // Bit-fiddle family still chooses RRR when Z is a register.
+        let mut asm = MMixAssembler::new("BDIF $1,$2,$3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BDIF(1, 2, 3));
+    }
+
+    #[test]
+    fn test_auto_conditional_set_csz_with_immediate() {
+        let mut asm = MMixAssembler::new("CSZ $1,$2,7", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::CSZI(1, 2, 7));
+    }
+
+    #[test]
+    fn test_auto_zero_or_set_zsp_with_immediate() {
+        let mut asm = MMixAssembler::new("ZSP $1,$2,1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ZSPI(1, 2, 1));
+    }
+
+    // Regression: a program written with base mnemonics must assemble to
+    // the exact same bytes as the same program written with explicit *I
+    // mnemonics. Touches all six in-scope families.
+    #[test]
+    fn test_auto_immediate_byte_identical_to_explicit_i() {
+        let auto_src = "\
+ADD  $1,$2,5
+SUBU $3,$4,#10
+AND  $5,$6,#FF
+OR   $7,$8,1
+SR   $1,$2,3
+SLU  $3,$4,16
+BDIF $5,$6,7
+SADD $7,$8,255
+CSZ  $1,$2,42
+CSNN $3,$4,1
+ZSP  $5,$6,8
+ZSEV $7,$8,128
+";
+        let explicit_src = "\
+ADDI  $1,$2,5
+SUBUI $3,$4,#10
+ANDI  $5,$6,#FF
+ORI   $7,$8,1
+SRI   $1,$2,3
+SLUI  $3,$4,16
+BDIFI $5,$6,7
+SADDI $7,$8,255
+CSZI  $1,$2,42
+CSNNI $3,$4,1
+ZSPI  $5,$6,8
+ZSEVI $7,$8,128
+";
+
+        let mut auto_asm = MMixAssembler::new(auto_src, "<auto>");
+        auto_asm.parse().unwrap();
+        let mut explicit_asm = MMixAssembler::new(explicit_src, "<explicit>");
+        explicit_asm.parse().unwrap();
+
+        assert_eq!(
+            auto_asm.instructions.len(),
+            explicit_asm.instructions.len(),
+            "auto and explicit forms produced different instruction counts"
+        );
+
+        for (i, (auto, explicit)) in auto_asm
+            .instructions
+            .iter()
+            .zip(explicit_asm.instructions.iter())
+            .enumerate()
+        {
+            let auto_bytes = auto_asm.encode_instruction_bytes(&auto.1);
+            let explicit_bytes = explicit_asm.encode_instruction_bytes(&explicit.1);
+            assert_eq!(
+                auto_bytes, explicit_bytes,
+                "instruction {i}: auto form {:?} encoded to {:?}, explicit form {:?} encoded to {:?}",
+                auto.1, auto_bytes, explicit.1, explicit_bytes
+            );
+        }
     }
 }

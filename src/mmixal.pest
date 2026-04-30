@@ -393,6 +393,10 @@ comma = _{ "," }
 
 operand_reg_reg_reg = { register ~ comma ~ register ~ comma ~ register }
 operand_reg_reg_imm = { register ~ comma ~ register ~ comma ~ expr_value }
+// Auto-immediate operand shape for base mnemonics (ADD, AND, SR, ...).
+// Z is either a register reference or an expression value; the parser
+// chooses the RRR or RRI MMixInstruction variant after resolving Z.
+operand_reg_reg_z = { register ~ comma ~ register ~ comma ~ (register | expr_value) }
 operand_reg_reg = { register ~ comma ~ register }
 operand_reg_imm = { register ~ comma ~ expr_value }
 operand_reg = { register }
@@ -444,13 +448,14 @@ inst_load_store_rri = {
 inst_lda_rri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_reg_imm }
 inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
 
-// Arithmetic (3 operands) - ordered longest first
-inst_arith_rrr = {
+// Arithmetic (3 operands) - base mnemonics auto-select RRR/RRI by Z.
+// Ordered longest first so prefixes like ADDU win over ADD.
+inst_arith_auto = {
     (mnemonic_16addu | mnemonic_8addu | mnemonic_4addu | mnemonic_2addu |
      mnemonic_addu | mnemonic_subu |
      mnemonic_mulu | mnemonic_divu |
      mnemonic_cmpu | mnemonic_add | mnemonic_sub | mnemonic_mul | mnemonic_div | mnemonic_cmp) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_arith_rri = {
@@ -489,14 +494,14 @@ inst_float_rri = {
     operand_reg_reg_imm
 }
 
-// Bitwise operations (3 operands) - ordered longest first
-inst_bitwise_rrr = {
+// Bitwise operations (3 operands) - base mnemonics auto-select RRR/RRI by Z.
+inst_bitwise_auto = {
     (mnemonic_andn | mnemonic_nand |
      mnemonic_nxor | mnemonic_and |
-     mnemonic_orn | mnemonic_nor | 
+     mnemonic_orn | mnemonic_nor |
      mnemonic_or | mnemonic_xor |
      mnemonic_mux) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_bitwise_rri = {
@@ -506,10 +511,10 @@ inst_bitwise_rri = {
     operand_reg_reg_imm
 }
 
-// Bit fiddling operations (§11-12) - ordered longest first
-inst_bitfiddle_rrr = {
+// Bit fiddling operations (§11-12) - base mnemonics auto-select RRR/RRI by Z.
+inst_bitfiddle_auto = {
     (mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_bitfiddle_rri = {
@@ -517,11 +522,11 @@ inst_bitfiddle_rri = {
     operand_reg_reg_imm
 }
 
-// Shift instructions (§14) - ordered longest first
-inst_shift_rrr = {
+// Shift instructions (§14) - base mnemonics auto-select RRR/RRI by Z.
+inst_shift_auto = {
     (mnemonic_slu | mnemonic_sru |
      mnemonic_sl | mnemonic_sr) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_shift_rri = {
@@ -529,11 +534,11 @@ inst_shift_rri = {
     operand_reg_reg_imm
 }
 
-// Conditional set instructions - 3 operands - ordered longest first
-inst_conditional_set_rrr = {
+// Conditional set instructions - base mnemonics auto-select RRR/RRI by Z.
+inst_conditional_set_auto = {
     (mnemonic_csnn | mnemonic_csnz | mnemonic_csnp | mnemonic_csod | mnemonic_csev |
      mnemonic_csn | mnemonic_csz | mnemonic_csp) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_conditional_set_rri = {
@@ -542,11 +547,11 @@ inst_conditional_set_rri = {
     operand_reg_reg_imm
 }
 
-// Zero or set instructions - 3 operands - ordered longest first
-inst_zero_or_set_rrr = {
+// Zero or set instructions - base mnemonics auto-select RRR/RRI by Z.
+inst_zero_or_set_auto = {
     (mnemonic_zsnn | mnemonic_zsnz | mnemonic_zsnp | mnemonic_zsod | mnemonic_zsev |
      mnemonic_zsn | mnemonic_zsz | mnemonic_zsp) ~
-    operand_reg_reg_reg
+    operand_reg_reg_z
 }
 
 inst_zero_or_set_rri = {
@@ -658,14 +663,14 @@ instruction = {
     inst_ldvts_rrr | inst_ldvts_rri | inst_cswap_rrr | inst_cswap_rri |
     inst_stco_rrr | inst_stco_rri |
     inst_lda_rri | inst_lda_ri |
-    inst_arith_rrr | inst_arith_rri |
+    inst_arith_auto | inst_arith_rri |
     inst_float_rrr | inst_float_rri |
     inst_neg_rrr | inst_neg_rri |
-    inst_bitwise_rrr | inst_bitwise_rri |
-    inst_bitfiddle_rrr | inst_bitfiddle_rri |
-    inst_shift_rrr | inst_shift_rri |
-    inst_conditional_set_rrr | inst_conditional_set_rri |
-    inst_zero_or_set_rrr | inst_zero_or_set_rri |
+    inst_bitwise_auto | inst_bitwise_rri |
+    inst_bitfiddle_auto | inst_bitfiddle_rri |
+    inst_shift_auto | inst_shift_rri |
+    inst_conditional_set_auto | inst_conditional_set_rri |
+    inst_zero_or_set_auto | inst_zero_or_set_rri |
     inst_pbranch | inst_branch | inst_jmp |
     inst_pushj | inst_pushjb | inst_pushgo_rrr | inst_pushgo_rri | inst_pop |
     inst_go_rrr | inst_go_rri |
