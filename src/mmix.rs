@@ -501,25 +501,32 @@ impl SpecialReg {
 /// Instructions are tetrybytes (4 bytes) with format: OP X Y Z
 /// where OP is the opcode and X, Y, Z are operands.
 ///
-/// # Register Stack
+/// # Register Stack (MMIXware §1.4 / Knuth)
 ///
-/// The register stack is implemented per MMIX specification using main memory:
-/// - rO (register stack offset) points to the base address in memory (segment 6: 0x6000000000000000)
-/// - rS (register stack pointer) tracks the current depth in octabytes
-/// - PUSHJ/PUSHGO save caller locals $0..$(save_count-1), push a frame-size word, and bump rS by save_count+1
-/// - POP consumes that frame, restores the saved locals, and writes return values after the saved slice
-/// - FrameInfo tracks metadata (saved_count, saved_rL) for stack frame management
+/// PUSHJ $X, RA:
+///   - Pushes the X+1 octas $0..$X to memory at rO + 8·rS.
+///     The marginal slot at offset X stores the value X (the "hole" marker).
+///   - Writes a frame-size word (value X) at offset X+1.
+///   - Slides the live register window: caller's $(X+1)..$(rL-1) become callee's $0..$(rL-X-2).
+///     Vacated slots up through rG-1 are zeroed so freshly-allocated callee locals read as zero.
+///   - rL := saturating_sub(rL, X + 1)
+///   - rS += X + 2
+///   - rJ := pc + 4; pc := target.
 ///
-/// This approach ensures MMIX compatibility while maintaining type safety through lightweight bookkeeping.
-/// Metadata for a register stack frame (PUSHJ/POP bookkeeping)
-/// Actual register values are stored in memory at rO + 8×rS
+/// POP n, YZ:
+///   - Reverse-slides callee's $0..$(n-1) into caller's $(saved_x)..$(saved_x+n-1).
+///   - Restores caller's $0..$(saved_x-1) from memory.
+///   - rL := if n > 0 { min(rG, max(saved_rl, saved_x + n)) } else { saved_rl }
+///   - rS -= saved_x + 2
+///   - pc := callee_rJ + 4·YZ; rJ := saved_rj.
 #[derive(Debug, Clone)]
 struct FrameInfo {
-    /// Number of registers saved (0 through saved_count-1)
-    saved_count: u8,
-    /// Caller's rL value to restore on POP
+    /// PUSHJ's X operand: position of the marginal "hole" in the caller's frame.
+    /// Determines where return values land on POP.
+    saved_x: u8,
+    /// Caller's rL value to restore on POP.
     saved_rl: u64,
-    /// Caller's rJ value to restore on POP
+    /// Caller's rJ value to restore on POP.
     saved_rj: u64,
 }
 
@@ -598,8 +605,145 @@ impl MMix {
     }
 
     /// Set the value of a general-purpose register.
+    ///
+    /// Writing to a local register $i with i >= rL grows rL to i+1 (clamped to
+    /// rG-1). This matches MMIX hardware semantics, where the local register
+    /// frame implicitly extends to cover any local that has been written.
     pub fn set_register(&mut self, reg: u8, value: u64) {
         self.general_regs[reg as usize] = value;
+        let rg = self.special_regs[SpecialReg::RG as usize] as u8;
+        if reg < rg {
+            let rl = self.special_regs[SpecialReg::RL as usize] as u8;
+            if reg >= rl {
+                self.special_regs[SpecialReg::RL as usize] = (reg as u64) + 1;
+            }
+        }
+    }
+
+    /// Frame-size word offset for a PUSHJ $X frame given caller's rL.
+    ///
+    /// Knuth's spec only spills X+1 octas (the saved-and-marginal range) and keeps
+    /// the rest in the ring buffer; we approximate the ring by spilling the full
+    /// active local frame so the slide-back on POP can restore everything. The
+    /// frame on the stack is therefore `max(X+1, rL) + 1` octas (saved + frame
+    /// word), with the marginal at offset X always overwriting that slot.
+    fn frame_octas(saved_x: u8, saved_rl: u8) -> u64 {
+        std::cmp::max(saved_x as u64 + 1, saved_rl as u64)
+    }
+
+    /// Push a frame onto the register stack and slide the window down.
+    fn push_frame(&mut self, x: u8) {
+        let rg = self.get_special(SpecialReg::RG) as u8;
+        let rl_old = self.get_special(SpecialReg::RL) as u8;
+        let ro = self.get_special(SpecialReg::RO);
+        let rs = self.get_special(SpecialReg::RS);
+
+        let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
+        let frame_octas = Self::frame_octas(x, rl_old);
+
+        // Spill the full local frame so the upper slots can be restored on POP.
+        // For slots beyond rL_old (which read as zero in MMIX), the saved value
+        // is whatever the flat array holds; that's harmless because POP zeroes
+        // everything past saved_rl anyway.
+        for i in 0..frame_octas {
+            let val = if i == x as u64 {
+                x as u64 // marginal at offset X = X
+            } else {
+                self.general_regs[i as usize]
+            };
+            let addr = stack_addr.wrapping_add(i.wrapping_mul(8));
+            self.write_octa(addr, val);
+        }
+        // Frame-size word (Knuth: value X) immediately after the saved range.
+        let frame_word_addr = stack_addr.wrapping_add(frame_octas.wrapping_mul(8));
+        self.write_octa(frame_word_addr, x as u64);
+
+        // Slide live window: caller's $(x+1)..$(rL-1) become callee's $0.. .
+        let new_rl = rl_old.saturating_sub(x).saturating_sub(1);
+        for i in 0..new_rl {
+            let src = (x as usize) + 1 + (i as usize);
+            self.general_regs[i as usize] = self.general_regs[src];
+        }
+        for i in (new_rl as usize)..(rg as usize) {
+            self.general_regs[i] = 0;
+        }
+
+        self.frame_info_stack.push(FrameInfo {
+            saved_x: x,
+            saved_rl: rl_old as u64,
+            saved_rj: self.get_special(SpecialReg::RJ),
+        });
+
+        self.set_special(SpecialReg::RS, rs.wrapping_add(frame_octas + 1));
+        self.set_special(SpecialReg::RL, new_rl as u64);
+        self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
+    }
+
+    /// Pop a frame from the register stack and slide return values back.
+    /// Returns the branch target (callee_rJ + 4·yz).
+    fn pop_frame(&mut self, n: u8, yz: u16) -> Option<u64> {
+        let frame = self.frame_info_stack.pop()?;
+        let saved_x = frame.saved_x;
+        let saved_rl = frame.saved_rl as u8;
+        let saved_rj = frame.saved_rj;
+
+        let rg = self.get_special(SpecialReg::RG) as u8;
+        let ro = self.get_special(SpecialReg::RO);
+        let rs = self.get_special(SpecialReg::RS);
+
+        let frame_octas = Self::frame_octas(saved_x, saved_rl);
+
+        // Snapshot the n return values from callee's $0..$(n-1).
+        let n_capped = n.min(rg);
+        let mut returns = [0u64; 256];
+        for i in 0..n_capped {
+            returns[i as usize] = self.general_regs[i as usize];
+        }
+
+        let new_rs = rs.wrapping_sub(frame_octas + 1);
+        let stack_addr = ro.wrapping_add(new_rs.wrapping_mul(8));
+
+        // Clean slate for the local register file up through rG-1.
+        for i in 0..(rg as usize) {
+            self.general_regs[i] = 0;
+        }
+
+        // Restore caller's saved locals $0..$(saved_rl-1) from memory.
+        // The marginal slot at offset saved_x stored X (not the original $X);
+        // it will be overwritten by a return value or left zero per spec.
+        for i in 0..saved_rl {
+            let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
+            self.general_regs[i as usize] = self.read_octa(addr);
+        }
+        // The marginal slot is conceptually consumed — clear it so a POP 0 doesn't
+        // expose the marker value X as a "register value".
+        if (saved_x as usize) < rg as usize {
+            self.general_regs[saved_x as usize] = 0;
+        }
+
+        // Place return values at caller's $(saved_x)..$(saved_x+n-1).
+        for i in 0..n_capped {
+            let dst = (saved_x as usize) + (i as usize);
+            if dst < rg as usize {
+                self.general_regs[dst] = returns[i as usize];
+            }
+        }
+
+        let new_rl = if n == 0 {
+            saved_rl as u64
+        } else {
+            let target = (saved_x as u16) + (n as u16);
+            std::cmp::min(rg as u16, std::cmp::max(saved_rl as u16, target)) as u64
+        };
+
+        self.set_special(SpecialReg::RS, new_rs);
+        self.set_special(SpecialReg::RL, new_rl);
+
+        let return_pc = self.get_special(SpecialReg::RJ);
+        self.set_special(SpecialReg::RJ, saved_rj);
+
+        let yz_signed = yz as i16 as i64;
+        Some(return_pc.wrapping_add((yz_signed * 4) as u64))
     }
 
     /// Get the value of a special-purpose register.
@@ -2663,83 +2807,17 @@ impl MMix {
                 true
             }
             Opcode::PUSHGO => {
-                // PUSHGO $X, $Y, $Z - Push registers and go
-                // Spec: behaves like PUSHJ with absolute target $Y+$Z
-
-                let rg = self.get_special(SpecialReg::RG) as u8;
-                let rl = self.get_special(SpecialReg::RL) as u8;
-                let ro = self.get_special(SpecialReg::RO);
-                let rs = self.get_special(SpecialReg::RS);
-
-                // Determine how many registers to save
-                let (save_count, new_rl) = if x < rg { (x, x) } else { (rl, 0) };
-
-                // Save registers $0..$(save_count-1)
-                let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
-                for i in 0..save_count {
-                    let reg_val = self.get_register(i);
-                    let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
-                    self.write_octa(addr, reg_val);
-                }
-
-                // Push frame-size word (save_count)
-                let frame_word_addr = stack_addr.wrapping_add((save_count as u64).wrapping_mul(8));
-                self.write_octa(frame_word_addr, save_count as u64);
-
-                // Record frame metadata
-                self.frame_info_stack.push(FrameInfo {
-                    saved_count: save_count,
-                    saved_rl: self.get_special(SpecialReg::RL),
-                    saved_rj: self.get_special(SpecialReg::RJ),
-                });
-
-                // Advance rS past saved registers + frame word
-                self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
-
-                // Set callee's rL per spec
-                self.set_special(SpecialReg::RL, new_rl as u64);
-
-                // Save return address in rJ
-                self.set_special(SpecialReg::RJ, self.get_pc() + 4);
-
-                // Jump to computed address
-                let addr = self.get_register(y).wrapping_add(self.get_register(z));
-                self.set_pc(addr);
+                // PUSHGO $X, $Y, $Z - Push registers and go (absolute target $Y+$Z)
+                let target = self.get_register(y).wrapping_add(self.get_register(z));
+                self.push_frame(x);
+                self.set_pc(target);
                 true
             }
             Opcode::PUSHGOI => {
-                // PUSHGOI $X, $Y, Z - Push registers and go immediate
-                // Spec: behaves like PUSHJ with absolute target $Y+Z
-
-                let rg = self.get_special(SpecialReg::RG) as u8;
-                let rl = self.get_special(SpecialReg::RL) as u8;
-                let ro = self.get_special(SpecialReg::RO);
-                let rs = self.get_special(SpecialReg::RS);
-
-                let (save_count, new_rl) = if x < rg { (x, x) } else { (rl, 0) };
-
-                let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
-                for i in 0..save_count {
-                    let reg_val = self.get_register(i);
-                    let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
-                    self.write_octa(addr, reg_val);
-                }
-
-                let frame_word_addr = stack_addr.wrapping_add((save_count as u64).wrapping_mul(8));
-                self.write_octa(frame_word_addr, save_count as u64);
-
-                self.frame_info_stack.push(FrameInfo {
-                    saved_count: save_count,
-                    saved_rl: self.get_special(SpecialReg::RL),
-                    saved_rj: self.get_special(SpecialReg::RJ),
-                });
-
-                self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
-                self.set_special(SpecialReg::RL, new_rl as u64);
-                self.set_special(SpecialReg::RJ, self.get_pc() + 4);
-
-                let addr = self.get_register(y).wrapping_add(z as u64);
-                self.set_pc(addr);
+                // PUSHGOI $X, $Y, Z - Push registers and go (absolute target $Y+Z)
+                let target = self.get_register(y).wrapping_add(z as u64);
+                self.push_frame(x);
+                self.set_pc(target);
                 true
             }
             // Arithmetic instructions (§9) - MUL/DIV opcodes 0x18-0x1F
@@ -3698,84 +3776,19 @@ impl MMix {
                 true
             }
             Opcode::PUSHJ => {
-                // PUSHJ $X, YZ - Push registers and jump
-                // MMIX spec: push caller locals and frame-size word, adjust rS/rL, set rJ, branch
-
-                let rg = self.get_special(SpecialReg::RG) as u8;
-                let rl = self.get_special(SpecialReg::RL) as u8;
-                let ro = self.get_special(SpecialReg::RO);
-                let rs = self.get_special(SpecialReg::RS);
-
-                // Decide how many registers to save
-                let (save_count, new_rl) = if x < rg { (x, x) } else { (rl, 0) };
-
-                // Save registers $0..$(save_count-1)
-                let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
-                for i in 0..save_count {
-                    let reg_val = self.get_register(i);
-                    let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
-                    self.write_octa(addr, reg_val);
-                }
-
-                // Push frame-size word
-                let frame_word_addr = stack_addr.wrapping_add((save_count as u64).wrapping_mul(8));
-                self.write_octa(frame_word_addr, save_count as u64);
-
-                // Record metadata
-                self.frame_info_stack.push(FrameInfo {
-                    saved_count: save_count,
-                    saved_rl: self.get_special(SpecialReg::RL),
-                    saved_rj: self.get_special(SpecialReg::RJ),
-                });
-
-                // Advance rS past saved registers + frame word
-                self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
-
-                // Set callee rL
-                self.set_special(SpecialReg::RL, new_rl as u64);
-
-                // Save return address in rJ
-                self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
-
-                // Jump to relative address
-                let offset = ((y as u16) << 8 | z as u16) as i16;
-                self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
-
+                // PUSHJ $X, YZ - Push registers and jump (forward, signed YZ)
+                let pc_at_inst = self.pc;
+                self.push_frame(x);
+                let offset = (((y as u16) << 8) | z as u16) as i16;
+                self.pc = pc_at_inst.wrapping_add((offset as i64 * 4) as u64);
                 true
             }
             Opcode::PUSHJB => {
-                // PUSHJB $X, YZ - Push registers and jump backward
-                // Same as PUSHJ but with backward target
-
-                let rg = self.get_special(SpecialReg::RG) as u8;
-                let rl = self.get_special(SpecialReg::RL) as u8;
-                let ro = self.get_special(SpecialReg::RO);
-                let rs = self.get_special(SpecialReg::RS);
-
-                let (save_count, new_rl) = if x < rg { (x, x) } else { (rl, 0) };
-
-                let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
-                for i in 0..save_count {
-                    let reg_val = self.get_register(i);
-                    let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
-                    self.write_octa(addr, reg_val);
-                }
-
-                let frame_word_addr = stack_addr.wrapping_add((save_count as u64).wrapping_mul(8));
-                self.write_octa(frame_word_addr, save_count as u64);
-
-                self.frame_info_stack.push(FrameInfo {
-                    saved_count: save_count,
-                    saved_rl: self.get_special(SpecialReg::RL),
-                    saved_rj: self.get_special(SpecialReg::RJ),
-                });
-
-                self.set_special(SpecialReg::RS, rs.wrapping_add(save_count as u64 + 1));
-                self.set_special(SpecialReg::RL, new_rl as u64);
-                self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
-
-                let offset = (y as u16) << 8 | z as u16;
-                self.pc = self.pc.wrapping_sub((offset as u64) * 4);
+                // PUSHJB $X, YZ - Push registers and jump backward (unsigned YZ)
+                let pc_at_inst = self.pc;
+                self.push_frame(x);
+                let offset = ((y as u16) << 8) | z as u16;
+                self.pc = pc_at_inst.wrapping_sub((offset as u64) * 4);
                 true
             }
             Opcode::GETA => {
@@ -3817,69 +3830,19 @@ impl MMix {
                 true
             }
             Opcode::POP => {
-                // POP X, YZ - Pop registers and return
-                // MMIX spec: POP undoes PUSHJ/PUSHGO frame, restoring registers and rL
-                // Registers $0..$(X-1) already contain return values from the subroutine
-                // Only restore registers $X..$(saved_count-1) from the stack
-
-                let mut pop_x = x;
-                let rl = self.get_special(SpecialReg::RL) as u8;
-                let rg = self.get_special(SpecialReg::RG) as u8;
-
-                if pop_x > rl {
-                    pop_x = rl + 1;
-                }
-
-                if self.frame_info_stack.is_empty() {
-                    // No frame to pop; just jump back
-                    self.pc = self.get_special(SpecialReg::RJ);
-                    let yz = ((y as u16) << 8 | z as u16) as i16;
-                    self.pc = self.pc.wrapping_add((yz as i64 * 4) as u64);
-                    return true;
-                }
-
-                let frame_info = self.frame_info_stack.pop().unwrap();
-                let saved_count = frame_info.saved_count;
-                let saved_rj = frame_info.saved_rj;
-
-                let ro = self.get_special(SpecialReg::RO);
-                let rs = self.get_special(SpecialReg::RS);
-
-                // Stack layout: saved_count registers, then frame-size word
-                let new_rs = rs.wrapping_sub(saved_count as u64 + 1);
-                let stack_addr = ro.wrapping_add(new_rs.wrapping_mul(8));
-
-                // Restore caller registers $pop_x..$(saved_count-1)
-                // Skip first pop_x registers - they already contain return values
-                for i in pop_x..saved_count {
-                    let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
-                    let reg_val = self.read_octa(addr);
-                    self.set_register(i, reg_val);
-                }
-
-                // Update rS
-                self.set_special(SpecialReg::RS, new_rs);
-
-                // Restore caller rL baseline
-                let caller_rl = frame_info.saved_rl as u8;
-
-                // Update rL to accommodate return values if needed
-                if pop_x > 0 {
-                    let growth_target = pop_x as u16;
-                    let new_rl =
-                        std::cmp::min(std::cmp::max(caller_rl as u16, growth_target), rg as u16);
-                    self.set_special(SpecialReg::RL, new_rl as u64);
+                // POP X, YZ - Pop frame and return.
+                // Reverse-slides callee's $0..$(X-1) into caller's $(saved_x)..$(saved_x+X-1),
+                // restores caller's saved locals, and branches to callee_rJ + 4·YZ.
+                let yz = ((y as u16) << 8) | z as u16;
+                if let Some(target) = self.pop_frame(x, yz) {
+                    self.pc = target;
                 } else {
-                    self.set_special(SpecialReg::RL, caller_rl as u64);
+                    // No frame to pop: branch via current rJ as a defensive fallback.
+                    let yz_signed = yz as i16 as i64;
+                    self.pc = self
+                        .get_special(SpecialReg::RJ)
+                        .wrapping_add((yz_signed * 4) as u64);
                 }
-
-                // Use callee's rJ for the branch target, then restore caller rJ
-                let return_pc = self.get_special(SpecialReg::RJ);
-                self.set_special(SpecialReg::RJ, saved_rj);
-                self.pc = return_pc;
-                let yz = ((y as u16) << 8 | z as u16) as i16;
-                self.pc = self.pc.wrapping_add((yz as i64 * 4) as u64);
-
                 true
             }
             Opcode::RESUME => {
@@ -4200,33 +4163,138 @@ mod tests {
         mmix.set_register(2, 102);
         mmix.set_special(SpecialReg::RL, 3);
 
-        // PUSHJ $3, +1 (saves $0, $1, $2)
+        // PUSHJ $3, +1 (frame: $0..$3 = 4 octas + frame word)
         mmix.write_tetra(0x100, 0xF2030001);
         mmix.execute_instruction();
 
-        // Verify rS incremented
-        assert_eq!(mmix.get_special(SpecialReg::RS), 4);
-
-        // Verify rL set to X for callee
-        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
-
-        // Verify return address saved
+        // rS advances by X+2 = 5 (4 saved + 1 frame word)
+        assert_eq!(mmix.get_special(SpecialReg::RS), 5);
+        // new rL = max(0, rL_old - X - 1) = max(0, 3-3-1) = 0
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
-
-        // Verify PC jumped
         assert_eq!(mmix.get_pc(), 0x104);
 
-        // Verify registers saved to memory at rO
+        // Saved frame in memory: $0, $1, $2, marginal=X, frame_word=X
         let ro = 0x6000000000000000u64;
         assert_eq!(mmix.read_octa(ro), 100);
         assert_eq!(mmix.read_octa(ro + 8), 101);
         assert_eq!(mmix.read_octa(ro + 16), 102);
-        assert_eq!(mmix.read_octa(ro + 24), 3);
+        assert_eq!(mmix.read_octa(ro + 24), 3); // marginal at offset X = X
+        assert_eq!(mmix.read_octa(ro + 32), 3); // frame-size word
 
-        // Verify frame metadata
+        // Live register file: caller's $0..$2 zeroed (no slide source above $X here).
+        assert_eq!(mmix.get_register(0), 0);
+        assert_eq!(mmix.get_register(1), 0);
+        assert_eq!(mmix.get_register(2), 0);
+
         assert_eq!(mmix.frame_info_stack.len(), 1);
-        assert_eq!(mmix.frame_info_stack[0].saved_count, 3);
+        assert_eq!(mmix.frame_info_stack[0].saved_x, 3);
         assert_eq!(mmix.frame_info_stack[0].saved_rl, 3);
+    }
+
+    #[test]
+    fn test_pushj_window_slide_argument_passing() {
+        // Stage an arg at $5; PUSHJ $4 should make it visible to the callee at $0.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_register(5, 0xAA);
+        mmix.set_special(SpecialReg::RL, 8); // 8 active locals
+
+        // PUSHJ $4, +1
+        mmix.write_tetra(0x100, 0xF2040001);
+        mmix.execute_instruction();
+
+        // Callee sees caller's $5 as $0 (slid down by X+1 = 5).
+        assert_eq!(mmix.get_register(0), 0xAA);
+        // rL = 8 - 5 = 3
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
+
+        // POP 0,0 — caller's $5 is restored from the spilled frame.
+        mmix.write_tetra(0x104, 0xF8000000);
+        mmix.execute_instruction();
+        assert_eq!(mmix.get_special(SpecialReg::RL), 8);
+        assert_eq!(mmix.get_register(5), 0xAA);
+        // $4 was the marginal hole — it's consumed by PUSHJ and reads as zero
+        // after POP 0 since no return value lands there.
+        assert_eq!(mmix.get_register(4), 0);
+    }
+
+    #[test]
+    fn test_pushj_window_slide_return_value() {
+        // Knuth: POP 1 lands the single return value at the caller's hole position $X.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RL, 5);
+
+        // PUSHJ $4, +1
+        mmix.write_tetra(0x100, 0xF2040001);
+        mmix.execute_instruction();
+
+        // Callee writes 0xBB into $0 as the return value.
+        mmix.set_register(0, 0xBB);
+
+        // POP 1, 0
+        mmix.write_tetra(0x104, 0xF8010000);
+        mmix.execute_instruction();
+
+        // Return value lands at caller's $4 (the hole).
+        assert_eq!(mmix.get_register(4), 0xBB);
+        // rL = max(saved_rl=5, saved_x+n=4+1=5) = 5
+        assert_eq!(mmix.get_special(SpecialReg::RL), 5);
+    }
+
+    #[test]
+    fn test_pushj_zeros_freshly_allocated_locals() {
+        // After PUSHJ, callee locals beyond the slide window must read as zero.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        for i in 0..8u8 {
+            mmix.set_register(i, 1000 + i as u64);
+        }
+        mmix.set_special(SpecialReg::RL, 8);
+
+        // PUSHJ $4, +1
+        mmix.write_tetra(0x100, 0xF2040001);
+        mmix.execute_instruction();
+
+        // Slid-down values: caller $5..$7 → callee $0..$2.
+        assert_eq!(mmix.get_register(0), 1005);
+        assert_eq!(mmix.get_register(1), 1006);
+        assert_eq!(mmix.get_register(2), 1007);
+        // Vacated tail must be zero.
+        assert_eq!(mmix.get_register(3), 0);
+        assert_eq!(mmix.get_register(4), 0);
+        assert_eq!(mmix.get_register(5), 0);
+        assert_eq!(mmix.get_register(7), 0);
+    }
+
+    #[test]
+    fn test_pop_with_return_value_shift() {
+        // PUSHJ $3 + POP 2: callee's $0,$1 reverse-slide to caller's $3,$4.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RL, 4);
+
+        // PUSHJ $3, +1
+        mmix.write_tetra(0x100, 0xF2030001);
+        mmix.execute_instruction();
+
+        mmix.set_register(0, 0x111);
+        mmix.set_register(1, 0x222);
+
+        // POP 2, 0
+        mmix.write_tetra(0x104, 0xF8020000);
+        mmix.execute_instruction();
+
+        // saved_x=3, n=2: caller's $3 = 0x111, $4 = 0x222.
+        assert_eq!(mmix.get_register(3), 0x111);
+        assert_eq!(mmix.get_register(4), 0x222);
+        // rL = max(saved_rl=4, saved_x+n=5) = 5
+        assert_eq!(mmix.get_special(SpecialReg::RL), 5);
+        // Caller's $0..$2 are restored from memory (originally zero).
+        assert_eq!(mmix.get_register(0), 0);
+        assert_eq!(mmix.get_register(1), 0);
+        assert_eq!(mmix.get_register(2), 0);
     }
 
     #[test]
@@ -4245,25 +4313,25 @@ mod tests {
         mmix.execute_instruction();
 
         let ro = mmix.get_special(SpecialReg::RO);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 3); // 2 saved regs + frame word
-        assert_eq!(mmix.get_special(SpecialReg::RL), 2);
+        // X=2, rL=2: frame = max(X+1, rL) + 1 = 4 octas
+        assert_eq!(mmix.get_special(SpecialReg::RS), 4);
+        // new rL = saturating_sub(2, 3) = 0
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
         assert_eq!(mmix.get_pc(), 0x200);
 
-        // Saved locals and frame word
+        // Saved $0,$1, marginal=2, frame word=2
         assert_eq!(mmix.read_octa(ro), 10);
         assert_eq!(mmix.read_octa(ro + 8), 11);
         assert_eq!(mmix.read_octa(ro + 16), 2);
+        assert_eq!(mmix.read_octa(ro + 24), 2);
         assert_eq!(mmix.frame_info_stack.len(), 1);
-
-        // Callee mutates locals
-        mmix.set_register(0, 99);
-        mmix.set_register(1, 98);
 
         // POP 0,0 at target
         mmix.write_tetra(0x200, 0xF8000000);
         mmix.execute_instruction();
 
+        // Caller's $0,$1 restored from memory.
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
         assert_eq!(mmix.get_special(SpecialReg::RS), 0);
@@ -4274,175 +4342,106 @@ mod tests {
 
     #[test]
     fn test_pop_basic() {
+        // PUSHJ $3 + POP 0: caller's $0..$2 fully restored, rL = saved_rl.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
-
-        // Simulate PUSHJ state
         mmix.set_register(0, 100);
         mmix.set_register(1, 101);
         mmix.set_register(2, 102);
-        let ro = 0x6000000000000000u64;
-        mmix.write_octa(ro, 100);
-        mmix.write_octa(ro + 8, 101);
-        mmix.write_octa(ro + 16, 102);
-        mmix.write_octa(ro + 24, 3);
-        mmix.set_special(SpecialReg::RS, 4);
         mmix.set_special(SpecialReg::RL, 3);
-        mmix.set_special(SpecialReg::RJ, 0x200);
-        mmix.frame_info_stack.push(FrameInfo {
-            saved_count: 3,
-            saved_rl: 3,
-            saved_rj: 0x200,
-        });
 
-        // Modify registers in callee
+        // PUSHJ $3, +1
+        mmix.write_tetra(0x100, 0xF2030001);
+        mmix.execute_instruction();
+
+        // Callee scribbles over its locals.
         mmix.set_register(0, 200);
         mmix.set_register(1, 201);
         mmix.set_register(2, 202);
 
-        // POP 0, 0 (no return values)
-        mmix.write_tetra(0x100, 0xF8000000);
+        // POP 0, 0
+        mmix.write_tetra(0x104, 0xF8000000);
         mmix.execute_instruction();
 
-        // Verify registers restored
         assert_eq!(mmix.get_register(0), 100);
         assert_eq!(mmix.get_register(1), 101);
         assert_eq!(mmix.get_register(2), 102);
-
-        // Verify rS decremented
         assert_eq!(mmix.get_special(SpecialReg::RS), 0);
-
-        // Verify rL restored
         assert_eq!(mmix.get_special(SpecialReg::RL), 3);
-
-        // Verify PC returned
-        assert_eq!(mmix.get_pc(), 0x200);
-
-        // Verify frame popped
+        assert_eq!(mmix.get_pc(), 0x104);
         assert!(mmix.frame_info_stack.is_empty());
     }
 
     #[test]
     fn test_pop_with_return_values() {
+        // PUSHJ $4 + POP 3: callee's $0..$2 land at caller's $4..$6.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
+        for i in 0..8u8 {
+            mmix.set_register(i, 100 + i as u64);
+        }
+        mmix.set_special(SpecialReg::RL, 8);
 
-        // Simulate PUSHJ $4 state (saved 4 registers)
-        let ro = 0x6000000000000000u64;
-        mmix.write_octa(ro, 100);
-        mmix.write_octa(ro + 8, 101);
-        mmix.write_octa(ro + 16, 102);
-        mmix.write_octa(ro + 24, 103);
-        mmix.write_octa(ro + 32, 4);
-        mmix.set_special(SpecialReg::RS, 5);
-        mmix.set_special(SpecialReg::RL, 4);
-        mmix.set_special(SpecialReg::RJ, 0x200);
-        mmix.frame_info_stack.push(FrameInfo {
-            saved_count: 4,
-            saved_rl: 4,
-            saved_rj: 0x200,
-        });
+        // PUSHJ $4, +1
+        mmix.write_tetra(0x100, 0xF2040001);
+        mmix.execute_instruction();
 
-        // Set return values in callee - these are already in $0, $1, $2
+        // Callee sets 3 return values.
         mmix.set_register(0, 300);
         mmix.set_register(1, 301);
         mmix.set_register(2, 302);
 
-        // POP 3, 0 (return 3 values in $0, $1, $2)
-        mmix.write_tetra(0x100, 0xF8030000);
+        // POP 3, 0
+        mmix.write_tetra(0x104, 0xF8030000);
         mmix.execute_instruction();
 
-        // Verify return values remain in $0, $1, $2 (not overwritten)
-        assert_eq!(mmix.get_register(0), 300);
-        assert_eq!(mmix.get_register(1), 301);
-        assert_eq!(mmix.get_register(2), 302);
-
-        // Verify caller's register $3 restored (only registers >= pop_x are restored)
-        assert_eq!(mmix.get_register(3), 103);
-
-        // Verify rL updated to accommodate return values: max(4, 3) = 4
-        assert_eq!(mmix.get_special(SpecialReg::RL), 4);
-    }
-
-    #[test]
-    fn test_pop_more_returns_than_saved() {
-        // Special case: PUSHJ saved 1 register, but POP returns 4 values
-        let mut mmix = MMix::new();
-        mmix.set_pc(0x100);
-
-        // Simulate PUSHJ $1 state (saved 1 register)
-        let ro = 0x6000000000000000u64;
-        mmix.write_octa(ro, 999); // $0 was 999
-        mmix.write_octa(ro + 8, 1);
-        mmix.set_special(SpecialReg::RS, 2);
-        mmix.set_special(SpecialReg::RL, 1);
-        mmix.set_special(SpecialReg::RJ, 0x200);
-        mmix.frame_info_stack.push(FrameInfo {
-            saved_count: 1,
-            saved_rl: 1,
-            saved_rj: 0x200,
-        });
-
-        // Subroutine computed 4 return values in $0..$3
-        mmix.set_register(0, 10);
-        mmix.set_register(1, 20);
-        mmix.set_register(2, 30);
-        mmix.set_register(3, 40);
-
-        // POP 4, 0 (return 4 values, but rL=1 so clamped to 2)
-        mmix.write_tetra(0x100, 0xF8040000);
-        mmix.execute_instruction();
-
-        // pop_x gets clamped to rl+1 = 2
-        // $0, $1 should NOT be restored (they have return values)
-        assert_eq!(mmix.get_register(0), 10);
-        assert_eq!(mmix.get_register(1), 20);
-        // $2, $3 were never saved (saved_count=1), so they keep their values
-        assert_eq!(mmix.get_register(2), 30);
-        assert_eq!(mmix.get_register(3), 40);
-
-        // rL updated to max(caller_rl=1, pop_x=2) = 2
-        assert_eq!(mmix.get_special(SpecialReg::RL), 2);
-    }
-
-    #[test]
-    fn test_pop_no_return_values() {
-        // Special case: PUSHJ saved 31 registers, POP returns 0 values
-        let mut mmix = MMix::new();
-        mmix.set_pc(0x100);
-
-        // Simulate PUSHJ saving many registers
-        let ro = 0x6000000000000000u64;
-        for i in 0..5 {
-            mmix.write_octa(ro + (i * 8), 100 + i);
-        }
-        mmix.write_octa(ro + 40, 5); // frame size
-        mmix.set_special(SpecialReg::RS, 6);
-        mmix.set_special(SpecialReg::RL, 5);
-        mmix.set_special(SpecialReg::RJ, 0x200);
-        mmix.frame_info_stack.push(FrameInfo {
-            saved_count: 5,
-            saved_rl: 10,
-            saved_rj: 0x200,
-        });
-
-        // Subroutine modified some registers
-        mmix.set_register(0, 999);
-        mmix.set_register(1, 888);
-        mmix.set_register(2, 777);
-
-        // POP 0, 0 (return 0 values - restore all saved registers)
-        mmix.write_tetra(0x100, 0xF8000000);
-        mmix.execute_instruction();
-
-        // All saved registers should be restored (loop is 0..5)
+        // Returns at caller's $4, $5, $6.
+        assert_eq!(mmix.get_register(4), 300);
+        assert_eq!(mmix.get_register(5), 301);
+        assert_eq!(mmix.get_register(6), 302);
+        // Caller's $0..$3 restored from memory.
         assert_eq!(mmix.get_register(0), 100);
         assert_eq!(mmix.get_register(1), 101);
         assert_eq!(mmix.get_register(2), 102);
         assert_eq!(mmix.get_register(3), 103);
-        assert_eq!(mmix.get_register(4), 104);
+        // rL = max(saved_rl=8, saved_x+n=7) = 8
+        assert_eq!(mmix.get_special(SpecialReg::RL), 8);
+    }
 
-        // rL restored to caller's rL
+    #[test]
+    fn test_pop_no_return_values() {
+        // PUSHJ $5 + POP 0: every local except $5 (the marginal "hole") is restored.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        for i in 0..10u8 {
+            mmix.set_register(i, 100 + i as u64);
+        }
+        mmix.set_special(SpecialReg::RL, 10);
+
+        // PUSHJ $5, +1
+        mmix.write_tetra(0x100, 0xF2050001);
+        mmix.execute_instruction();
+
+        // Callee scribbles over its locals.
+        mmix.set_register(0, 999);
+        mmix.set_register(1, 888);
+        mmix.set_register(2, 777);
+
+        // POP 0, 0
+        mmix.write_tetra(0x104, 0xF8000000);
+        mmix.execute_instruction();
+
+        // Caller's $0..$4 restored from memory.
+        for i in 0..5u8 {
+            assert_eq!(mmix.get_register(i), 100 + i as u64);
+        }
+        // $5 was the marginal hole — it's consumed by PUSHJ and reads as zero
+        // after POP 0 since no return value lands there.
+        assert_eq!(mmix.get_register(5), 0);
+        // Slots above the hole are restored from the spilled frame.
+        for i in 6..10u8 {
+            assert_eq!(mmix.get_register(i), 100 + i as u64);
+        }
         assert_eq!(mmix.get_special(SpecialReg::RL), 10);
     }
 
@@ -4452,30 +4451,26 @@ mod tests {
         mmix.set_pc(0x300);
         mmix.set_register(0, 42);
         mmix.set_register(1, 43);
-        // Target address: $5 + 0x10 = 0x320
         mmix.set_register(5, 0x310);
         mmix.set_special(SpecialReg::RL, 2);
 
-        // PUSHGOI $2, $5, #0x10
+        // PUSHGOI $2, $5, #0x10  → target = $5 + 0x10 = 0x320
         mmix.write_tetra(0x300, 0xBF020510);
         mmix.execute_instruction();
 
         let ro = mmix.get_special(SpecialReg::RO);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 3);
-        assert_eq!(mmix.get_special(SpecialReg::RL), 2);
+        assert_eq!(mmix.get_special(SpecialReg::RS), 4);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x304);
         assert_eq!(mmix.get_pc(), 0x320);
 
         assert_eq!(mmix.read_octa(ro), 42);
         assert_eq!(mmix.read_octa(ro + 8), 43);
-        assert_eq!(mmix.read_octa(ro + 16), 2);
+        assert_eq!(mmix.read_octa(ro + 16), 2); // marginal
+        assert_eq!(mmix.read_octa(ro + 24), 2); // frame word
         assert_eq!(mmix.frame_info_stack.len(), 1);
 
-        // Callee mutates locals
-        mmix.set_register(0, 7);
-        mmix.set_register(1, 8);
-
-        // POP 0,0 at target
+        // POP 0,0 at target — restore caller's $0,$1.
         mmix.write_tetra(0x320, 0xF8000000);
         mmix.execute_instruction();
 
@@ -4489,89 +4484,51 @@ mod tests {
 
     #[test]
     fn test_pushj_pop_nested() {
+        // Two-level nested call exercises arg passing in both directions.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
-        let ro = 0x6000000000000000u64;
-
-        // First PUSHJ $2
         mmix.set_register(0, 10);
         mmix.set_register(1, 11);
+        mmix.set_register(2, 0xCAFE); // arg for inner call: caller's $2
+        mmix.set_special(SpecialReg::RL, 5);
+
+        // Outer PUSHJ $2, +1 — saves $0,$1; slides $3,$4 to callee's $0,$1; arg at $2 → callee $0? No —
+        // PUSHJ $X saves $0..$X-1 (here $0,$1) and the marginal at $X. Caller's $X+1, $X+2, ...
+        // become callee's $0, $1, ... .  So $2 (the marginal) is *not* an arg; it becomes X.
+        // To pass an arg via slide, stage at $X+1 = $3.
+        mmix.set_register(3, 0xCAFE);
         mmix.write_tetra(0x100, 0xF2020001);
         mmix.execute_instruction();
 
-        assert_eq!(mmix.get_special(SpecialReg::RS), 3);
-        assert_eq!(mmix.read_octa(ro), 10);
-        assert_eq!(mmix.read_octa(ro + 8), 11);
+        // Outer callee sees arg at $0.
+        assert_eq!(mmix.get_register(0), 0xCAFE);
+        assert_eq!(mmix.frame_info_stack.len(), 1);
 
-        // Second PUSHJ $2 (nested)
-        mmix.set_register(0, 20);
-        mmix.set_register(1, 21);
-        mmix.write_tetra(0x104, 0xF2020001);
+        // Outer callee stages an arg at $1 then nested PUSHJ $0, +1 (X=0: nothing saved, slide $1→$0).
+        mmix.set_register(1, 0xBEEF);
+        mmix.write_tetra(0x104, 0xF2000001);
         mmix.execute_instruction();
 
-        assert_eq!(mmix.get_special(SpecialReg::RS), 6);
-        assert_eq!(mmix.read_octa(ro + 24), 20);
-        assert_eq!(mmix.read_octa(ro + 32), 21);
+        assert_eq!(mmix.get_register(0), 0xBEEF);
         assert_eq!(mmix.frame_info_stack.len(), 2);
 
-        // First POP (POP 1,0 - returns 1 value in $0)
-        mmix.set_register(0, 30);
+        // Inner POP 1, 0 — return 0xD00D at $0; lands at outer callee's $0 (saved_x=0).
+        mmix.set_register(0, 0xD00D);
         mmix.write_tetra(0x108, 0xF8010000);
         mmix.execute_instruction();
 
-        assert_eq!(mmix.get_special(SpecialReg::RS), 3);
-        // $0 contains return value (30), not restored
-        assert_eq!(mmix.get_register(0), 30);
-        // $1 restored from nested call's saved registers
-        assert_eq!(mmix.get_register(1), 21);
+        assert_eq!(mmix.get_register(0), 0xD00D);
         assert_eq!(mmix.frame_info_stack.len(), 1);
 
-        // Second POP (POP 0,0 - no return values, restore all)
-        mmix.write_tetra(0x108, 0xF8000000);
+        // Outer POP 1, 0 — return 0xD00D, lands at top-level caller's $2 (saved_x=2).
+        mmix.write_tetra(0x10C, 0xF8010000);
         mmix.execute_instruction();
 
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0);
-        // All registers restored from first call
+        assert_eq!(mmix.get_register(2), 0xD00D);
+        // Caller's $0, $1 restored.
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
         assert!(mmix.frame_info_stack.is_empty());
-    }
-
-    #[test]
-    fn test_pop_limits_return_values_to_rl() {
-        let mut mmix = MMix::new();
-        mmix.set_pc(0x100);
-
-        // Setup: PUSHJ saved 3 registers
-        let ro = 0x6000000000000000u64;
-        mmix.write_octa(ro, 100);
-        mmix.write_octa(ro + 8, 101);
-        mmix.write_octa(ro + 16, 102);
-        mmix.write_octa(ro + 24, 3);
-        mmix.set_special(SpecialReg::RS, 4);
-        mmix.set_special(SpecialReg::RL, 2); // But rL only 2 (only $0, $1 are valid locals)
-        mmix.set_special(SpecialReg::RJ, 0x200);
-        mmix.frame_info_stack.push(FrameInfo {
-            saved_count: 3,
-            saved_rl: 0,
-            saved_rj: 0x200,
-        });
-
-        // Callee sets values in its valid local registers
-        mmix.set_register(0, 200);
-        mmix.set_register(1, 201);
-
-        // POP 5, 0 (request 5 return values, but rL=2, so limited to rL+1=3)
-        mmix.write_tetra(0x100, 0xF8050000);
-        mmix.execute_instruction();
-
-        // pop_x clamped to rl+1 = 3
-        // $0, $1, $2 contain return values (not restored)
-        assert_eq!(mmix.get_register(0), 200);
-        assert_eq!(mmix.get_register(1), 201);
-        assert_eq!(mmix.get_register(2), 0); // Not a valid local, keeps value from before
-
-        // No registers restored (loop is 3..3, empty)
     }
 
     #[test]

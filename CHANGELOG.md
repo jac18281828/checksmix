@@ -1,3 +1,12 @@
+0.2.22 (2026-04-30)
+
+* PUSHJ/PUSHGO/POP now implement Knuth's register-stack window slide per MMIXware §1.4. PUSHJ $X spills $0..$X (with the marginal slot at offset X holding the value X), slides caller's $(X+1)..$(rL-1) down to callee's $0..$(rL-X-2), zeroes the freshly-allocated tail, and sets rL := saturating_sub(rL, X+1). POP n reverse-slides the callee's $0..$(n-1) into the caller's $X..$(X+n-1) (the "hole" plus the slots above it), restores the spilled frame, clears the marginal slot, and updates rL to min(rG, max(saved_rL, X+n))
+* Standard MMIX calling convention now works: caller stages args at $X+1, $X+2, …; callee reads them at $0, $1, …; POP 1 lands the return value at the caller's $X. Multi-source programs that rely on this convention (the common case for any code written against Knuth's spec) now run correctly
+* Local register frame is fully spilled on PUSHJ (`max(X+1, rL) + 1` octas) so the slide-back can reconstruct caller state without a hardware ring buffer; observable behaviour matches the spec at the cost of a larger memory footprint per call
+* `set_register` now auto-grows rL when writing to a local at index ≥ rL, matching MMIX hardware semantics — programs that write `$5` no longer have to explicitly bump rL before PUSHJ
+* New unit tests cover argument passing via the slide, return-value placement at the hole, freshly-allocated-locals zeroing, multi-value POPs, two-deep nested calls; existing PUSHJ/POP/PUSHGO tests rewritten against the spec
+* `examples/fibonacci.mms`, `examples/function.mms`, `examples/remeuclid.mms` rewritten to use the standard convention; the repo-root `big_fib.mms` (committed) computes fib(100) = 354224848179261915075 correctly under the new semantics
+
 0.2.21 (2026-04-30)
 
 * Auto-immediate selection: base mnemonics in the arithmetic, bitwise, bit-fiddle, shift, conditional-set, and zero-or-set families now accept either a register or a 0..255 immediate as their third operand and emit the matching RRR or RRI variant. `ADD $1,$2,5` now assembles to `ADDI`, `AND $1,$2,#FF` to `ANDI`, `SR $1,$2,3` to `SRI`, and so on — matching standard MMIXAL where there is no separate `ADDI` mnemonic
