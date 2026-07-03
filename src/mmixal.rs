@@ -1021,34 +1021,42 @@ impl MMixAssembler {
 
     /// Count the actual number of bytes in a string literal, accounting for escape sequences
     fn count_string_bytes(content: &str) -> usize {
-        let mut count = 0;
+        Self::decode_byte_string(content).len()
+    }
+
+    /// Decode a `BYTE` string literal's content into the bytes it represents,
+    /// resolving the escape sequences `\n`, `\r`, `\t`, `\0`, `\\`, `\'`, `\"`.
+    /// Any other escaped character decodes to that character's own byte value.
+    /// Pass-1 (`count_string_bytes`) and pass-2 (`parse_data_directive`) both
+    /// go through this single function so they cannot disagree on size.
+    fn decode_byte_string(content: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
         let mut chars = content.chars().peekable();
 
         while let Some(ch) = chars.next() {
             if ch == '\\' {
-                // Escape sequence - check what follows
                 if let Some(next_ch) = chars.next() {
-                    match next_ch {
-                        'n' | 'r' | 't' | '0' | '\\' | '\'' | '"' => {
-                            // These all represent single bytes
-                            count += 1;
-                        }
-                        _ => {
-                            // Unknown escape - count as the character itself
-                            count += 1;
-                        }
-                    }
+                    let decoded = match next_ch {
+                        'n' => b'\n',
+                        'r' => b'\r',
+                        't' => b'\t',
+                        '0' => 0u8,
+                        '\\' => b'\\',
+                        '\'' => b'\'',
+                        '"' => b'"',
+                        other => other as u8,
+                    };
+                    bytes.push(decoded);
                 } else {
                     // Backslash at end of string
-                    count += 1;
+                    bytes.push(b'\\');
                 }
             } else {
-                // Regular character
-                count += 1;
+                bytes.push(ch as u8);
             }
         }
 
-        count
+        bytes
     }
 
     /// Insert a predefined symbol under both `name` and `:name` so it remains
@@ -3129,21 +3137,16 @@ impl MMixAssembler {
                 let values_pair = parts.next().unwrap(); // This is byte_values
 
                 let values: Vec<_> = values_pair.into_inner().collect();
-                let num_values = values.len();
 
-                for (idx, byte_value) in values.into_iter().enumerate() {
+                for byte_value in values.into_iter() {
                     let actual_value = byte_value.into_inner().next().unwrap(); // string_literal or number
 
                     if actual_value.as_rule() == Rule::string_literal {
-                        // String literal - expand to one BYTE per character
+                        // String literal - expand to one BYTE per decoded byte
                         let s = actual_value.as_str();
                         let s = &s[1..s.len() - 1]; // Remove quotes
-                        for ch in s.chars() {
-                            result.push(MMixInstruction::BYTE(ch as u8));
-                        }
-                        // Only add null terminator if this is the last value
-                        if idx == num_values - 1 {
-                            result.push(MMixInstruction::BYTE(0));
+                        for b in Self::decode_byte_string(s) {
+                            result.push(MMixInstruction::BYTE(b));
                         }
                     } else {
                         let val = self.parse_number(actual_value)? as u8;
@@ -3514,6 +3517,28 @@ mod tests {
         let mut asm = MMixAssembler::new("ADDI $1, $2, -1", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 0xFF));
+    }
+
+    #[test]
+    fn test_decode_byte_string_decodes_escapes() {
+        assert_eq!(
+            MMixAssembler::decode_byte_string("a\\nb"),
+            vec![b'a', b'\n', b'b']
+        );
+    }
+
+    #[test]
+    fn test_byte_escape_pass1_pass2_agree() {
+        let mut asm = MMixAssembler::new("BYTE \"a\\nb\",0\nLABEL: HALT", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("LABEL"), Some(&4));
+    }
+
+    #[test]
+    fn test_byte_string_no_auto_terminator() {
+        let mut asm = MMixAssembler::new("BYTE \"Hi\"\nLABEL: HALT", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("LABEL"), Some(&2));
     }
 
     #[test]
