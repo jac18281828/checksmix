@@ -1,13 +1,22 @@
-.TH CHECKSMIX 1 "May 2025" "checksmix 0.2.3"
+.TH CHECKSMIX 1 "May 2025" "checksmix 0.2.23"
 .SH NAME
 checksmix \- run MMIX assembly or object files with a lightweight emulator
 .SH SYNOPSIS
 .B checksmix
-.RI file
+.RI [ options ]
+.RI FILE...
 .br
-.B checksmix
-accepts one input file with extension
-.BR .mms ", " .mmo ", " .mix ", or " .mixal .
+.B checksmix run
+.RI [ options ]
+.RI FILE...
+.br
+.B checksmix check
+.RI FILE.mms...
+.br
+.B checksmix build
+.RI [ \-o
+.IR OUT.mmo ]
+.RI FILE.mms...
 .SH DESCRIPTION
 .B checksmix
 is a fast MMIX emulator. It can parse and execute MMIX assembly
@@ -20,21 +29,32 @@ or
 .BR .mixal )
 are also supported.
 .PP
-For
+When invoked with a file (or without a subcommand), the default behavior is
+.BR run .
+Multiple
 .BR .mms
-files,
-.B checksmix
-assembles the program in memory, initializes the program counter to
-the
-.I Main
-label if present (otherwise to \#100 or the first code address), and
-prints register state before and after execution.
+files are assembled into one shared symbol space before execution.
 .PP
-For
-.BR .mmo
-files it decodes the object code, loads it into memory, uses the
-postamble entry point for the initial program counter, and runs until
-halt.
+.B Subcommands:
+.TP
+.B run FILE...
+Execute one or more program files. With a single
+.BR .mms " or " .mmo
+file, dispatches by extension. With multiple files (must all be
+.BR .mms ),
+assembles them into one shared symbol space, then executes.
+.TP
+.B check FILE.mms...
+Parse and encode one or more
+.B .mms
+source files; exits silently on success, with error messages on failure.
+.TP
+.B build [--output OUT.mmo] FILE.mms...
+Assemble one or more
+.B .mms
+source files into a single
+.B .mmo
+object file. Multiple inputs are assembled into one shared symbol space.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG
@@ -69,12 +89,36 @@ checksmix target/hello_world.mmo
 .fi
 .RE
 .PP
-Assemble, then run:
+Check syntax of assembly source files without executing:
 .PP
 .RS
 .nf
-mmixasm examples/linked_list.mms /tmp/list.mmo
-checksmix /tmp/list.mmo
+checksmix check examples/hello_world.mms
+.fi
+.RE
+.PP
+Build an object file from assembly source:
+.PP
+.RS
+.nf
+checksmix build -o target/output.mmo examples/hello_world.mms
+.fi
+.RE
+.PP
+Assemble multiple source files into one shared symbol space, then run:
+.PP
+.RS
+.nf
+checksmix examples/module1.mms examples/module2.mms
+.fi
+.RE
+.PP
+Or assemble them first, then run the object file:
+.PP
+.RS
+.nf
+checksmix build examples/module1.mms examples/module2.mms -o /tmp/combined.mmo
+checksmix /tmp/combined.mmo
 .fi
 .RE
 .SH SEE ALSO

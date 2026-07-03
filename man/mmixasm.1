@@ -1,22 +1,29 @@
-.TH MMIXASM 1 "May 2025" "checksmix 0.2.3"
+.TH MMIXASM 1 "May 2025" "checksmix 0.2.23"
 .SH NAME
 mmixasm \- assemble MMIX source into MMO object code
 .SH SYNOPSIS
 .B mmixasm
+.RI [ options ]
 .RI input.mms
-.RI [ output.mmo ]
+.RI [ input.mms ... ]
 .SH DESCRIPTION
 .B mmixasm
 assembles MMIX assembly source
 .RB ( .mms )
-into an MMO object file. If no output path is given, the input basename
-is used with a
-.B .mmo
-extension.
+into an MMO object file. Multiple input files are loaded into one shared
+symbol space, as if their contents were concatenated.
 .PP
 On success it writes the object bytes to the chosen file. During
 assembly it prints labels and encoded instructions to standard error to
 help with debugging.
+.PP
+.B Options:
+.TP
+.BR \-o , \ \-\-output \ \fIOUTPUT.mmo\fR
+Write the object file to the specified path. If not provided, the first
+input's basename is used with a
+.B .mmo
+extension.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG
@@ -36,8 +43,16 @@ Assemble to a specific path, then execute with
 .PP
 .RS
 .nf
-mmixasm examples/linked_list.mms /tmp/list.mmo
+mmixasm examples/linked_list.mms -o /tmp/list.mmo
 checksmix /tmp/list.mmo
+.fi
+.RE
+.PP
+Assemble multiple source files into one shared symbol space:
+.PP
+.RS
+.nf
+mmixasm module1.mms module2.mms -o combined.mmo
 .fi
 .RE
 .SH SEE ALSO

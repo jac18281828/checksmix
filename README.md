@@ -38,7 +38,7 @@ Generate a reusable object file with `mmixasm`, then run it with `checksmix`:
 
 ```bash
 # Assemble
-cargo run --bin mmixasm -- examples/hello_world.mms target/hello_world.mmo
+cargo run --bin mmixasm -- examples/hello_world.mms -o target/hello_world.mmo
 
 # Execute the MMO
 cargo run --bin checksmix -- target/hello_world.mmo
