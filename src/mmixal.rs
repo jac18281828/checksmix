@@ -331,7 +331,7 @@ pub enum MMixInstruction {
     PUSHJB(u8, u8, u8),  // PUSHJB $X, YZ - push registers and jump backward
     PUSHGO(u8, u8, u8),  // PUSHGO $X, $Y, $Z - push registers and go
     PUSHGOI(u8, u8, u8), // PUSHGOI $X, $Y, Z - push registers and go (immediate)
-    POP(u8, u8),         // POP X, YZ - pop registers and return
+    POP(u8, u8, u8),     // POP X, Y, Z - pop registers and return (YZ combined is a 16-bit field)
     GO(u8, u8, u8),      // GO $X, $Y, $Z - go to location
     GOI(u8, u8, u8),     // GOI $X, $Y, Z - go to location (immediate)
     GET(u8, u8),         // GET $X, Z - get from special register
@@ -2810,7 +2810,7 @@ impl MMixAssembler {
         let yz = self.parse_number(parts.next().unwrap())? as u16;
         let y = ((yz >> 8) & 0xFF) as u8;
         let z = (yz & 0xFF) as u8;
-        Ok(MMixInstruction::POP(x, y | z))
+        Ok(MMixInstruction::POP(x, y, z))
     }
 
     fn parse_inst_go_rrr(

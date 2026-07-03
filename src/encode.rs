@@ -313,8 +313,8 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::PUSHGOI(x, y, z) => {
             bytes.extend_from_slice(&[0xBF, *x, *y, *z]);
         }
-        MMixInstruction::POP(x, yz) => {
-            bytes.extend_from_slice(&[0xF8, *x, 0, *yz]);
+        MMixInstruction::POP(x, y, z) => {
+            bytes.extend_from_slice(&[0xF8, *x, *y, *z]);
         }
         MMixInstruction::GO(x, y, z) => {
             bytes.extend_from_slice(&[0x9E, *x, *y, *z]);
@@ -2177,8 +2177,14 @@ mod tests {
         );
         // POP - 0xF8
         assert_eq!(
-            encode_instruction_bytes(&MMixInstruction::POP(1, 2)),
+            encode_instruction_bytes(&MMixInstruction::POP(1, 0, 2)),
             vec![0xF8, 1, 0, 2]
+        );
+        // POP with Y != 0 (YZ = 0x0105 = 261): the case POP(1, 0, 2) above
+        // can't catch, since Y=0 there.
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::POP(1, 1, 5)),
+            vec![0xF8, 1, 1, 5]
         );
         // RESUME - 0xF9
         assert_eq!(
