@@ -512,6 +512,12 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             let z = (offset & 0xFF) as u8;
             bytes.extend_from_slice(&[0xF0, x, y, z]);
         }
+        MMixInstruction::JMPB(offset) => {
+            let x = ((offset >> 16) & 0xFF) as u8;
+            let y = ((offset >> 8) & 0xFF) as u8;
+            let z = (offset & 0xFF) as u8;
+            bytes.extend_from_slice(&[0xF1, x, y, z]);
+        }
         // Probable branch instructions
         MMixInstruction::PBN(x, y, z) => {
             bytes.extend_from_slice(&[0x50, *x, *y, *z]);
@@ -2144,6 +2150,11 @@ mod tests {
         assert_eq!(
             encode_instruction_bytes(&MMixInstruction::JMP(0x123456)),
             vec![0xF0, 0x12, 0x34, 0x56]
+        );
+        // JMPB - 0xF1 (backward jump, unsigned 24-bit magnitude)
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::JMPB(0x000010)),
+            vec![0xF1, 0x00, 0x00, 0x10]
         );
         // PUSHJ - 0xF2
         assert_eq!(

@@ -250,7 +250,8 @@ pub enum MMixInstruction {
     SRUI(u8, u8, u8), // SRU $X, $Y, Z - shift right unsigned immediate
 
     // Branch instructions
-    JMP(u32),          // JMP offset (24-bit)
+    JMP(u32),          // JMP offset (24-bit), forward: unsigned instruction-unit magnitude
+    JMPB(u32),         // JMPB offset (24-bit), backward: unsigned instruction-unit magnitude
     JE(u8, u16),       // JE $X, offset
     JNE(u8, u16),      // JNE $X, offset
     JL(u8, u16),       // JL $X, offset
@@ -2592,13 +2593,19 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let target = self.parse_number(ops.next().unwrap())?;
-        // Calculate relative offset from current instruction
-        // Offset is (target - PC) / 4 as a signed 24-bit value
+        // Calculate relative offset from current instruction, in instruction
+        // units. JMP's 24-bit field is an unsigned forward magnitude and
+        // JMPB's is an unsigned backward magnitude -- neither is a signed
+        // field, so a backward jump must be encoded as JMPB, not as JMP with
+        // a value that only happens to round-trip through this assembler's
+        // own (sign-extending) decoder.
         let pc = self.current_addr;
-        let offset = ((target as i64 - pc as i64) / 4) as i32;
-        // Mask to 24 bits
-        let offset_24 = (offset & 0xFFFFFF) as u32;
-        Ok(MMixInstruction::JMP(offset_24))
+        let signed = (target as i64 - pc as i64) / 4;
+        if signed < 0 {
+            Ok(MMixInstruction::JMPB((-signed) as u32 & 0xFFFFFF))
+        } else {
+            Ok(MMixInstruction::JMP(signed as u32 & 0xFFFFFF))
+        }
     }
 
     fn parse_inst_pbranch(
@@ -3564,6 +3571,19 @@ mod tests {
             asm.instructions[0].1,
             MMixInstruction::BZ(0, expected_offset as u16)
         );
+    }
+
+    #[test]
+    fn test_jmp_backward_emits_jmpb() {
+        // A JMP whose target is BEHIND the current instruction must assemble
+        // to JMPB (unsigned backward magnitude), not JMP (which is an
+        // always-forward unsigned magnitude per the MMIX spec).
+        let source = "LOC #100\nBACK: HALT\nJMP BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        // JMP is at addr 0x104 (BACK's HALT is 4 bytes), target 0x100:
+        // backward magnitude = (0x104 - 0x100) / 4 = 1.
+        assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(1));
     }
 
     #[test]
