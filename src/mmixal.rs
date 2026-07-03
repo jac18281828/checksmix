@@ -1552,7 +1552,11 @@ impl MMixAssembler {
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
             Rule::inst_setml_ri => Ok(MMixInstruction::SETML(0, 0)),
             Rule::inst_incl_rrr => Ok(MMixInstruction::INCL(0, 0, 0)),
-            Rule::inst_lda_ri | Rule::inst_lda_rri => {
+            // LDA $X,$Y,Z (3-operand form): parse_inst_lda_rri always emits a
+            // real 4-byte LDA regardless of Z's value -- it never expands to
+            // SET, unlike the 2-operand form below.
+            Rule::inst_lda_rri => Ok(MMixInstruction::LDA(0, 0, 0)),
+            Rule::inst_lda_ri => {
                 // Check if LDA will expand to SET (address > 0xFF)
                 // We need to peek at the operand to determine this
                 let mut parts = inner.clone().into_inner();
@@ -3539,6 +3543,13 @@ mod tests {
         let mut asm = MMixAssembler::new("BYTE \"Hi\"\nLABEL: HALT", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.labels.get("LABEL"), Some(&2));
+    }
+
+    #[test]
+    fn test_lda_rri_pass1_size_matches_pass2() {
+        let mut asm = MMixAssembler::new("JMP LABEL\nLDA $1,$2,4\nLABEL: HALT", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(2));
     }
 
     #[test]
