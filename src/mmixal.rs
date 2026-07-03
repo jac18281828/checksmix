@@ -2559,8 +2559,7 @@ impl MMixAssembler {
         // Calculate relative offset from current instruction
         // Offset is (target - PC) / 4 as a signed 16-bit value
         let pc = self.current_addr;
-        let offset_bytes = (target as i64 - pc as i64) as i16;
-        let offset = (offset_bytes / 4) as u16;
+        let offset = ((target as i64 - pc as i64) / 4) as u16;
 
         match mnem.as_str().to_uppercase().as_str() {
             "JE" => Ok(MMixInstruction::JE(x, offset)),
@@ -3550,6 +3549,21 @@ mod tests {
         let mut asm = MMixAssembler::new("JMP LABEL\nLDA $1,$2,4\nLABEL: HALT", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(2));
+    }
+
+    #[test]
+    fn test_branch_offset_beyond_i16_bytes_not_truncated() {
+        // Byte delta between BZ (at addr 0) and LABEL (at addr 0x10000, i.e.
+        // 65536 bytes forward) exceeds i16::MAX (32767), so casting the raw
+        // byte delta to i16 before dividing by 4 would silently wrap.
+        let source = "BZ $0,LABEL\nLOC #10000\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        let expected_offset = 0x10000i64 / 4;
+        assert_eq!(
+            asm.instructions[0].1,
+            MMixInstruction::BZ(0, expected_offset as u16)
+        );
     }
 
     #[test]
