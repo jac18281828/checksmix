@@ -775,13 +775,6 @@ impl MMix {
             addr = format!("0x{:X}", addr),
             value, "Writing byte to memory"
         );
-        // Skip load-time noise (pc=0) but keep low-address writes during execution.
-        if addr < 0x800 && self.pc != 0 {
-            eprintln!(
-                "DBG write_byte pc=0x{:X} addr=0x{:X} value=0x{:02X}",
-                self.pc, addr, value
-            );
-        }
         if value == 0 {
             self.memory.remove(&addr); // Don't store zeros (sparse memory)
         } else {

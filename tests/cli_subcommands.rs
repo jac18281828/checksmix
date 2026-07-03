@@ -150,3 +150,19 @@ fn run_multi_source_mms() {
         .unwrap();
     assert!(status.success(), "run of multi-source .mms should succeed");
 }
+
+// ── run all_instructions_test.mms: no leftover debug noise on stderr ─────────
+
+#[test]
+fn run_all_instructions_test_has_no_debug_write_byte_noise() {
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("all_instructions_test.mms");
+    let out = checksmix().arg(&example).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("DBG write_byte"),
+        "stderr should not contain leftover debug output from write_byte; stderr: {}",
+        stderr
+    );
+}
