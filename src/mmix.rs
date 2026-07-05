@@ -4051,6 +4051,55 @@ impl MMix {
 mod tests {
     use super::*;
 
+    /// Unique per-process temp path so concurrent `cargo test` invocations
+    /// (e.g. two worktrees) never race the same file.
+    fn unique_tmp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("checksmix_test_{}_{}", std::process::id(), name))
+    }
+
+    /// Removes its path on drop — even if the test panics before reaching
+    /// an explicit cleanup line.
+    struct TempFileGuard(std::path::PathBuf);
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn unique_tmp_path_embeds_process_id_and_is_not_a_legacy_literal() {
+        let pid = std::process::id().to_string();
+        let path = unique_tmp_path("x");
+        assert!(path.to_string_lossy().contains(&pid));
+        assert_ne!(
+            unique_tmp_path("write"),
+            std::path::PathBuf::from("/tmp/test_mmix_write.txt")
+        );
+    }
+
+    #[test]
+    fn temp_file_guard_removes_file_on_drop() {
+        let path = unique_tmp_path("guard_drop");
+        std::fs::write(&path, b"guard test").unwrap();
+        assert!(path.exists());
+        let guard = TempFileGuard(path.clone());
+        drop(guard);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temp_file_guard_removes_file_on_panic() {
+        let path = unique_tmp_path("guard_panic");
+        std::fs::write(&path, b"guard panic test").unwrap();
+        let path_for_closure = path.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _guard = TempFileGuard(path_for_closure);
+            panic!("intentional panic to exercise Drop cleanup");
+        });
+        assert!(result.is_err());
+        assert!(!path.exists());
+    }
+
     #[test]
     fn test_mmix_new() {
         let mmix = MMix::new();
@@ -8183,7 +8232,10 @@ mod tests {
     fn test_trap_fopen_write() {
         let mut mmix = MMix::new();
         // TRAP 0, Fopen, 0 - open file for writing
-        let filename = b"/tmp/test_mmix_fopen.txt\0";
+        let path = unique_tmp_path("fopen.txt");
+        let _guard = TempFileGuard(path.clone());
+        let mut filename = path.to_string_lossy().into_owned().into_bytes();
+        filename.push(0);
         let filename_addr = 1000u64;
 
         // Write filename to memory
@@ -8204,13 +8256,12 @@ mod tests {
     #[test]
     fn test_trap_fwrite_basic() {
         let mut mmix = MMix::new();
-        // Create a test file first in /tmp
         use std::fs;
-        let test_file = "/tmp/test_mmix_write.txt";
-        let _ = fs::remove_file(test_file); // Clean up if exists
+        let test_file = unique_tmp_path("write.txt");
+        let _guard = TempFileGuard(test_file.clone());
 
         // Open file for writing
-        let file = std::fs::File::create(test_file).unwrap();
+        let file = std::fs::File::create(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8234,11 +8285,8 @@ mod tests {
         assert_eq!(mmix.get_register(255), 12); // Bytes written returned in $255
 
         // Verify file contents
-        let contents = fs::read_to_string(test_file).unwrap();
+        let contents = fs::read_to_string(&test_file).unwrap();
         assert_eq!(contents, "Hello, File!");
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8246,11 +8294,12 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_read.txt";
-        fs::write(test_file, "Test Content").unwrap();
+        let test_file = unique_tmp_path("read.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        fs::write(&test_file, "Test Content").unwrap();
 
         // Open file for reading
-        let file = fs::File::open(test_file).unwrap();
+        let file = fs::File::open(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8275,9 +8324,6 @@ mod tests {
             result.push(mmix.read_byte(buffer_addr + i) as char);
         }
         assert_eq!(result, "Test Content");
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8285,11 +8331,12 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_gets.txt";
-        fs::write(test_file, "First Line\nSecond Line\n").unwrap();
+        let test_file = unique_tmp_path("gets.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        fs::write(&test_file, "First Line\nSecond Line\n").unwrap();
 
         // Open file for reading
-        let file = fs::File::open(test_file).unwrap();
+        let file = fs::File::open(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8307,9 +8354,6 @@ mod tests {
         let bytes_read = mmix.get_register(255);
         // Read line includes the newline character, so "First Line\n" = 11 bytes
         assert_eq!(bytes_read, 11);
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8317,8 +8361,9 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_close.txt";
-        let file = fs::File::create(test_file).unwrap();
+        let test_file = unique_tmp_path("close.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        let file = fs::File::create(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8328,9 +8373,6 @@ mod tests {
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success returned in $255
         assert!(!mmix.file_handles.contains_key(&fd)); // File removed
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8349,10 +8391,11 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_seek.txt";
-        fs::write(test_file, "0123456789ABCDEF").unwrap();
+        let test_file = unique_tmp_path("seek.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        fs::write(&test_file, "0123456789ABCDEF").unwrap();
 
-        let file = fs::File::open(test_file).unwrap();
+        let file = fs::File::open(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8366,9 +8409,6 @@ mod tests {
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 5); // New position returned in $255
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8376,10 +8416,11 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_tell.txt";
-        fs::write(test_file, "Test Data").unwrap();
+        let test_file = unique_tmp_path("tell.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        fs::write(&test_file, "Test Data").unwrap();
 
-        let file = fs::File::open(test_file).unwrap();
+        let file = fs::File::open(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8389,9 +8430,6 @@ mod tests {
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Position 0 returned in $255
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8399,10 +8437,11 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
 
-        let test_file = "/tmp/test_mmix_getws.txt";
-        fs::write(test_file, "Wide line\nAnother line\n").unwrap();
+        let test_file = unique_tmp_path("getws.txt");
+        let _guard = TempFileGuard(test_file.clone());
+        fs::write(&test_file, "Wide line\nAnother line\n").unwrap();
 
-        let file = fs::File::open(test_file).unwrap();
+        let file = fs::File::open(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8418,9 +8457,6 @@ mod tests {
 
         let bytes_read = mmix.get_register(255); // Return value in $255
         assert!(bytes_read > 0);
-
-        // Clean up
-        let _ = fs::remove_file(test_file);
     }
 
     #[test]
@@ -8504,10 +8540,10 @@ mod tests {
         use std::fs;
 
         let mut mmix = MMix::new();
-        let path = "/tmp/test_mmix_fputs_to_fd.txt";
-        let _ = fs::remove_file(path);
+        let path = unique_tmp_path("fputs_to_fd.txt");
+        let _guard = TempFileGuard(path.clone());
 
-        let file = fs::File::create(path).unwrap();
+        let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8524,9 +8560,8 @@ mod tests {
 
         // Drop the file handle so the OS flushes contents before reading.
         mmix.file_handles.remove(&fd);
-        let contents = fs::read(path).unwrap();
+        let contents = fs::read(&path).unwrap();
         assert_eq!(contents, b"Hello, file fd!");
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -8553,9 +8588,9 @@ mod tests {
         use std::fs;
 
         let mut mmix = MMix::new();
-        let path = "/tmp/test_mmix_fputs_raw_bytes.bin";
-        let _ = fs::remove_file(path);
-        let file = fs::File::create(path).unwrap();
+        let path = unique_tmp_path("fputs_raw_bytes.bin");
+        let _guard = TempFileGuard(path.clone());
+        let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8570,9 +8605,8 @@ mod tests {
         assert_eq!(mmix.get_register(255), 3);
 
         mmix.file_handles.remove(&fd);
-        let contents = fs::read(path).unwrap();
+        let contents = fs::read(&path).unwrap();
         assert_eq!(contents, vec![0xFFu8, 0x80, 0x41]);
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -8582,9 +8616,9 @@ mod tests {
         use std::fs;
 
         let mut mmix = MMix::new();
-        let path = "/tmp/test_mmix_fputc_raw.bin";
-        let _ = fs::remove_file(path);
-        let file = fs::File::create(path).unwrap();
+        let path = unique_tmp_path("fputc_raw.bin");
+        let _guard = TempFileGuard(path.clone());
+        let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8594,9 +8628,8 @@ mod tests {
         assert_eq!(mmix.get_register(255), 0);
 
         mmix.file_handles.remove(&fd);
-        let contents = fs::read(path).unwrap();
+        let contents = fs::read(&path).unwrap();
         assert_eq!(contents, vec![0xFFu8]);
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -8614,9 +8647,9 @@ mod tests {
         use std::fs;
 
         let mut mmix = MMix::new();
-        let path = "/tmp/test_mmix_fputws_to_fd.txt";
-        let _ = fs::remove_file(path);
-        let file = fs::File::create(path).unwrap();
+        let path = unique_tmp_path("fputws_to_fd.txt");
+        let _guard = TempFileGuard(path.clone());
+        let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
 
@@ -8631,9 +8664,8 @@ mod tests {
         assert_eq!(mmix.get_register(255), 4);
 
         mmix.file_handles.remove(&fd);
-        let contents = fs::read(path).unwrap();
+        let contents = fs::read(&path).unwrap();
         assert_eq!(contents, b"wide");
-        let _ = fs::remove_file(path);
     }
 
     // ==================== Floating-point: rA flag coverage ====================
