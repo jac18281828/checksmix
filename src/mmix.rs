@@ -5301,50 +5301,93 @@ mod tests {
         // Verify all store instructions are covered
         let mut mmix = MMix::new();
 
-        // STB/STBU - tested
+        // STB $1, $2, $3
         mmix.write_tetra(0, 0xA0010203);
+        mmix.set_register(1, 0x5A);
+        mmix.set_register(2, 300);
+        mmix.set_register(3, 12);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_byte(312), 0x5A);
 
+        // STBU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xA2010203);
+        mmix.set_register(1, 0xE1);
+        mmix.set_register(2, 300);
+        mmix.set_register(3, 13);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_byte(313), 0xE1);
 
-        // STW/STWU - tested
+        // STW $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xA4010203);
+        mmix.set_register(1, 0x4321);
+        mmix.set_register(2, 400);
+        mmix.set_register(3, 14);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_wyde(414), 0x4321);
 
+        // STWU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xA6010203);
+        mmix.set_register(1, 0xBEEF);
+        mmix.set_register(2, 400);
+        mmix.set_register(3, 16);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_wyde(416), 0xBEEF);
 
-        // STT/STTU - tested
+        // STT $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xA8010203);
+        mmix.set_register(1, 0x87654321);
+        mmix.set_register(2, 500);
+        mmix.set_register(3, 20);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_tetra(520), 0x87654321);
 
+        // STTU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xAA010203);
+        mmix.set_register(1, 0xCAFEBABE);
+        mmix.set_register(2, 500);
+        mmix.set_register(3, 24);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_tetra(524), 0xCAFEBABE);
 
-        // STO/STOU - tested
+        // STO $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xAC010203);
+        mmix.set_register(1, 0x0F1E2D3C4B5A6978);
+        mmix.set_register(2, 600);
+        mmix.set_register(3, 30);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_octa(630), 0x0F1E2D3C4B5A6978);
 
+        // STOU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xAE010203);
+        mmix.set_register(1, 0x1122334455667788);
+        mmix.set_register(2, 600);
+        mmix.set_register(3, 40);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_octa(640), 0x1122334455667788);
 
-        // STCO - tested
+        // STCO 17, $2, $3 - Store constant octabyte
         mmix.set_pc(0);
-        mmix.write_tetra(0, 0xB0010203);
+        mmix.write_tetra(0, 0xB4110203); // X=17 (0x11)
+        mmix.set_register(2, 700);
+        mmix.set_register(3, 5);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_octa(705), 17);
 
-        // STHT - tested
+        // STHT $1, $2, $3 - Store high tetra
         mmix.set_pc(0);
         mmix.write_tetra(0, 0xB2010203);
+        mmix.set_register(1, 0x1357924600000000);
+        mmix.set_register(2, 800);
+        mmix.set_register(3, 8);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_tetra(808), 0x13579246); // High 32 bits
     }
 
     // Arithmetic instruction tests - Add and Subtract (§9)
@@ -5649,54 +5692,82 @@ mod tests {
     fn test_all_arithmetic_instructions_have_tests() {
         let mut mmix = MMix::new();
 
-        // ADD - tested
+        // ADD $1, $2, $3
         mmix.write_tetra(0, 0x20010203);
+        mmix.set_register(2, 200);
+        mmix.set_register(3, 44);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 244);
 
-        // ADDU (0x22/0x23) - tested
+        // ADDU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0x22010203);
+        mmix.set_register(2, 900);
+        mmix.set_register(3, 33);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 933);
 
-        // 2ADDU - tested
-        mmix.set_pc(0);
-        mmix.write_tetra(0, 0x24010203);
-        assert!(mmix.execute_instruction());
-
-        // 4ADDU - tested
-        mmix.set_pc(0);
-        mmix.write_tetra(0, 0x26010203);
-        assert!(mmix.execute_instruction());
-
-        // 8ADDU - tested
+        // 2ADDU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0x28010203);
+        mmix.set_register(2, 7);
+        mmix.set_register(3, 9);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 23); // 2*7 + 9 = 23
 
-        // 16ADDU - tested
+        // 4ADDU $1, $2, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0x2A010203);
+        mmix.set_register(2, 7);
+        mmix.set_register(3, 9);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 37); // 4*7 + 9 = 37
 
-        // SUB - tested
+        // 8ADDU $1, $2, $3
         mmix.set_pc(0);
-        mmix.write_tetra(0, 0x30010203);
+        mmix.write_tetra(0, 0x2C010203);
+        mmix.set_register(2, 7);
+        mmix.set_register(3, 9);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 65); // 8*7 + 9 = 65
 
-        // SUBU - tested
+        // 16ADDU $1, $2, $3
         mmix.set_pc(0);
-        mmix.write_tetra(0, 0x32010203);
+        mmix.write_tetra(0, 0x2E010203);
+        mmix.set_register(2, 7);
+        mmix.set_register(3, 9);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 121); // 16*7 + 9 = 121
 
-        // NEG - tested
+        // SUB $1, $2, $3
+        mmix.set_pc(0);
+        mmix.write_tetra(0, 0x24010203);
+        mmix.set_register(2, 500);
+        mmix.set_register(3, 120);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 380);
+
+        // SUBU $1, $2, $3
+        mmix.set_pc(0);
+        mmix.write_tetra(0, 0x26010203);
+        mmix.set_register(2, 5);
+        mmix.set_register(3, 8);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), u64::MAX - 2); // 5 - 8 wraps
+
+        // NEG $1, 0, $3 - effectively 0 - $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0x34010003);
+        mmix.set_register(3, 77);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -77);
 
-        // NEGU - tested
+        // NEGU $1, 0, $3
         mmix.set_pc(0);
         mmix.write_tetra(0, 0x36010003);
+        mmix.set_register(3, 77);
         assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), u64::MAX - 76); // 0 - 77 wraps
     }
 
     #[test]
