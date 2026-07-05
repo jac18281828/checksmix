@@ -8233,7 +8233,7 @@ mod tests {
         let mut mmix = MMix::new();
         // TRAP 0, Fopen, 0 - open file for writing
         let path = unique_tmp_path("fopen.txt");
-        let _guard = TempFileGuard(path.clone());
+        let guard = TempFileGuard(path.clone());
         let mut filename = path.to_string_lossy().into_owned().into_bytes();
         filename.push(0);
         let filename_addr = 1000u64;
@@ -8251,6 +8251,9 @@ mod tests {
         let fd = mmix.get_register(255) as u8; // File descriptor returned in $255
         assert!(fd > 2 && fd < 255); // Valid FD (not stdin/out/err)
         assert_eq!(mmix.get_pc(), 4);
+
+        drop(guard);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -8258,7 +8261,7 @@ mod tests {
         let mut mmix = MMix::new();
         use std::fs;
         let test_file = unique_tmp_path("write.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
 
         // Open file for writing
         let file = std::fs::File::create(&test_file).unwrap();
@@ -8287,6 +8290,9 @@ mod tests {
         // Verify file contents
         let contents = fs::read_to_string(&test_file).unwrap();
         assert_eq!(contents, "Hello, File!");
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8295,7 +8301,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("read.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         fs::write(&test_file, "Test Content").unwrap();
 
         // Open file for reading
@@ -8324,6 +8330,9 @@ mod tests {
             result.push(mmix.read_byte(buffer_addr + i) as char);
         }
         assert_eq!(result, "Test Content");
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8332,7 +8341,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("gets.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         fs::write(&test_file, "First Line\nSecond Line\n").unwrap();
 
         // Open file for reading
@@ -8354,6 +8363,9 @@ mod tests {
         let bytes_read = mmix.get_register(255);
         // Read line includes the newline character, so "First Line\n" = 11 bytes
         assert_eq!(bytes_read, 11);
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8362,7 +8374,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("close.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         let file = fs::File::create(&test_file).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
@@ -8373,6 +8385,9 @@ mod tests {
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success returned in $255
         assert!(!mmix.file_handles.contains_key(&fd)); // File removed
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8392,7 +8407,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("seek.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         fs::write(&test_file, "0123456789ABCDEF").unwrap();
 
         let file = fs::File::open(&test_file).unwrap();
@@ -8409,6 +8424,9 @@ mod tests {
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 5); // New position returned in $255
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8417,7 +8435,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("tell.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         fs::write(&test_file, "Test Data").unwrap();
 
         let file = fs::File::open(&test_file).unwrap();
@@ -8430,6 +8448,9 @@ mod tests {
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Position 0 returned in $255
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8438,7 +8459,7 @@ mod tests {
         use std::fs;
 
         let test_file = unique_tmp_path("getws.txt");
-        let _guard = TempFileGuard(test_file.clone());
+        let guard = TempFileGuard(test_file.clone());
         fs::write(&test_file, "Wide line\nAnother line\n").unwrap();
 
         let file = fs::File::open(&test_file).unwrap();
@@ -8457,6 +8478,9 @@ mod tests {
 
         let bytes_read = mmix.get_register(255); // Return value in $255
         assert!(bytes_read > 0);
+
+        drop(guard);
+        assert!(!test_file.exists());
     }
 
     #[test]
@@ -8541,7 +8565,7 @@ mod tests {
 
         let mut mmix = MMix::new();
         let path = unique_tmp_path("fputs_to_fd.txt");
-        let _guard = TempFileGuard(path.clone());
+        let guard = TempFileGuard(path.clone());
 
         let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
@@ -8562,6 +8586,9 @@ mod tests {
         mmix.file_handles.remove(&fd);
         let contents = fs::read(&path).unwrap();
         assert_eq!(contents, b"Hello, file fd!");
+
+        drop(guard);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -8589,7 +8616,7 @@ mod tests {
 
         let mut mmix = MMix::new();
         let path = unique_tmp_path("fputs_raw_bytes.bin");
-        let _guard = TempFileGuard(path.clone());
+        let guard = TempFileGuard(path.clone());
         let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
@@ -8607,6 +8634,9 @@ mod tests {
         mmix.file_handles.remove(&fd);
         let contents = fs::read(&path).unwrap();
         assert_eq!(contents, vec![0xFFu8, 0x80, 0x41]);
+
+        drop(guard);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -8617,7 +8647,7 @@ mod tests {
 
         let mut mmix = MMix::new();
         let path = unique_tmp_path("fputc_raw.bin");
-        let _guard = TempFileGuard(path.clone());
+        let guard = TempFileGuard(path.clone());
         let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
@@ -8630,6 +8660,9 @@ mod tests {
         mmix.file_handles.remove(&fd);
         let contents = fs::read(&path).unwrap();
         assert_eq!(contents, vec![0xFFu8]);
+
+        drop(guard);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -8648,7 +8681,7 @@ mod tests {
 
         let mut mmix = MMix::new();
         let path = unique_tmp_path("fputws_to_fd.txt");
-        let _guard = TempFileGuard(path.clone());
+        let guard = TempFileGuard(path.clone());
         let file = fs::File::create(&path).unwrap();
         let fd = 3u8;
         mmix.file_handles.insert(fd, file);
@@ -8666,6 +8699,9 @@ mod tests {
         mmix.file_handles.remove(&fd);
         let contents = fs::read(&path).unwrap();
         assert_eq!(contents, b"wide");
+
+        drop(guard);
+        assert!(!path.exists());
     }
 
     // ==================== Floating-point: rA flag coverage ====================
