@@ -269,11 +269,10 @@ impl Program {
         Ok(())
     }
 
-    pub fn parse_instruction(&mut self) -> Option<String> {
-        match self.next_instruction() {
-            Ok(result) => result,
-            Err(err) => panic!("{}", err),
-        }
+    /// Returns the next instruction mnemonic, or a `ProgramParseError` if the
+    /// input contains an invalid character.
+    pub fn parse_instruction(&mut self) -> ProgramResult<Option<String>> {
+        self.next_instruction()
     }
 
     fn next_instruction(&mut self) -> ProgramResult<Option<String>> {
@@ -448,126 +447,139 @@ mod tests {
     #[test]
     fn test_parse_instruction_add() {
         let mut program = Program::new("ADD 100\n");
-        assert_eq!(program.parse_instruction(), Some("ADD".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("ADD".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_sub() {
         let mut program = Program::new("SUB 100\n");
-        assert_eq!(program.parse_instruction(), Some("SUB".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("SUB".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_lda() {
         let mut program = Program::new("LDA 100\n");
-        assert_eq!(program.parse_instruction(), Some("LDA".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("LDA".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_ldx() {
         let mut program = Program::new("LDX 100\n");
-        assert_eq!(program.parse_instruction(), Some("LDX".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("LDX".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_ldi() {
         for i in 1..=10 {
             let mut program = Program::new(format!("LD{} 100\n", i).as_str());
-            assert_eq!(program.parse_instruction(), Some(format!("LD{}", i)));
+            assert_eq!(program.parse_instruction(), Ok(Some(format!("LD{}", i))));
         }
     }
 
     #[test]
     fn test_parse_instruction_ldan() {
         let mut program = Program::new("LDAN 100\n");
-        assert_eq!(program.parse_instruction(), Some("LDAN".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("LDAN".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_ldxn() {
         let mut program = Program::new("LDXN 100\n");
-        assert_eq!(program.parse_instruction(), Some("LDXN".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("LDXN".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_ldin() {
         for i in 1..=10 {
             let mut program = Program::new(format!("LD{}N 100\n", i).as_str());
-            assert_eq!(program.parse_instruction(), Some(format!("LD{}N", i)));
+            assert_eq!(program.parse_instruction(), Ok(Some(format!("LD{}N", i))));
         }
     }
 
     #[test]
     fn test_parse_instruction_sta() {
         let mut program = Program::new("STA 100\n");
-        assert_eq!(program.parse_instruction(), Some("STA".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("STA".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_stax() {
         let mut program = Program::new("STX 100\n");
-        assert_eq!(program.parse_instruction(), Some("STX".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("STX".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_sti() {
         for i in 1..=10 {
             let mut program = Program::new(format!("ST{} 100\n", i).as_str());
-            assert_eq!(program.parse_instruction(), Some(format!("ST{}", i)));
+            assert_eq!(program.parse_instruction(), Ok(Some(format!("ST{}", i))));
         }
     }
 
     #[test]
     fn test_parse_instruction_stj() {
         let mut program = Program::new("STJ 100\n");
-        assert_eq!(program.parse_instruction(), Some("STJ".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("STJ".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_stz() {
         let mut program = Program::new("STZ 100\n");
-        assert_eq!(program.parse_instruction(), Some("STZ".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("STZ".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_enta() {
         let mut program = Program::new("ENTA 100\n");
-        assert_eq!(program.parse_instruction(), Some("ENTA".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("ENTA".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_entx() {
         let mut program = Program::new("ENTX 100\n");
-        assert_eq!(program.parse_instruction(), Some("ENTX".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("ENTX".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_enti() {
         for i in 1..=10 {
             let mut program = Program::new(format!("ENT{} 100\n", i).as_str());
-            assert_eq!(program.parse_instruction(), Some(format!("ENT{}", i)));
+            assert_eq!(program.parse_instruction(), Ok(Some(format!("ENT{}", i))));
         }
     }
 
     #[test]
     fn test_parse_instruction_enna() {
         let mut program = Program::new("ENNA 100\n");
-        assert_eq!(program.parse_instruction(), Some("ENNA".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("ENNA".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_ennx() {
         let mut program = Program::new("ENNX 100\n");
-        assert_eq!(program.parse_instruction(), Some("ENNX".to_string()));
+        assert_eq!(program.parse_instruction(), Ok(Some("ENNX".to_string())));
     }
 
     #[test]
     fn test_parse_instruction_enni() {
         for i in 1..=10 {
             let mut program = Program::new(format!("ENN{} 100\n", i).as_str());
-            assert_eq!(program.parse_instruction(), Some(format!("ENN{}", i)));
+            assert_eq!(program.parse_instruction(), Ok(Some(format!("ENN{}", i))));
         }
     }
+
+    #[test]
+    fn test_parse_instruction_surfaces_error_instead_of_panicking() {
+        let mut program = Program::new("@\n");
+        assert_eq!(
+            program.parse_instruction(),
+            Err(ProgramParseError::InvalidInstruction {
+                line: 0,
+                details: "Invalid character '@' in instruction".to_string(),
+            })
+        );
+    }
+
     #[test]
     fn test_parse_value() {
         let mut program = Program::new("100\n");
