@@ -9,7 +9,7 @@ mod mmo;
 
 pub use mix::Mix;
 pub use mmix::{MMix, SpecialReg, ValueFormat};
-pub use mmixal::MMixAssembler;
+pub use mmixal::{MMixAssembler, SourceLoc};
 pub use mmo::{MmoDecoder, MmoGenerator};
 
 /// A trait representing a computer capable of executing a program.

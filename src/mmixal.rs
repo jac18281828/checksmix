@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{stderr, stdin, stdout};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
@@ -928,9 +928,23 @@ enum ZForm {
     Imm(u8),
 }
 
+/// One input translation unit: its filename, the PREPROCESSED source the
+/// parser walks, and enough of the ORIGINAL (un-preprocessed) source to
+/// support source-level debug info (`SourceLoc`, `source_text`).
+#[derive(Clone)]
+struct SourceUnit {
+    filename: String,
+    preprocessed: String,
+    /// Original, un-preprocessed source text as the user wrote it.
+    original: String,
+    /// `original.lines().count()`: the exact boundary between real user
+    /// lines and compiler-generated lines appended by preprocessing.
+    original_line_count: usize,
+}
+
 pub struct MMixAssembler {
-    /// Input translation units in command-line order: (filename, preprocessed source).
-    sources: Vec<(String, String)>,
+    /// Input translation units in command-line order.
+    sources: Vec<SourceUnit>,
     /// Filename of the source currently being walked (set during each pass).
     current_filename: String,
     /// Active PREFIX value applied to unqualified identifiers.
@@ -947,6 +961,24 @@ pub struct MMixAssembler {
     current_addr: u64,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
     pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
+    /// Index into `sources` of the translation unit currently being walked
+    /// during pass 2 (command-line order). Used, rather than `current_filename`
+    /// alone, to resolve `original_line_count` unambiguously even when two
+    /// inputs share a filename.
+    current_unit_index: usize,
+    /// Address -> original source location, populated during pass 2.
+    /// Only addresses whose statement came from a real user line (not the
+    /// appended debug-subroutine block) get an entry.
+    debug_info: BTreeMap<u64, SourceLoc>,
+}
+
+/// The original (user-facing) source location of an assembled instruction:
+/// the file as given on the command line, and the 1-based line in that
+/// file's ORIGINAL (un-preprocessed) text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLoc {
+    pub file: String,
+    pub line: usize,
 }
 
 impl MMixAssembler {
@@ -977,10 +1009,12 @@ impl MMixAssembler {
                     text, label
                 );
 
-                // If there was a label/prefix before debug, preserve it on its own line
+                // Emit any label/prefix and the generated PUSHJ on a single line so
+                // the preprocessed line count matches the original: label followed
+                // by an instruction is one statement to the second pass.
                 if !prefix.trim().is_empty() {
                     result.push_str(prefix.trim());
-                    result.push('\n');
+                    result.push(' ');
                 }
 
                 // Generate call to debug subroutine using SAVE/UNSAVE for full context preservation
@@ -1159,7 +1193,12 @@ impl MMixAssembler {
         let preprocessed_source = Self::preprocess_debug(source);
 
         Self {
-            sources: vec![(filename.to_string(), preprocessed_source)],
+            sources: vec![SourceUnit {
+                filename: filename.to_string(),
+                preprocessed: preprocessed_source,
+                original: source.to_string(),
+                original_line_count: source.lines().count(),
+            }],
             current_filename: filename.to_string(),
             current_prefix: String::new(),
             labels: HashMap::new(),
@@ -1170,6 +1209,8 @@ impl MMixAssembler {
             current_addr: 0,
             next_greg: 254, // Start allocating from $254, count down
             greg_inits: Vec::new(),
+            current_unit_index: 0,
+            debug_info: BTreeMap::new(),
         }
     }
 
@@ -1178,7 +1219,12 @@ impl MMixAssembler {
     /// so the result is identical to assembling the concatenation of inputs.
     pub fn add_source(&mut self, source: &str, filename: &str) {
         let preprocessed = Self::preprocess_debug(source);
-        self.sources.push((filename.to_string(), preprocessed));
+        self.sources.push(SourceUnit {
+            filename: filename.to_string(),
+            preprocessed,
+            original: source.to_string(),
+            original_line_count: source.lines().count(),
+        });
     }
 
     /// Apply the active PREFIX to a raw identifier. Names starting with ':'
@@ -1315,10 +1361,10 @@ impl MMixAssembler {
         debug!("Pass 1: Collecting labels and symbols");
         self.current_prefix.clear();
 
-        for (filename, source) in &sources {
-            self.current_filename = filename.clone();
-            let pairs = MMixalParser::parse(Rule::program, source)
-                .map_err(|e| Self::format_parse_error(&e, filename))?;
+        for unit in &sources {
+            self.current_filename = unit.filename.clone();
+            let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1346,10 +1392,11 @@ impl MMixAssembler {
 
         debug!("Pass 2: Generating instructions");
 
-        for (filename, source) in &sources {
-            self.current_filename = filename.clone();
-            let pairs = MMixalParser::parse(Rule::program, source)
-                .map_err(|e| Self::format_parse_error(&e, filename))?;
+        for (index, unit) in sources.iter().enumerate() {
+            self.current_filename = unit.filename.clone();
+            self.current_unit_index = index;
+            let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1463,6 +1510,11 @@ impl MMixAssembler {
     /// PREFIX state is replayed identically and produces the same names.
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn second_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        // Captured before `into_inner()` consumes `pair`: the statement's
+        // line in the ACTIVE translation unit's preprocessed text, which
+        // (after `preprocess_debug` was made line-count preserving) equals
+        // the original line for every real user line.
+        let (line, _) = pair.line_col();
         let mut label_name: Option<String> = None;
         let mut inst: Option<MMixInstruction> = None;
 
@@ -1490,6 +1542,7 @@ impl MMixAssembler {
                             let instructions = self.parse_data_directive(directive_pair)?;
                             for instruction in instructions {
                                 let size = Self::instruction_size(&instruction);
+                                self.record_debug_info(self.current_addr, line);
                                 self.instructions.push((self.current_addr, instruction));
                                 self.current_addr += size;
                             }
@@ -1525,6 +1578,7 @@ impl MMixAssembler {
         if let Some(instruction) = inst {
             let size = Self::instruction_size(&instruction);
             debug!(inst = ?instruction, addr = format!("0x{:X}", self.current_addr), size, "Added instruction");
+            self.record_debug_info(self.current_addr, line);
             self.instructions.push((self.current_addr, instruction));
             self.current_addr += size;
         }
@@ -1536,6 +1590,19 @@ impl MMixAssembler {
         }
 
         Ok(())
+    }
+
+    /// Record `addr`'s source location for `line` in the active translation
+    /// unit (`current_unit_index`), unless `line` falls beyond that unit's
+    /// original line count -- i.e. it belongs to compiler-generated code
+    /// (the appended debug-subroutine block), which gets no entry.
+    fn record_debug_info(&mut self, addr: u64, line: usize) {
+        let unit = &self.sources[self.current_unit_index];
+        if line > unit.original_line_count {
+            return;
+        }
+        let file = unit.filename.clone();
+        self.debug_info.insert(addr, SourceLoc { file, line });
     }
 
     /// Peek at instruction type to determine size without modifying state
@@ -3467,6 +3534,38 @@ impl MMixAssembler {
     pub fn generate_object_code(&self) -> Vec<u8> {
         crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone()).generate()
     }
+
+    /// The original source location of the instruction at `addr`, or `None`
+    /// for compiler-generated code (e.g. the appended debug-subroutine
+    /// block) or an address with no instruction.
+    pub fn source_loc(&self, addr: u64) -> Option<&SourceLoc> {
+        self.debug_info.get(&addr)
+    }
+
+    /// The lowest instruction address whose source location is `(file,
+    /// line)`, or `None` if that line produced no code. Exact-line only.
+    ///
+    /// If `file` was passed as more than one translation unit (a duplicate
+    /// input filename), this still matches by string equality against
+    /// whichever unit(s) produced code at that line -- a documented,
+    /// deterministic limitation for the pathological duplicate-filename
+    /// case; the address returned is always the lowest that matches.
+    pub fn addr_for_line(&self, file: &str, line: usize) -> Option<u64> {
+        self.debug_info
+            .iter()
+            .find(|(_, loc)| loc.file == file && loc.line == line)
+            .map(|(&addr, _)| addr)
+    }
+
+    /// The original (un-preprocessed) text of `file`'s 1-based `line`,
+    /// without the trailing newline, or `None` past end-of-file or for an
+    /// unknown file. If `file` was passed more than once, resolves to the
+    /// FIRST translation unit with that name in command-line order.
+    pub fn source_text(&self, file: &str, line: usize) -> Option<&str> {
+        let unit = self.sources.iter().find(|u| u.filename == file)?;
+        let index = line.checked_sub(1)?;
+        unit.original.lines().nth(index)
+    }
 }
 
 // Keep all the existing tests - they should work unchanged
@@ -4768,5 +4867,137 @@ ZSP  $3,$4,2
         assert_first_instruction("SLUI $1,$2,-1", MMixInstruction::SLUI(1, 2, 0xFF));
         // Auto path rejects:
         assert_parse_error_contains("ADD $1,$2,-1", "out of range 0..255");
+    }
+
+    // ---- Source-level debug info (SourceLoc / source_loc / addr_for_line /
+    // source_text): pc.1 of the mmixdb effort. ----------------------------
+
+    /// Line fidelity across a labeled `debug` directive: the pinning test.
+    /// Mirrors `examples/hello_world.mms`'s shape (a labeled `debug "..."`
+    /// line, then a labeled instruction a couple of lines down). Reverting
+    /// the `preprocess_debug` line-count-preserving fix (Step 1) -- i.e.
+    /// restoring the old two-line label/PUSHJ expansion -- shifts every
+    /// following line by one and makes this assertion fail; that was
+    /// verified by hand before landing (see the prompt's report).
+    #[test]
+    fn test_debug_directive_preserves_line_fidelity() {
+        let lines = [
+            "\tLOC\tData_Segment",
+            "\tGREG\t@",
+            "Text\tBYTE\t\"Hello world!\",'\\n',0",
+            "",
+            "\tLOC\t#100",
+            "",
+            "Main\tdebug \"Version 0.1: Hello World Example\"",
+            "Start\tLDA\t$255,Text",
+            "\tTRAP\t0,Fputs,StdOut",
+            "\tTRAP\t0,Halt,0",
+        ];
+        let lda_line = lines.iter().position(|l| l.contains("LDA")).unwrap() + 1;
+        let source = lines.join("\n");
+
+        let mut asm = MMixAssembler::new(&source, "hello_world.mms");
+        asm.parse().unwrap();
+
+        let lda_addr = *asm.labels.get("Start").expect("Start label defined");
+        let loc = asm
+            .source_loc(lda_addr)
+            .expect("LDA's address should have a source location");
+        assert_eq!(loc.file, "hello_world.mms");
+        assert_eq!(loc.line, lda_line, "LDA must report its ORIGINAL line");
+    }
+
+    /// Inverse round-trip: `addr_for_line` returns the same address
+    /// `source_loc` mapped back from.
+    #[test]
+    fn test_addr_for_line_round_trips_with_source_loc() {
+        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n\tTRAP\t0,Halt,0\n";
+
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+
+        let lda_addr = *asm.labels.get("Start").unwrap();
+        let loc = asm.source_loc(lda_addr).unwrap();
+        assert_eq!(
+            asm.addr_for_line(&loc.file, loc.line),
+            Some(lda_addr),
+            "addr_for_line must invert source_loc"
+        );
+    }
+
+    /// `source_text` returns the ORIGINAL line (the `debug` directive as the
+    /// user wrote it), not the preprocessed `PUSHJ` text.
+    #[test]
+    fn test_source_text_returns_original_not_preprocessed() {
+        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+
+        let text = asm.source_text("<test>", 1).expect("line 1 exists");
+        assert!(
+            text.contains("debug"),
+            "expected original text, got {text:?}"
+        );
+        assert!(
+            !text.contains("PUSHJ"),
+            "source_text must not leak preprocessed text, got {text:?}"
+        );
+
+        let lda_text = asm.source_text("<test>", 2).expect("line 2 exists");
+        assert!(lda_text.contains("LDA"));
+    }
+
+    /// Compiler-generated code (the appended debug-subroutine block) has no
+    /// user source line.
+    #[test]
+    fn test_generated_debug_subroutine_has_no_source_loc() {
+        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+
+        let debug_sub_addr = *asm
+            .labels
+            .get("DbgStr_0001")
+            .expect("generated debug subroutine label exists");
+        assert_eq!(
+            asm.source_loc(debug_sub_addr),
+            None,
+            "generated code must not map to a user source line"
+        );
+    }
+
+    /// A data directive that emits multiple words maps every emitted address
+    /// to the same source line, and `addr_for_line` returns the lowest one.
+    /// (`OCTA` in this grammar takes a single value per directive -- only
+    /// `BYTE` accepts a comma-separated list -- so `BYTE` is used here to
+    /// exercise the "N addresses, one line" invariant.)
+    #[test]
+    fn test_multi_word_data_directive_maps_to_one_line() {
+        let source = "Data\tBYTE\t1,2,3\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+
+        let base_addr = *asm.labels.get("Data").unwrap();
+        for offset in 0..3 {
+            let loc = asm
+                .source_loc(base_addr + offset)
+                .unwrap_or_else(|| panic!("no source_loc at offset {offset}"));
+            assert_eq!(loc.line, 1);
+        }
+        assert_eq!(asm.addr_for_line("<test>", 1), Some(base_addr));
+    }
+
+    /// Duplicate-name translation units: reverse lookups (`addr_for_line`,
+    /// `source_text`) resolve to the FIRST unit with that filename in
+    /// command-line order, while `source_loc` (keyed by address) stays
+    /// unambiguous regardless.
+    #[test]
+    fn test_source_text_resolves_duplicate_filename_to_first_unit() {
+        let mut asm = MMixAssembler::new("First\tHALT\n", "dup.mms");
+        asm.add_source("Second\tHALT\n", "dup.mms");
+        asm.parse().unwrap();
+
+        let text = asm.source_text("dup.mms", 1).unwrap();
+        assert!(text.contains("First"));
     }
 }
