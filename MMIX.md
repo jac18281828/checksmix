@@ -23,6 +23,43 @@ Main    SETL    $0,42       % your code here
 | `WYDE` | `WYDE expr,...` | Emit one 16-bit wyde per operand |
 | `TETRA` | `TETRA expr,...` | Emit one 32-bit tetra per operand |
 | `OCTA` | `OCTA expr,...` | Emit one 64-bit octa per operand |
+| `INCLUDE` | `INCLUDE file` | Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error |
+
+### INCLUDE
+
+`INCLUDE file` (also `.INCLUDE`, case-insensitive) is a **checksmix extension**,
+not part of Knuth's MMIXAL. It is a preprocessor stage, not a grammar rule: the
+named file is inserted as its own translation unit(s), so errors inside it
+report *its own* filename and line numbers rather than the includer's. The path
+resolves relative to the including file's own directory (like C's
+`#include "..."`), each level resolving against its own directory in turn.
+Inclusion is recursive; a cycle (a file re-entering itself while already on
+the current include chain) is a hard error naming the chain, and an unreadable
+file is a hard error naming the file.
+
+```
+INCLUDE lib.mms      % pulls lib.mms in as if inserted here
+```
+
+Three known limitations:
+
+- **Own line, no label.** `INCLUDE` must occupy its own line; a line whose
+  first token is not `INCLUDE`/`.INCLUDE` is left untouched, so a label cannot
+  be attached to an `INCLUDE` line.
+- **`debug` label collisions.** The `debug` extension's generated `DbgStr_NNNN`
+  labels are numbered per preprocessing call, and splitting a host file into
+  multiple units around an `INCLUDE` means multiple such calls -- so two units
+  that both use `debug` can generate the same label. This is a pre-existing
+  limitation (two `debug`-using files on the command line already collide
+  today, independent of `INCLUDE`); it surfaces loudly as a `symbol '...'
+  redefined` error, never silently.
+- **`source_text` first-match-on-filename.** Splitting a host file at an
+  `INCLUDE` produces multiple units that share the same filename. The
+  debug-info API `source_text(file, line)` resolves a unit by the first match
+  on filename, so a caller asking for a line in a later host segment (after
+  the `INCLUDE`) may get an earlier segment's text instead. This is a
+  pre-existing `source_text` limitation surfaced by `INCLUDE`, not something
+  `INCLUDE` itself introduces or fixes.
 
 ### Global symbols and PREFIX
 

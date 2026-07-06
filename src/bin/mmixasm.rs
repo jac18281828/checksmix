@@ -2,7 +2,7 @@
 use checksmix::MMixAssembler;
 use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -36,7 +36,8 @@ fn main() {
         .output
         .unwrap_or_else(|| inputs[0].with_extension("mmo"));
 
-    let mut sources: Vec<(String, String)> = Vec::with_capacity(inputs.len());
+    let reader = |p: &Path| std::fs::read_to_string(p);
+    let mut sources: Vec<(String, String)> = Vec::new();
     for path in &inputs {
         let src = fs::read_to_string(path).unwrap_or_else(|err| {
             eprintln!("Error reading '{}': {}", path.display(), err);
@@ -46,7 +47,13 @@ fn main() {
             .to_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| path.display().to_string());
-        sources.push((name, src));
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let units =
+            MMixAssembler::resolve_includes(&src, &name, base, &reader).unwrap_or_else(|err| {
+                eprintln!("{}", err);
+                process::exit(1);
+            });
+        sources.extend(units);
     }
 
     if sources.len() == 1 {

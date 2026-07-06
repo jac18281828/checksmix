@@ -4,6 +4,7 @@ use std::io::{stderr, stdin, stdout};
 use std::os::unix::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
 
 use crate::mmix::TrapCode;
@@ -3566,6 +3567,167 @@ impl MMixAssembler {
         let index = line.checked_sub(1)?;
         unit.original.lines().nth(index)
     }
+
+    /// Expand `INCLUDE <file>` directives into an ordered list of translation
+    /// units, ready to feed to `new`/`add_source`. Host files are split at
+    /// each `INCLUDE` into segments (each tagged with the host's filename and
+    /// blank-padded to keep absolute line numbers); each included file is
+    /// resolved recursively and its units inserted at that position. Paths
+    /// resolve relative to the including file's directory. `read` supplies
+    /// file contents -- injected so this logic is testable without real
+    /// filesystem access and reusable by any frontend. A cycle (re-entry on
+    /// the current include chain) or an unreadable file is an `Err`.
+    pub fn resolve_includes<R>(
+        root_source: &str,
+        root_filename: &str,
+        base_dir: &Path,
+        read: &R,
+    ) -> Result<Vec<(String, String)>, String>
+    where
+        R: Fn(&Path) -> std::io::Result<String>,
+    {
+        let mut chain = Vec::new();
+        Self::resolve_includes_chain(root_source, root_filename, base_dir, read, &mut chain)
+    }
+
+    /// Recursive worker behind `resolve_includes`. `chain` holds the
+    /// lexically-normalized identity of every file currently being expanded
+    /// (the ancestors on the path from the top-level call to here), used to
+    /// detect a file re-entering itself before it finishes expanding.
+    fn resolve_includes_chain<R>(
+        root_source: &str,
+        root_filename: &str,
+        base_dir: &Path,
+        read: &R,
+        chain: &mut Vec<PathBuf>,
+    ) -> Result<Vec<(String, String)>, String>
+    where
+        R: Fn(&Path) -> std::io::Result<String>,
+    {
+        let mut units = Vec::new();
+        let mut segment = String::new();
+        let mut segment_start_line: usize = 1;
+        let mut current_line: usize = 0;
+
+        for raw_line in root_source.split_inclusive('\n') {
+            current_line += 1;
+            let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+            let Some(operand) = Self::parse_include_operand(content) else {
+                segment.push_str(raw_line);
+                continue;
+            };
+
+            if !segment.trim().is_empty() {
+                units.push((
+                    root_filename.to_string(),
+                    Self::pad_source(&segment, segment_start_line),
+                ));
+            }
+            segment.clear();
+
+            let target = Self::normalize_lexically(&base_dir.join(&operand));
+            if chain.contains(&target) {
+                let mut names: Vec<String> =
+                    chain.iter().map(|p| p.display().to_string()).collect();
+                names.push(target.display().to_string());
+                return Err(format!("include cycle detected: {}", names.join(" -> ")));
+            }
+
+            let included_source = read(&target).map_err(|err| {
+                format!("cannot read included file '{}': {}", target.display(), err)
+            })?;
+            let included_filename = target.display().to_string();
+            let included_base_dir = target
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(""));
+
+            chain.push(target);
+            let included_units = Self::resolve_includes_chain(
+                &included_source,
+                &included_filename,
+                &included_base_dir,
+                read,
+                chain,
+            )?;
+            chain.pop();
+            units.extend(included_units);
+
+            segment_start_line = current_line + 1;
+        }
+
+        if !segment.trim().is_empty() {
+            units.push((
+                root_filename.to_string(),
+                Self::pad_source(&segment, segment_start_line),
+            ));
+        }
+
+        Ok(units)
+    }
+
+    /// If `line`, after stripping a trailing `;`/`%` comment and trimming
+    /// whitespace, is an `INCLUDE`/`.INCLUDE` directive (case-insensitive),
+    /// returns its operand (unquoted if wrapped in matching double quotes).
+    fn parse_include_operand(line: &str) -> Option<String> {
+        let without_comment = match line.find([';', '%']) {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        let trimmed = without_comment.trim();
+        let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
+        let keyword = parts.next()?;
+        if !keyword
+            .trim_start_matches('.')
+            .eq_ignore_ascii_case("include")
+        {
+            return None;
+        }
+        let operand = parts.next().unwrap_or("").trim();
+        if operand.is_empty() {
+            return None;
+        }
+        let unquoted = if operand.len() >= 2 && operand.starts_with('"') && operand.ends_with('"') {
+            &operand[1..operand.len() - 1]
+        } else {
+            operand
+        };
+        Some(unquoted.to_string())
+    }
+
+    /// Prepend `start_line - 1` newlines to `text` so absolute line numbers
+    /// survive being embedded at `start_line` of some larger file (the
+    /// grammar ignores leading blank lines).
+    fn pad_source(text: &str, start_line: usize) -> String {
+        let padding = start_line.saturating_sub(1);
+        let mut padded = String::with_capacity(text.len() + padding);
+        for _ in 0..padding {
+            padded.push('\n');
+        }
+        padded.push_str(text);
+        padded
+    }
+
+    /// Lexically collapse `.`/`..` components without touching the
+    /// filesystem (unlike `fs::canonicalize`, which would defeat the
+    /// injected reader in unit tests and can fail on a nonexistent path).
+    fn normalize_lexically(path: &Path) -> PathBuf {
+        use std::path::Component;
+
+        let mut result = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if !result.pop() {
+                        result.push("..");
+                    }
+                }
+                other => result.push(other.as_os_str()),
+            }
+        }
+        result
+    }
 }
 
 // Keep all the existing tests - they should work unchanged
@@ -4999,5 +5161,181 @@ ZSP  $3,$4,2
 
         let text = asm.source_text("dup.mms", 1).unwrap();
         assert!(text.contains("First"));
+    }
+
+    // --- resolve_includes (INCLUDE directive) ---
+
+    /// Build an in-memory `read` closure keyed by exact `PathBuf`s, so tests
+    /// stay hermetic (no real filesystem access).
+    fn fixture_reader(
+        files: Vec<(&str, &str)>,
+    ) -> impl Fn(&std::path::Path) -> std::io::Result<String> {
+        let map: HashMap<std::path::PathBuf, String> = files
+            .into_iter()
+            .map(|(p, s)| (std::path::PathBuf::from(p), s.to_string()))
+            .collect();
+        move |p: &std::path::Path| {
+            map.get(p).cloned().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "no such fixture file")
+            })
+        }
+    }
+
+    #[test]
+    fn resolve_includes_single_include_inserts_a_unit() {
+        let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
+        let units = MMixAssembler::resolve_includes(
+            "INCLUDE lib.mms\nOCTA 2\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap();
+
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].0, "lib.mms");
+        assert!(units[0].1.contains("OCTA 1"));
+        assert_eq!(units[1].0, "root.mms");
+        assert!(units[1].1.contains("OCTA 2"));
+    }
+
+    #[test]
+    fn resolve_includes_filename_fidelity() {
+        // The included unit's filename must be the included file's own path,
+        // NOT the including (root) file's name -- the property text-splicing
+        // could never give, since a spliced file has no filename of its own.
+        let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
+        let units = MMixAssembler::resolve_includes(
+            "INCLUDE lib.mms\nOCTA 2\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap();
+
+        assert_eq!(units[0].0, "lib.mms");
+        assert_ne!(units[0].0, "root.mms");
+    }
+
+    #[test]
+    fn resolve_includes_pads_line_numbers_after_an_include() {
+        let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
+        let units = MMixAssembler::resolve_includes(
+            "% a\nINCLUDE lib.mms\nBYTE 0\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap();
+
+        // Trailing host segment: `BYTE 0` was on absolute line 3, so it must
+        // be preceded by exactly 2 padding newlines.
+        let host_segment = &units.last().unwrap().1;
+        assert_eq!(host_segment.matches('\n').count() - 1, 2);
+        assert!(host_segment.starts_with("\n\nBYTE 0"));
+
+        // Parse it through the real assembler and confirm the reported line
+        // number is the ABSOLUTE line 3, not the padded segment's line 1.
+        let mut asm = MMixAssembler::new(&units[0].1, &units[0].0);
+        for (name, src) in units.iter().skip(1) {
+            asm.add_source(src, name);
+        }
+        asm.parse().unwrap();
+        // `lib.mms`'s `OCTA 1` occupies address 0..8, so `BYTE 0` -- at
+        // absolute line 3 thanks to padding -- lands at address 8.
+        assert_eq!(asm.addr_for_line("root.mms", 3), Some(8));
+    }
+
+    #[test]
+    fn resolve_includes_nested_relative_resolution() {
+        let reader = fixture_reader(vec![
+            ("a/sub/b.mms", "INCLUDE c.mms\nOCTA 2\n"),
+            ("a/sub/c.mms", "OCTA 3\n"),
+        ]);
+        let units = MMixAssembler::resolve_includes(
+            "INCLUDE sub/b.mms\nOCTA 1\n",
+            "a/root.mms",
+            std::path::Path::new("a"),
+            &reader,
+        )
+        .unwrap();
+
+        let c_unit = units
+            .iter()
+            .find(|(name, _)| name.contains("c.mms"))
+            .expect("c.mms unit present");
+        assert_eq!(c_unit.0, "a/sub/c.mms");
+        assert!(c_unit.1.contains("OCTA 3"));
+    }
+
+    #[test]
+    fn resolve_includes_cycle_is_an_error() {
+        let reader = fixture_reader(vec![
+            ("a.mms", "INCLUDE b.mms\n"),
+            ("b.mms", "INCLUDE a.mms\n"),
+        ]);
+        let err = MMixAssembler::resolve_includes(
+            "INCLUDE a.mms\n",
+            "driver.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("cycle"));
+        assert!(err.contains("a.mms"));
+        assert!(err.contains("b.mms"));
+    }
+
+    #[test]
+    fn resolve_includes_missing_file_is_an_error_not_a_panic() {
+        let reader = fixture_reader(vec![]);
+        let err = MMixAssembler::resolve_includes(
+            "INCLUDE missing.mms\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("missing.mms"));
+    }
+
+    #[test]
+    fn resolve_includes_passthrough_preserves_content_with_no_include() {
+        let reader = fixture_reader(vec![]);
+        let source = "OCTA 1\nOCTA 2";
+        let units =
+            MMixAssembler::resolve_includes(source, "root.mms", std::path::Path::new(""), &reader)
+                .unwrap();
+
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].0, "root.mms");
+        assert_eq!(units[0].1, source);
+    }
+
+    #[test]
+    fn resolve_includes_recognizes_comment_case_and_leading_dot() {
+        let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
+
+        let lower_with_comment = MMixAssembler::resolve_includes(
+            ".include lib.mms  % pull it in\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap();
+        let quoted = MMixAssembler::resolve_includes(
+            "INCLUDE \"lib.mms\"\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap();
+
+        assert_eq!(lower_with_comment.len(), 1);
+        assert_eq!(quoted.len(), 1);
+        assert_eq!(lower_with_comment[0].1, quoted[0].1);
+        assert!(quoted[0].1.contains("OCTA 1"));
     }
 }

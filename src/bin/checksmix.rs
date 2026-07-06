@@ -128,11 +128,14 @@ fn dispatch_run(program_files: &[String], value_format: ValueFormat) {
 }
 
 fn assemble_sources(paths: &[PathBuf]) -> Result<MMixAssembler, String> {
-    let mut sources: Vec<(String, String)> = Vec::with_capacity(paths.len());
+    let reader = |p: &Path| std::fs::read_to_string(p);
+    let mut sources: Vec<(String, String)> = Vec::new();
     for path in paths {
         let src = fs::read_to_string(path)
             .map_err(|err| format!("error reading '{}': {}", path.display(), err))?;
-        sources.push((path.to_string_lossy().into_owned(), src));
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let units = MMixAssembler::resolve_includes(&src, &path.to_string_lossy(), base, &reader)?;
+        sources.extend(units);
     }
     let (first_name, first_src) = &sources[0];
     let mut asm = MMixAssembler::new(first_src, first_name);
