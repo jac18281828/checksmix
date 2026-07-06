@@ -39,7 +39,26 @@ debug-subroutine block get no entry.
 pc.2 can rely on these four names (`SourceLoc`, `source_loc`,
 `addr_for_line`, `source_text`) as the stable API surface from pc.1.
 
-### pc.2 — the `mmixdb` REPL binary: **TODO**
+### pc.2 — the `mmixdb` REPL binary: **DONE**
 
-Not started. Will consume pc.1's API; no debugger/binary/REPL logic exists
-yet anywhere in the repo.
+- **Date:** 2026-07-05
+- **Branch:** `claude/mmixdb-repl`
+
+Shipped:
+
+- `call_depth()` accessor on `MMix` (`src/mmix.rs`) — the only VM change.
+- `src/debugger.rs`: the TTY-free debugger core, re-exported from `src/lib.rs`
+  as `Debugger`, `Command`, `parse_command`. Implements `step`/`next`/
+  `continue`/`run`/`break`/`print`/`state`/`list`/`quit`, blank-repeats-last,
+  and the `--fullname` Emacs GUD marker
+  (`\x1a\x1a<ABSOLUTE-PATH>:<LINE>:0:beg:0x<ADDR>\n`).
+- `src/bin/mmixdb.rs`: thin `clap` + `rustyline` REPL shell; auto-enables
+  `--fullname` under `INSIDE_EMACS`; rejects non-`.mms` inputs.
+- `contrib/mmixdb.el`: minimal `gud-mode` integration (`M-x mmixdb`).
+- `print`'s special-register name resolution is built from the
+  name/discriminant table at `src/mmixal.rs:1154-1189` (`("rJ", 4)`, etc.),
+  NOT the alphabetical `special_names` display array — a dedicated hermetic
+  test (`print rJ`) pins this and fails if built from the wrong table.
+- 7 new hermetic unit tests in `src/debugger.rs`, including the `next`-vs-`step`
+  call-depth pinning test and the special-register table test above.
+- Added dependency: `rustyline` (the one approved dependency for this task).

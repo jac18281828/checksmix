@@ -5,6 +5,7 @@ MMIX assembler and emulator with fast feedback for learning, experimenting, and 
 ## What’s inside
 - `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
 - `mmixasm`: assemble `.mms` to `.mmo` for reuse or distribution.
+- `mmixdb`: gdb-style interactive debugger for `.mms` programs (step, breakpoints, print, Emacs GUD mode).
 - Emulator: 256 general-purpose registers, 32 special registers, sparse 64-bit address space, and basic TRAP support (Halt and Fputs for console output).
 
 ## Quick start
@@ -67,6 +68,37 @@ Main    LDA     $0,Text
         TRAP    0,Fputs,StdOut
         TRAP    0,Halt,0
 ```
+
+## mmixdb — the interactive debugger
+
+`mmixdb` is a gdb-style debugger for MMIX `.mms` programs: step, breakpoint,
+inspect registers/memory, and see the current source line as you go.
+
+```bash
+cargo run --bin mmixdb -- examples/fibonacci.mms
+cargo run --bin mmixdb -- --fullname examples/fibonacci.mms   # Emacs GUD marker mode
+```
+
+`mmixdb` handles `.mms` sources only -- source-line debugging requires the
+original source. `.mmo` object files carry no source map and are out of scope.
+`--fullname` is auto-enabled when the `INSIDE_EMACS` environment variable is
+set (i.e. when run from Emacs's `gud-mode`).
+
+| Command | Forms | Semantics |
+|---|---|---|
+| step (into) | `s`, `step` | Execute exactly one instruction, following into calls/branches. |
+| next (over) | `n`, `next` | Execute one instruction; if it entered a call, keep stepping until it returns. |
+| continue | `c`, `continue` | Resume, single-stepping until a breakpoint or halt. |
+| run/reset | `r`, `run` | Reset to the freshly-loaded image, then behave like `continue`. |
+| break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
+| print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or memory octa (`0x...`/`#...`). |
+| state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
+| list | `l`, `list` | Print source lines around the current PC. |
+| quit | `q`, `quit` | Exit the debugger. |
+
+Blank input repeats the last command -- most debugging is stepping.
+
+Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
 
 ## Legacy MIX support
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.

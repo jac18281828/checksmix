@@ -870,6 +870,11 @@ impl MMix {
         self.exit_code
     }
 
+    /// Current call depth: the number of PUSHJ/PUSHGO frames not yet popped.
+    pub fn call_depth(&self) -> usize {
+        self.frame_info_stack.len()
+    }
+
     // ========== Internal Helpers ==========
 
     /// Conditional branch forward: if cond, PC = PC + (Y<<8|Z) * 4

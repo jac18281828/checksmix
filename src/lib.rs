@@ -1,12 +1,14 @@
 use lyn::Scanner; // Still used by MIX parser
 use std::fmt;
 
+mod debugger;
 mod encode;
 mod mix;
 mod mmix;
 mod mmixal;
 mod mmo;
 
+pub use debugger::{Command, Debugger, parse_command};
 pub use mix::Mix;
 pub use mmix::{MMix, SpecialReg, ValueFormat};
 pub use mmixal::{MMixAssembler, SourceLoc};
