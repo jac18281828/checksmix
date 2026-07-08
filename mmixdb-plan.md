@@ -62,3 +62,18 @@ Shipped:
 - 7 new hermetic unit tests in `src/debugger.rs`, including the `next`-vs-`step`
   call-depth pinning test and the special-register table test above.
 - Added dependency: `rustyline` (the one approved dependency for this task).
+
+### Addendum — `help` command: **SHIPPED**
+
+- **Date:** 2026-07-08
+- **Branch:** `claude/mmixdb-help-command`
+- **Surface:** `mmixdb` gained a `help`/`h`/`?` command listing all REPL commands.
+
+Shipped:
+
+- `Command` enum gained a `Help` variant.
+- `parse_command` now matches `h`, `help`, and `?` to `Command::Help`.
+- `Debugger::execute` gained a match arm for `Command::Help`.
+- `do_help` method returns a static, hermetic HELP_TEXT constant documenting every command.
+- Two new hermetic unit tests: `parse_command_maps_all_forms` extended to test all three help forms (`h`, `help`, `?`), and new `help_command_lists_every_command` test verifying the help output contains all command keywords.
+- `README.md` command table updated with the `help` row.

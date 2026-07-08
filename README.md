@@ -94,6 +94,7 @@ set (i.e. when run from Emacs's `gud-mode`).
 | print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or memory octa (`0x...`/`#...`). |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
 | list | `l`, `list` | Print source lines around the current PC. |
+| help | `h`, `help`, `?` | Show this help. |
 | quit | `q`, `quit` | Exit the debugger. |
 
 Blank input repeats the last command -- most debugging is stepping.

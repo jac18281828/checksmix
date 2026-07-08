@@ -29,6 +29,7 @@ pub enum Command {
     Print(String),
     State,
     List,
+    Help,
     Quit,
     Repeat,
 }
@@ -73,6 +74,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             other => Err(format!("unknown info subcommand: {other}")),
         },
         "l" | "list" => Ok(Command::List),
+        "h" | "help" | "?" => Ok(Command::Help),
         "q" | "quit" => Ok(Command::Quit),
         other => Err(format!("unknown command: {other}")),
     }
@@ -226,6 +228,7 @@ impl Debugger {
             Command::Print(arg) => vec![self.do_print(arg)],
             Command::State => self.do_state(),
             Command::List => self.do_list(),
+            Command::Help => self.do_help(),
             Command::Quit => vec!["Quit".to_string()],
             Command::Repeat => unreachable!("resolved above"),
         };
@@ -426,6 +429,25 @@ impl Debugger {
             pc
         ))
     }
+
+    /// Keep this in sync with README.md's mmixdb command table
+    /// -- there is no shared source between the two.
+    fn do_help(&self) -> Vec<String> {
+        const HELP_TEXT: &str = "\
+step (into)   s, step                          Execute exactly one instruction, following into calls/branches.
+next (over)   n, next                          Execute one instruction; if it entered a call, keep stepping until it returns.
+continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
+run/reset     r, run                           Reset to the freshly-loaded image, then behave like continue.
+break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
+print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or memory octa.
+state         bt, backtrace, info reg, info registers   Print the full register dump.
+list          l, list                          Print source lines around the current PC.
+help          h, help, ?                       Show this help.
+quit          q, quit                          Exit the debugger.
+
+Blank input repeats the last command.";
+        HELP_TEXT.lines().map(str::to_string).collect()
+    }
 }
 
 /// The canonicalized absolute path of `file`, when it exists on disk; falls
@@ -492,9 +514,25 @@ Sub\tSETI\t$0,3
         assert_eq!(parse_command("list"), Ok(Command::List));
         assert_eq!(parse_command("q"), Ok(Command::Quit));
         assert_eq!(parse_command("quit"), Ok(Command::Quit));
+        assert_eq!(parse_command("h"), Ok(Command::Help));
+        assert_eq!(parse_command("help"), Ok(Command::Help));
+        assert_eq!(parse_command("?"), Ok(Command::Help));
         assert_eq!(parse_command(""), Ok(Command::Repeat));
         assert_eq!(parse_command("   "), Ok(Command::Repeat));
         assert!(parse_command("bogus").is_err());
+    }
+
+    #[test]
+    fn help_command_lists_every_command() {
+        let asm = assemble(CALL_PROGRAM, "call.mms");
+        let mut dbg = Debugger::load(asm);
+        let output = dbg.execute(Command::Help);
+        let joined = output.join("\n");
+        assert!(joined.contains("step"));
+        assert!(joined.contains("break"));
+        assert!(joined.contains("print"));
+        assert!(joined.contains("quit"));
+        assert!(joined.contains("help"));
     }
 
     #[test]
