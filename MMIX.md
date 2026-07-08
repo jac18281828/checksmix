@@ -404,3 +404,11 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `SYNCIDI` | `SYNCIDI X, $Y, Z` | Synchronize instruction and data cache (immediate) |
 | `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
+
+`GETA`'s `addr` must be 4-byte aligned relative to the current instruction and
+within ±131068 bytes (a signed 16-bit quotient of the byte delta). `GETAB`'s
+`addr` must be behind the current instruction, 4-byte aligned, and within
+0..262140 bytes backward (an unsigned 16-bit magnitude that the VM always
+subtracts from `pc`). Targets that are out of range, misaligned, or (for
+`GETAB`) not behind the current instruction are a hard assembly-time error;
+use `LDA` for addresses that don't fit either field.

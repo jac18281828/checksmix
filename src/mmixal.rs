@@ -2724,6 +2724,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
         let operand = parts.next().unwrap(); // Get operand_reg_imm
@@ -2740,16 +2741,29 @@ impl MMixAssembler {
             self.current_addr, addr
         );
 
-        // GETA uses relative addressing: calculate offset from current address
-        // The offset is split into YZ (16-bit signed)
+        // GETA uses relative addressing: the offset is a signed 16-bit
+        // quotient of the byte delta divided by 4 (±131068-byte reach).
         let offset = addr.wrapping_sub(self.current_addr) as i64;
-        let offset_16 = ((offset >> 2) & 0xFFFF) as u16; // Divide by 4 and take lower 16 bits
+        if offset % 4 != 0 {
+            return Err(format!(
+                "{}:{}:{}: GETA target 0x{:X} is not 4-byte aligned relative to the current instruction (byte delta {})",
+                self.current_filename, line, col, addr, offset
+            ));
+        }
+        let quotient = offset / 4;
+        if !(i16::MIN as i64..=i16::MAX as i64).contains(&quotient) {
+            return Err(format!(
+                "{}:{}:{}: GETA target 0x{:X} is out of range: byte delta {} exceeds GETA's \u{b1}131068-byte reach (use LDA for longer-range addresses)",
+                self.current_filename, line, col, addr, offset
+            ));
+        }
+        let offset_16 = quotient as u16;
         let y = ((offset_16 >> 8) & 0xFF) as u8;
         let z = (offset_16 & 0xFF) as u8;
 
         debug!(
-            "GETA: offset={}, offset_16=0x{:X}, y=0x{:X}, z=0x{:X}",
-            offset, offset_16, y, z
+            "GETA: quotient={}, offset_16=0x{:X}, y=0x{:X}, z=0x{:X}",
+            quotient, offset_16, y, z
         );
 
         Ok(MMixInstruction::GETA(x, y, z))
@@ -2759,6 +2773,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
         let operand = parts.next().unwrap(); // Get operand_reg_imm
@@ -2770,9 +2785,29 @@ impl MMixAssembler {
         let x = self.parse_register(reg_pair)?;
         let addr = self.parse_number(addr_pair)?;
 
-        // GETAB uses backward relative addressing
-        let offset = addr.wrapping_sub(self.current_addr) as i64;
-        let offset_16 = ((offset >> 2) & 0xFFFF) as u16;
+        // GETAB encodes an unsigned backward-only magnitude: the VM always
+        // subtracts YZ * 4 from pc, so the target must be behind us.
+        let backward = self.current_addr as i64 - addr as i64;
+        if backward < 0 {
+            return Err(format!(
+                "{}:{}:{}: GETAB target 0x{:X} is not behind the current instruction (GETAB only encodes backward addresses; use GETA or LDA instead)",
+                self.current_filename, line, col, addr
+            ));
+        }
+        if backward % 4 != 0 {
+            return Err(format!(
+                "{}:{}:{}: GETAB target 0x{:X} is not 4-byte aligned relative to the current instruction (backward byte delta {})",
+                self.current_filename, line, col, addr, backward
+            ));
+        }
+        let quotient = backward / 4;
+        if quotient > u16::MAX as i64 {
+            return Err(format!(
+                "{}:{}:{}: GETAB target 0x{:X} is out of range: backward byte delta {} exceeds GETAB's 262140-byte reach (use LDA for longer-range addresses)",
+                self.current_filename, line, col, addr, backward
+            ));
+        }
+        let offset_16 = quotient as u16;
         let y = ((offset_16 >> 8) & 0xFF) as u8;
         let z = (offset_16 & 0xFF) as u8;
 
@@ -3845,6 +3880,62 @@ mod tests {
         // JMP is at addr 0x104 (BACK's HALT is 4 bytes), target 0x100:
         // backward magnitude = (0x104 - 0x100) / 4 = 1.
         assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(1));
+    }
+
+    #[test]
+    fn test_geta_offset_beyond_range_errors() {
+        // Target is 262144 bytes forward, beyond GETA's ±131068-byte reach.
+        // Reverting the fix (restoring the mask) makes this source assemble
+        // successfully with a silently wrong encoding.
+        let source = "GETA $0,LABEL\nLOC #40000\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("GETA"));
+        assert!(err.contains("out of range"));
+    }
+
+    #[test]
+    fn test_geta_misaligned_target_errors() {
+        // Target is 5 bytes forward, not a multiple of 4.
+        let source = "GETA $0,LABEL\nBYTE 1\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        assert!(asm.parse().is_err());
+    }
+
+    #[test]
+    fn test_geta_offset_within_range_succeeds() {
+        // 65536 bytes forward is within GETA's ±131068-byte reach.
+        let source = "GETA $0,LABEL\nLOC #10000\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        let MMixInstruction::GETA(_, y, z) = asm.instructions[0].1 else {
+            panic!("expected GETA instruction");
+        };
+        let offset_16 = ((y as u16) << 8) | z as u16;
+        let decoded_offset = (offset_16 as i16) as i64;
+        assert_eq!(decoded_offset, 0x10000i64 / 4);
+    }
+
+    #[test]
+    fn test_getab_forward_target_errors() {
+        // Target is FORWARD of the GETAB, which cannot be encoded at all
+        // (GETAB is a backward-only unsigned magnitude). Under the unfixed
+        // code this assembles successfully with a semantically inverted
+        // encoding.
+        let source = "GETAB $0,LABEL\nLOC #100\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        assert!(asm.parse().is_err());
+    }
+
+    #[test]
+    fn test_getab_backward_target_encodes_correct_magnitude() {
+        // GETAB sits at addr 0x104 (BACK's HALT is 4 bytes), target 0x100:
+        // backward magnitude = (0x104 - 0x100) / 4 = 1.
+        // The unfixed code computes GETAB(0, 0xFF, 0xFF) for this source.
+        let source = "LOC #100\nBACK: HALT\nGETAB $0,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::GETAB(0, 0, 1));
     }
 
     #[test]
