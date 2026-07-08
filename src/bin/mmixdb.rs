@@ -96,15 +96,19 @@ fn print_line(line: &str) {
 }
 
 /// Replicates `run_mms`'s assembly step (`src/bin/checksmix.rs:assemble_sources`):
-/// read each file, assemble the first as the primary source, add the rest as
-/// additional translation units in one shared symbol space.
+/// read each file, resolve INCLUDE directives, assemble the first as the
+/// primary source, add the rest as additional translation units in one
+/// shared symbol space.
 fn assemble_sources(filenames: &[String]) -> Result<MMixAssembler, String> {
+    let reader = |p: &Path| fs::read_to_string(p);
     let paths: Vec<PathBuf> = filenames.iter().map(PathBuf::from).collect();
-    let mut sources: Vec<(String, String)> = Vec::with_capacity(paths.len());
+    let mut sources: Vec<(String, String)> = Vec::new();
     for path in &paths {
         let src = fs::read_to_string(path)
             .map_err(|err| format!("error reading '{}': {}", path.display(), err))?;
-        sources.push((path.to_string_lossy().into_owned(), src));
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let units = MMixAssembler::resolve_includes(&src, &path.to_string_lossy(), base, &reader)?;
+        sources.extend(units);
     }
     let (first_name, first_src) = &sources[0];
     let mut asm = MMixAssembler::new(first_src, first_name);
