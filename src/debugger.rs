@@ -75,7 +75,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         },
         "l" | "list" => Ok(Command::List),
         "h" | "help" | "?" => Ok(Command::Help),
-        "q" | "quit" => Ok(Command::Quit),
+        "q" | "quit" | "exit" => Ok(Command::Quit),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -443,7 +443,7 @@ print         p <arg>, print <arg>             Print a register, special registe
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 list          l, list                          Print source lines around the current PC.
 help          h, help, ?                       Show this help.
-quit          q, quit                          Exit the debugger.
+quit          q, quit, exit                    Exit the debugger.
 
 Blank input repeats the last command.";
         HELP_TEXT.lines().map(str::to_string).collect()
@@ -514,6 +514,7 @@ Sub\tSETI\t$0,3
         assert_eq!(parse_command("list"), Ok(Command::List));
         assert_eq!(parse_command("q"), Ok(Command::Quit));
         assert_eq!(parse_command("quit"), Ok(Command::Quit));
+        assert_eq!(parse_command("exit"), Ok(Command::Quit));
         assert_eq!(parse_command("h"), Ok(Command::Help));
         assert_eq!(parse_command("help"), Ok(Command::Help));
         assert_eq!(parse_command("?"), Ok(Command::Help));

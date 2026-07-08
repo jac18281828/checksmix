@@ -77,3 +77,4 @@ Shipped:
 - `do_help` method returns a static, hermetic HELP_TEXT constant documenting every command.
 - Two new hermetic unit tests: `parse_command_maps_all_forms` extended to test all three help forms (`h`, `help`, `?`), and new `help_command_lists_every_command` test verifying the help output contains all command keywords.
 - `README.md` command table updated with the `help` row.
+- Same change also added `exit` as a third synonym for `q`/`quit` (`Command::Quit` already existed, so this is purely a `parse_command` match-arm addition, no new variant). Tested via an added `parse_command_maps_all_forms` assertion; `README.md`'s `quit` row updated to `q`, `quit`, `exit`.

@@ -95,7 +95,7 @@ set (i.e. when run from Emacs's `gud-mode`).
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
 | list | `l`, `list` | Print source lines around the current PC. |
 | help | `h`, `help`, `?` | Show this help. |
-| quit | `q`, `quit` | Exit the debugger. |
+| quit | `q`, `quit`, `exit` | Exit the debugger. |
 
 Blank input repeats the last command -- most debugging is stepping.
 
