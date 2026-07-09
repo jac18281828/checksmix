@@ -1,3 +1,12 @@
+0.2.23 (2026-07-08)
+
+* New `mmixdb`: a gdb-style interactive debugger for `.mms` programs (`step`/`next`/`continue`/`run`, breakpoints by source line or label, `print` of registers/special-registers/labels/symbols/memory, `list`, `backtrace`/`info reg`, and a `help`/`h`/`?` command listing all of the above; `quit`/`q`/`exit` to leave). Supports Emacs GUD `--fullname` mode (auto-enabled under `INSIDE_EMACS`) via `contrib/mmixdb.el`
+* `MMixAssembler` gained a source-line debug-info substrate (`source_loc`, `addr_for_line`, `source_text`) underlying `mmixdb`'s breakpoints and source display
+* New `INCLUDE` directive: `INCLUDE file.mms` expands into an ordered translation unit ahead of parsing, reusing the existing multi-source assembly mechanism rather than text-splicing, so diagnostics from an included file report that file's own name and line numbers. Paths resolve relative to the including file's directory, recursively, with cycle detection
+* `GETA`/`GETAB` now validate their target is in range and correctly aligned instead of silently truncating an out-of-range offset to a wrong-but-plausible instruction; out-of-range, misaligned, or (for `GETAB`) forward targets are now a hard assembly-time error pointing at `LDA` as the alternative. Also fixes an independent `GETAB` sign/direction bug where it reused `GETA`'s signed-offset formula despite the VM decoding `GETAB`'s field as an unsigned backward-only magnitude
+* Several correctness fixes: `BYTE` escape decoding no longer emits an undocumented auto-terminator; 3-operand `LDA` is sized correctly in the pass-1 forward-reference estimator; branch offsets are divided before casting so they no longer silently truncate; `POP`'s YZ high byte survives parse and encode; backward jumps emit `JMPB` per the MMIX spec; `Program::parse_instruction` returns `Result` instead of panicking
+* `regex` bumped 1.12.3 → 1.12.4
+
 0.2.22 (2026-04-30)
 
 * PUSHJ/PUSHGO/POP now implement Knuth's register-stack window slide per MMIXware §1.4. PUSHJ $X spills $0..$X (with the marginal slot at offset X holding the value X), slides caller's $(X+1)..$(rL-1) down to callee's $0..$(rL-X-2), zeroes the freshly-allocated tail, and sets rL := saturating_sub(rL, X+1). POP n reverse-slides the callee's $0..$(n-1) into the caller's $X..$(X+n-1) (the "hole" plus the slots above it), restores the spilled frame, clears the marginal slot, and updates rL to min(rG, max(saved_rL, X+n))
