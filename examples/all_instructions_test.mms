@@ -14,6 +14,7 @@ rM      IS      5       % Multiplex mask register
 rR      IS      6       % Remainder register
 rN      IS      9       % Serial number register
 rA      IS      21      % Arithmetic status register
+rP      IS      23      % Prediction register (CSWAP/CSWAPI compare value)
 
 % Test counter and expected values
 Expect  IS      $1      % Expected value
@@ -2441,9 +2442,941 @@ Test192 ADDUI   TestNum,TestNum,1
         AND     Result,Result,$15
         SETI    Expect,#04
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test193
         PUTI    rA,0
         JMP     TestFail
+
+% ========================================
+% Test 193: ANDI - Bitwise AND immediate
+% ========================================
+Test193 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF0F
+        ANDI    Result,$10,#0F
+        SETI Expect,#0F
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test194
+        JMP     TestFail
+
+% ========================================
+% Test 194: ANDNI - Bitwise AND-NOT immediate
+% ========================================
+% *I immediates are a single byte (0-255), zero-extended -- unlike the
+% register form's $Z, which can hold any 64-bit value.
+% ========================================
+Test194 ADDUI   TestNum,TestNum,1
+        SETI $10,#FFFF
+        ANDNI   Result,$10,#0F
+        SETI Expect,#FFF0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test195
+        JMP     TestFail
+
+% ========================================
+% Test 195: ORI - Bitwise OR immediate
+% ========================================
+Test195 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF00
+        ORI     Result,$10,#FF
+        SETI Expect,#FFFF
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test196
+        JMP     TestFail
+
+% ========================================
+% Test 196: ORNI - Bitwise OR-NOT immediate
+% ========================================
+Test196 ADDUI   TestNum,TestNum,1
+        SETI $10,#F0F0
+        ORNI    Result,$10,#0F
+        SETI Expect,#FFFFFFFFFFFFFFF0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test197
+        JMP     TestFail
+
+% ========================================
+% Test 197: XORI - Bitwise XOR immediate
+% ========================================
+Test197 ADDUI   TestNum,TestNum,1
+        SETI $10,#FFFF
+        XORI    Result,$10,#F0
+        SETI Expect,#FF0F
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test198
+        JMP     TestFail
+
+% ========================================
+% Test 198: NANDI - Bitwise NAND immediate
+% ========================================
+Test198 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF
+        NANDI   Result,$10,#FF
+        SETI Expect,#FFFFFFFFFFFFFF00
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test199
+        JMP     TestFail
+
+% ========================================
+% Test 199: NORI - Bitwise NOR immediate
+% ========================================
+Test199 ADDUI   TestNum,TestNum,1
+        SETI $10,#00
+        NORI    Result,$10,#00
+        SETI Expect,#FFFFFFFFFFFFFFFF
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test200
+        JMP     TestFail
+
+% ========================================
+% Test 200: NXORI - Bitwise NXOR immediate
+% ========================================
+Test200 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF
+        NXORI   Result,$10,#FF
+        SETI Expect,#FFFFFFFFFFFFFFFF
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test201
+        JMP     TestFail
+
+% ========================================
+% Test 201: MUXI - Bitwise multiplex immediate
+% ========================================
+Test201 ADDUI   TestNum,TestNum,1
+        SETI $10,#FFFFFFFFFFFFFFFF
+        SETI $13,#FFFFFFFFFFFFFF00
+        PUT     rM,$13                  % mask: keep high 56 bits from $10
+        MUXI    Result,$10,#5A          % low byte comes from the immediate
+        SETI Expect,#FFFFFFFFFFFFFF5A
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test202
+        JMP     TestFail
+
+% ========================================
+% Test 202: DIVI - Signed divide immediate
+% ========================================
+Test202 ADDUI   TestNum,TestNum,1
+        SETI $10,17
+        DIVI    Result,$10,5
+        SETI Expect,3
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test203
+        JMP     TestFail
+
+% ========================================
+% Test 203: DIVUI - Unsigned divide immediate
+% ========================================
+Test203 ADDUI   TestNum,TestNum,1
+        PUT     rD,Zero                 % clear dividend-high (dirty since Test121)
+        SETI $10,1000
+        DIVUI   Result,$10,7
+        SETI Expect,142
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test204
+        JMP     TestFail
+
+% ========================================
+% Test 204: MULI - Signed multiply immediate
+% ========================================
+Test204 ADDUI   TestNum,TestNum,1
+        SETI $10,6
+        NEG     $10,0,$10               % $10 = -6
+        MULI    Result,$10,7
+        SETI Expect,#FFFFFFFFFFFFFFD6   % -42
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test205
+        JMP     TestFail
+
+% ========================================
+% Test 205: MULUI - Unsigned multiply immediate
+% ========================================
+Test205 ADDUI   TestNum,TestNum,1
+        SETI $10,300
+        MULUI   Result,$10,200          % Z is a single byte (0-255)
+        SETI Expect,60000
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test206
+        JMP     TestFail
+
+% ========================================
+% Test 206: CMPI - Signed compare immediate
+% ========================================
+Test206 ADDUI   TestNum,TestNum,1
+        SETI $10,5
+        NEG     $10,0,$10               % $10 = -5
+        CMPI    Result,$10,3
+        SETI Expect,#FFFFFFFFFFFFFFFF   % -1 (less than)
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test207
+        JMP     TestFail
+
+% ========================================
+% Test 207: CMPUI - Unsigned compare immediate
+% ========================================
+Test207 ADDUI   TestNum,TestNum,1
+        SETI $10,#FFFFFFFFFFFFFFFF      % huge unsigned
+        CMPUI   Result,$10,5
+        SETI Expect,1                   % greater than
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test208
+        JMP     TestFail
+
+% ========================================
+% Test 208: BDIFI - Byte difference immediate
+% ========================================
+Test208 ADDUI   TestNum,TestNum,1
+        SETI $10,#0A14
+        BDIFI   Result,$10,5
+        SETI Expect,#050F
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test209
+        JMP     TestFail
+
+% ========================================
+% Test 209: WDIFI - Wyde difference immediate
+% ========================================
+Test209 ADDUI   TestNum,TestNum,1
+        SETI $10,#0A000014
+        WDIFI   Result,$10,5
+        SETI Expect,#9FB000F
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test210
+        JMP     TestFail
+
+% ========================================
+% Test 210: TDIFI - Tetra difference immediate
+% ========================================
+Test210 ADDUI   TestNum,TestNum,1
+        SETI $10,#A00000014
+        TDIFI   Result,$10,5
+        SETI Expect,#50000000F
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test211
+        JMP     TestFail
+
+% ========================================
+% Test 211: ODIFI - Octa difference immediate
+% ========================================
+Test211 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF
+        ODIFI   Result,$10,15
+        SETI Expect,#F0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test212
+        JMP     TestFail
+
+% ========================================
+% Test 212: SADDI - Sideways add immediate
+% ========================================
+Test212 ADDUI   TestNum,TestNum,1
+        SETI $10,#FF
+        SADDI   Result,$10,#0F
+        SETI Expect,4                   % popcount(0xFF & ~0x0F) = popcount(0xF0)
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test213
+        JMP     TestFail
+
+% ========================================
+% Test 213: MOR - Multiple or (boolean matrix multiply)
+% ========================================
+Test213 ADDUI   TestNum,TestNum,1
+        SETI $10,#0101010101010101      % identity-ish row vector
+        SETI $11,#FF00000000000000      % first byte all 1s, rest 0
+        MOR     Result,$10,$11
+        SETI Expect,#0100000000000000
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test214
+        JMP     TestFail
+
+% ========================================
+% Test 214: MXOR - Multiple exclusive-or (GF(2) matrix product)
+% ========================================
+% Unlike MOR (Test213), MXOR toggles per matching k instead of breaking on
+% the first one, so an even number of (y,z) bit matches per output bit
+% cancels to 0 under XOR. $11 here has only ONE bit set per contributing
+% row (byte i=7 = 0x01, not 0xFF), giving exactly one match per output
+% bit so MOR and MXOR agree on this input.
+% ========================================
+Test214 ADDUI   TestNum,TestNum,1
+        SETI $10,#0101010101010101
+        SETI $11,#0100000000000000
+        MXOR    Result,$10,$11
+        SETI Expect,#0100000000000000
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test215
+        JMP     TestFail
+
+% ========================================
+% Test 215: SLI - Shift left immediate (signed, overflow-checked)
+% ========================================
+Test215 ADDUI   TestNum,TestNum,1
+        SETI $10,5
+        SLI     Result,$10,3
+        SETI Expect,40
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test216
+        JMP     TestFail
+
+% ========================================
+% Test 216: SLUI - Shift left unsigned immediate
+% ========================================
+Test216 ADDUI   TestNum,TestNum,1
+        SETI $10,1
+        SLUI    Result,$10,10
+        SETI Expect,1024
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test217
+        JMP     TestFail
+
+% ========================================
+% Test 217: SRI - Shift right immediate (arithmetic)
+% ========================================
+Test217 ADDUI   TestNum,TestNum,1
+        SETI $10,100
+        NEG     $10,0,$10               % $10 = -100
+        SRI     Result,$10,2
+        SETI Expect,#FFFFFFFFFFFFFFE7   % -25
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test218
+        JMP     TestFail
+
+% ========================================
+% Test 218: SRUI - Shift right unsigned immediate (logical)
+% ========================================
+Test218 ADDUI   TestNum,TestNum,1
+        SETI $10,256
+        SRUI    Result,$10,4
+        SETI Expect,16
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test219
+        JMP     TestFail
+
+% ========================================
+% Test 219: INCL - Increase by low wyde (register-number operands)
+% ========================================
+% INCL's grammar takes three register operands, but $Y and $Z's register
+% NUMBERS (not their runtime contents) are packed as the 16-bit YZ
+% immediate added to $X (src/mmixal.rs parse_inst_incl; src/encode.rs
+% INCL test asserts INCL(1,2,3) -> [0xE7,1,2,3]). Using $5,$6 here adds
+% (5<<8|6) = 1286, regardless of what those registers hold.
+% ========================================
+Test219 ADDUI   TestNum,TestNum,1
+        SETI    Result,100
+        INCL    Result,$5,$6
+        SETI    Expect,1386
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test220
+        JMP     TestFail
+
+% ========================================
+% Test 220: SET - Register-to-register copy (SET $X,$Y -> ORI $X,$Y,0)
+% ========================================
+Test220 ADDUI   TestNum,TestNum,1
+        SETI $10,#12345678
+        SET     Result,$10
+        SETI Expect,#12345678
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test221
+        JMP     TestFail
+
+% ========================================
+% Test 221: LDA - Load address, 3-operand form (register,register,imm)
+% ========================================
+% LDA's 3-operand form always assembles to the LDA-encoded opcode (0x22),
+% which has no distinct VM handler and decodes exactly like ADDU register
+% form (settled decision 11): the Z field, though written here as an
+% assembler-level immediate, is read at execution time as a REGISTER
+% INDEX, not a literal. $12's runtime value (not the literal "12") is what
+% gets added to $11. This is real coverage of LDA's actual assembler+VM
+% path, not "textbook" LDA semantics.
+% ========================================
+Test221 ADDUI   TestNum,TestNum,1
+        SETI $11,100
+        SETI $12,23             % Z field is "12" below -> reads $12's value
+        LDA     Result,$11,12
+        SETI Expect,123
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test222
+        JMP     TestFail
+
+% ========================================
+% Test 222: LDAI - Load address, 3-operand immediate form
+% ========================================
+% Unlike LDA above, LDAI's 3-operand form assembles to opcode 0x23, which
+% decodes exactly like ADDUI (immediate) -- Z really is the literal here.
+% ========================================
+Test222 ADDUI   TestNum,TestNum,1
+        SETI $14,200
+        LDAI    Result,$14,50
+        SETI Expect,250
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test223
+        JMP     TestFail
+
+% ========================================
+% Test 223: LDBI - Load byte signed immediate
+% ========================================
+Test223 ADDUI   TestNum,TestNum,1
+        GETA    $10,UncachedData
+        LDBI    Result,$10,0     % byte 0 of #FEEDFACEDEADBEEF is 0xFE
+        SETI Expect,#FFFFFFFFFFFFFFFE   % -2, sign-extended
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test224
+        JMP     TestFail
+
+% ========================================
+% Test 224: LDBU - Load byte unsigned (register)
+% ========================================
+Test224 ADDUI   TestNum,TestNum,1
+        GETA    $10,UncachedData
+        SETI $11,8               % byte 0 of the octa at offset 8 (#1234567890ABCDEF) is 0x12
+        LDBU    Result,$10,$11
+        SETI Expect,18
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test225
+        JMP     TestFail
+
+% ========================================
+% Test 225: LDBUI - Load byte unsigned immediate
+% ========================================
+Test225 ADDUI   TestNum,TestNum,1
+        GETA    $10,PreloadData
+        LDBUI   Result,$10,8     % byte 0 of the octa at offset 8 (#2222222222222222) is 0x22
+        SETI Expect,34
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test226
+        JMP     TestFail
+
+% ========================================
+% Test 226: LDW - Load wyde signed (register)
+% ========================================
+Test226 ADDUI   TestNum,TestNum,1
+        GETA    $10,VirtualData
+        SETI $11,0                % wyde 0 of #CAFEBABEFEEDFACE is 0xCAFE
+        LDW     Result,$10,$11
+        SETI Expect,#FFFFFFFFFFFFCAFE   % -13570, sign-extended
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test227
+        JMP     TestFail
+
+% ========================================
+% Test 227: LDWI - Load wyde signed immediate
+% ========================================
+Test227 ADDUI   TestNum,TestNum,1
+        GETA    $10,VirtualData
+        LDWI    Result,$10,8      % wyde 0 of the octa at offset 8 (#DEADBEEFDEADBEEF) is 0xDEAD
+        SETI Expect,#FFFFFFFFFFFFDEAD   % -8531, sign-extended
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test228
+        JMP     TestFail
+
+% ========================================
+% Test 228: LDWUI - Load wyde unsigned immediate
+% ========================================
+Test228 ADDUI   TestNum,TestNum,1
+        GETA    $10,PreloadData
+        LDWUI   Result,$10,16     % wyde 0 of the octa at offset 16 (#3333333333333333) is 0x3333
+        SETI Expect,13107
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test229
+        JMP     TestFail
+
+% ========================================
+% Test 229: LDTI - Load tetra signed immediate
+% ========================================
+Test229 ADDUI   TestNum,TestNum,1
+        GETA    $10,UncachedData
+        LDTI    Result,$10,0      % tetra 0 of #FEEDFACEDEADBEEF is 0xFEEDFACE
+        SETI Expect,#FFFFFFFFFEEDFACE   % -17958194, sign-extended
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test230
+        JMP     TestFail
+
+% ========================================
+% Test 230: LDTU - Load tetra unsigned (register)
+% ========================================
+Test230 ADDUI   TestNum,TestNum,1
+        GETA    $10,UncachedData
+        SETI $11,8                % tetra 0 of the octa at offset 8 (#1234567890ABCDEF) is 0x12345678
+        LDTU    Result,$10,$11
+        SETI Expect,305419896
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test231
+        JMP     TestFail
+
+% ========================================
+% Test 231: LDTUI - Load tetra unsigned immediate
+% ========================================
+Test231 ADDUI   TestNum,TestNum,1
+        GETA    $10,PreloadData
+        LDTUI   Result,$10,24     % tetra 0 of the octa at offset 24 (#4444444444444444) is 0x44444444
+        SETI Expect,1145324612
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test232
+        JMP     TestFail
+
+% ========================================
+% Test 232: LDOU - Load octa unsigned (register)
+% ========================================
+Test232 ADDUI   TestNum,TestNum,1
+        GETA    $10,LocalData
+        SETI $11,0
+        LDOU    Result,$10,$11
+        SETI Expect,#DEADBEEFCAFEBABE
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test233
+        JMP     TestFail
+
+% ========================================
+% Test 233: LDOUI - Load octa unsigned immediate
+% ========================================
+Test233 ADDUI   TestNum,TestNum,1
+        GETA    $10,VirtualData
+        LDOUI   Result,$10,0
+        SETI Expect,#CAFEBABEFEEDFACE
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test234
+        JMP     TestFail
+
+% ========================================
+% Test 234: STBI - Store byte immediate (signed, overflow-checked)
+% ========================================
+Test234 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#7B             % 123
+        STBI    $11,$10,0
+        LDBI    Result,$10,0
+        SETI Expect,123
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test235
+        JMP     TestFail
+
+% ========================================
+% Test 235: STBU - Store byte unsigned (register, no overflow check)
+% ========================================
+Test235 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#FF
+        SETI $12,8
+        STBU    $11,$10,$12
+        LDBU    Result,$10,$12
+        SETI Expect,255
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test236
+        JMP     TestFail
+
+% ========================================
+% Test 236: STBUI - Store byte unsigned immediate
+% ========================================
+Test236 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#80
+        STBUI   $11,$10,16
+        LDBUI   Result,$10,16
+        SETI Expect,128
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test237
+        JMP     TestFail
+
+% ========================================
+% Test 237: STWI - Store wyde immediate (signed, overflow-checked)
+% ========================================
+Test237 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#1234
+        STWI    $11,$10,24
+        LDWI    Result,$10,24
+        SETI Expect,4660
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test238
+        JMP     TestFail
+
+% ========================================
+% Test 238: STWU - Store wyde unsigned (register, no overflow check)
+% ========================================
+Test238 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#8000
+        SETI $12,32
+        STWU    $11,$10,$12
+        LDWUI   Result,$10,32
+        SETI Expect,32768
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test239
+        JMP     TestFail
+
+% ========================================
+% Test 239: STWUI - Store wyde unsigned immediate
+% ========================================
+Test239 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#ABCD
+        STWUI   $11,$10,40
+        LDWUI   Result,$10,40
+        SETI Expect,43981
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test240
+        JMP     TestFail
+
+% ========================================
+% Test 240: STTI - Store tetra immediate (signed, overflow-checked)
+% ========================================
+Test240 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#12345678
+        STTI    $11,$10,48
+        LDTI    Result,$10,48
+        SETI Expect,305419896
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test241
+        JMP     TestFail
+
+% ========================================
+% Test 241: STTU - Store tetra unsigned (register, no overflow check)
+% ========================================
+Test241 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#FFFFFFFF
+        SETI $12,56
+        STTU    $11,$10,$12
+        LDTUI   Result,$10,56
+        SETI Expect,4294967295
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test242
+        JMP     TestFail
+
+% ========================================
+% Test 242: STTUI - Store tetra unsigned immediate
+% ========================================
+Test242 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#9ABCDEF0
+        STTUI   $11,$10,64
+        LDTUI   Result,$10,64
+        SETI Expect,#9ABCDEF0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test243
+        JMP     TestFail
+
+% ========================================
+% Test 243: STOI - Store octa immediate
+% ========================================
+Test243 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#123456789ABCDEF0
+        STOI    $11,$10,72
+        LDOI    Result,$10,72
+        SETI Expect,#123456789ABCDEF0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test244
+        JMP     TestFail
+
+% ========================================
+% Test 244: STOU - Store octa unsigned (register)
+% ========================================
+Test244 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#FEDCBA9876543210
+        SETI $12,80
+        STOU    $11,$10,$12
+        LDOU    Result,$10,$12
+        SETI Expect,#FEDCBA9876543210
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test245
+        JMP     TestFail
+
+% ========================================
+% Test 245: STOUI - Store octa unsigned immediate
+% ========================================
+Test245 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,#0011223344556677
+        STOUI   $11,$10,88
+        LDOUI   Result,$10,88
+        SETI Expect,#0011223344556677
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test246
+        JMP     TestFail
+
+% ========================================
+% Test 246: STCO - Store constant octabyte (register)
+% ========================================
+Test246 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,96
+        STCO    200,$10,$11        % X=200 is a literal constant, written as a full octa
+        LDO     Result,$10,$11
+        SETI Expect,200
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test247
+        JMP     TestFail
+
+% ========================================
+% Test 247: STCOI - Store constant octabyte immediate
+% ========================================
+Test247 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        STCOI   201,$10,104        % X=201 is a literal constant, written as a full octa
+        LDOI    Result,$10,104
+        SETI Expect,201
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test248
+        JMP     TestFail
+
+% ========================================
+% Test 248: PBEV - Probable branch if even (taken)
+% ========================================
+Test248 ADDUI   TestNum,TestNum,1
+        SETI $10,8
+        SETI Result,#E00E
+        PBEV    $10,Test248Skip
+        SETI Result,#DEAD
+Test248Skip     SETI Expect,#E00E
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test249
+        JMP     TestFail
+
+% ========================================
+% Test 249: PBN - Probable branch if negative (taken)
+% ========================================
+Test249 ADDUI   TestNum,TestNum,1
+        SETI $10,5
+        NEG     $10,0,$10
+        SETI Result,#5EED
+        PBN     $10,Test249Skip
+        SETI Result,#DEAD
+Test249Skip     SETI Expect,#5EED
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test250
+        JMP     TestFail
+
+% ========================================
+% Test 250: PBNN - Probable branch if non-negative (taken)
+% ========================================
+Test250 ADDUI   TestNum,TestNum,1
+        SETI $10,0
+        SETI Result,#600D
+        PBNN    $10,Test250Skip
+        SETI Result,#DEAD
+Test250Skip     SETI Expect,#600D
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test251
+        JMP     TestFail
+
+% ========================================
+% Test 251: PBNP - Probable branch if non-positive (taken)
+% ========================================
+Test251 ADDUI   TestNum,TestNum,1
+        SETI $10,0
+        SETI Result,#7E20
+        PBNP    $10,Test251Skip
+        SETI Result,#DEAD
+Test251Skip     SETI Expect,#7E20
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test252
+        JMP     TestFail
+
+% ========================================
+% Test 252: PBOD - Probable branch if odd (taken)
+% ========================================
+Test252 ADDUI   TestNum,TestNum,1
+        SETI $10,7
+        SETI Result,#0DD0
+        PBOD    $10,Test252Skip
+        SETI Result,#DEAD
+Test252Skip     SETI Expect,#0DD0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test253
+        JMP     TestFail
+
+% ========================================
+% Test 253: PBP - Probable branch if positive (taken)
+% ========================================
+Test253 ADDUI   TestNum,TestNum,1
+        SETI $10,42
+        SETI Result,#900D
+        PBP     $10,Test253Skip
+        SETI Result,#DEAD
+Test253Skip     SETI Expect,#900D
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test254
+        JMP     TestFail
+
+% ========================================
+% Test 254: CSNP - Conditional set if non-positive (register)
+% ========================================
+Test254 ADDUI   TestNum,TestNum,1
+        SETI $10,0
+        SETI $11,55
+        CSNP    Result,$10,$11
+        SETI Expect,55
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test255
+        JMP     TestFail
+
+% ========================================
+% Test 255: ZSNP - Zero or set if non-positive (register)
+% ========================================
+Test255 ADDUI   TestNum,TestNum,1
+        SETI $10,0
+        SETI $11,66
+        ZSNP    Result,$10,$11
+        SETI Expect,66
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test256
+        JMP     TestFail
+
+% ========================================
+% Test 256: CSWAP - Compare and swap octabyte (register)
+% ========================================
+Test256 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $11,112
+        SETI $13,#1111111111111111
+        STO     $13,$10,$11       % seed memory with the "old" value
+        PUT     rP,$13            % compare register matches the seed
+        SETI $14,#2222222222222222
+        CSWAP   $14,$10,$11       % mem == rP, so swap: $14 <- 1 (success)
+        SETI Expect,1
+        CMP     Temp,$14,Expect
+        PBZ     Temp,Test256Verify
+        JMP     TestFail
+Test256Verify
+        LDO     Result,$10,$11    % memory should now hold the new value
+        SETI Expect,#2222222222222222
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test257
+        JMP     TestFail
+
+% ========================================
+% Test 257: CSWAPI - Compare and swap octabyte immediate
+% ========================================
+Test257 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SETI $13,#3333333333333333
+        STOI    $13,$10,120
+        PUT     rP,$13
+        SETI $14,#4444444444444444
+        CSWAPI  $14,$10,120
+        SETI Expect,1
+        CMP     Temp,$14,Expect
+        PBZ     Temp,Test257Verify
+        JMP     TestFail
+Test257Verify
+        LDOI    Result,$10,120
+        SETI Expect,#4444444444444444
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test258
+        JMP     TestFail
+
+% ========================================
+% Test 258: GO / GOI - Go to location (absolute jump-and-link, no stack)
+% ========================================
+Test258 ADDUI   TestNum,TestNum,1
+        GETA    $10,Test258GoTarget
+        SETI    $11,0
+        GO      $12,$10,$11       % $12 <- return addr (unused); pc <- $10+$11
+        JMP     TestFail          % unreachable: GO always jumps away
+Test258GoTarget
+        SETI    Result,#600D
+        SETI    Expect,#600D
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test258Goi
+        JMP     TestFail
+Test258Goi
+        GETA    $13,Test258GoiTarget
+        GOI     $14,$13,0         % $14 <- return addr (unused); pc <- $13+0
+        JMP     TestFail          % unreachable
+Test258GoiTarget
+        SETI    Result,#F00D
+        SETI    Expect,#F00D
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test259
+        JMP     TestFail
+
+% ========================================
+% Test 259: PUSHJ / POP - Push registers and jump, then return
+% ========================================
+% X=$5 keeps the pushed frame's marginal register clear of the harness's
+% $1-$4 (settled decision 9); POP 1,1 returns one value to $5 and skips
+% the "JMP TestFail" landing pad (target = rJ + 4*1).
+% ========================================
+Test259 ADDUI   TestNum,TestNum,1
+        PUSHJ   $5,Test259Callee
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SETI    Expect,777
+        CMP     Temp,$5,Expect
+        PBZ     Temp,Test260
+        JMP     TestFail
+Test259Callee
+        SETI    $0,777
+        POP     1,1
+
+% ========================================
+% Test 260: PUSHGO / PUSHGOI - Push registers, absolute go, then return
+% ========================================
+% PUSHJB is deliberately not tested here or anywhere else in this file --
+% see the intentional-exception block above TestPass for why (settled
+% decision 9's "flag it, don't force it" escape hatch: its assembler
+% encoding is broken for every genuinely-backward target).
+% ========================================
+Test260 ADDUI   TestNum,TestNum,1
+        GETA    $10,Test260Pg
+        SETI    $11,0
+        PUSHGO  $6,$10,$11
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SETI    Expect,999
+        CMP     Temp,$6,Expect
+        PBZ     Temp,Test260Second
+        JMP     TestFail
+Test260Pg
+        SETI    $0,999
+        POP     1,1
+Test260Second
+        GETA    $12,Test260Pgi
+        PUSHGOI $7,$12,0
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SETI    Expect,888
+        CMP     Temp,$7,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
+Test260Pgi
+        SETI    $0,888
+        POP     1,1
+
+% ========================================
+% Intentional coverage exceptions
+% ========================================
+% The following grammar-defined mnemonics are deliberately not exercised
+% above (see prompts/checksmix-prompt-corpus-coverage-audit.md, settled
+% decisions 3, 4, 9, 10 for the full rationale):
+%   TRIP    - Opcode::TRIP unconditionally returns false ("for now, just
+%             halt") with no pass/fail signal this harness can observe;
+%             unlike HALT it has no existing intentional termination point
+%             to piggyback on.
+%   SYNCD, SYNCDI, SYNCID, SYNCIDI - each handler is exactly
+%             "self.advance_pc(); true" with no observable state change at
+%             all, so no operand choice can make a CMP/PBZ against them
+%             non-vacuous.
+%   PUSHJB  - discovered while implementing this task's stack/control
+%             family (settled decision 9's "flag it, don't force it"
+%             escape hatch): the assembler's Rule::inst_pushjb handler
+%             (src/mmixal.rs, parse_inst_pushjb) computes the backward
+%             branch offset as `addr - current_addr` (negative), but
+%             Opcode::PUSHJB's VM handler (src/mmix.rs) subtracts YZ as
+%             an UNSIGNED magnitude (`pc.wrapping_sub(yz * 4)`), the same
+%             convention PUSHJB's own spec and every already-covered
+%             *B branch mnemonic use. The two's-complement low 16 bits of
+%             a negative offset, reinterpreted as unsigned, produce a
+%             wild multi-hundred-KB "backward" jump for any genuinely
+%             backward target -- there is no operand choice that avoids
+%             this, since PUSHJB by definition always targets a backward
+%             label. Reported separately per this prompt's scope-out
+%             clause (repro: LOC #100 / Main JMP Fwd / Back SETI $0,42 /
+%             POP 1,1 / Fwd PUSHJB $5,Back -- PC ends up at
+%             0xfffffffffffc0130 instead of Back's address).
+% HALT itself is not on this list: TestPass below now executes plain HALT
+% (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
+% skipped, which is real (if narrow) coverage of HALT's assembler path.
+% ========================================
 
 % ========================================
 % All tests passed!
@@ -2452,7 +3385,9 @@ TestPass        SETI $255,PassMsg
         TRAP    0,Fputs,StdOut
         SETI    Result,#FFFF    % Success marker
         SETI    $255, 0
-        TRAP    0,Halt,0        % Halt successfully
+        HALT                    % settled decision 3: byte-identical to
+                                 % TRAP 0,Halt,0, but exercises HALT's own
+                                 % assembler path (mnemonic_halt) directly
 
 % ========================================
 % Test failed
