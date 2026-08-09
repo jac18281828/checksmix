@@ -3112,9 +3112,8 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_number(parts.next().unwrap())? as u8;
-        let _comma1 = parts.next();
+        // comma is silent in grammar, not in parts
         let y = self.parse_register(parts.next().unwrap())?;
-        let _comma2 = parts.next();
         let z = self.parse_register(parts.next().unwrap())?;
         Ok(MMixInstruction::STCO(x, y, z))
     }
@@ -3126,9 +3125,8 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_number(parts.next().unwrap())? as u8;
-        let _comma1 = parts.next();
+        // comma is silent in grammar, not in parts
         let y = self.parse_register(parts.next().unwrap())?;
-        let _comma2 = parts.next();
         let z = self.parse_number(parts.next().unwrap())? as u8;
         Ok(MMixInstruction::STCOI(x, y, z))
     }
@@ -5089,26 +5087,8 @@ ZSEVI $7,$8,128
         assert_first_instruction("CSWAP $1,$2,$3", MMixInstruction::CSWAP(1, 2, 3));
         assert_first_instruction("CSWAPI $1,$2,5", MMixInstruction::CSWAPI(1, 2, 5));
 
-        // STCO/STCOI: proven at the grammar level (rule match, full input
-        // consumed) rather than through MMixAssembler::parse. Their
-        // parse_inst_stco_rrr/rri handlers mis-walk the silent `comma`
-        // token (pre-existing, unrelated to this guard, out of scope to
-        // fix here) and panic on a full assemble; that bug predates this
-        // change and reproduces identically against the pre-transform
-        // grammar, so it isn't a routing regression from the guard.
-        use pest::Parser;
-        let stco_pairs = MMixalParser::parse(Rule::inst_stco_rrr, "STCO 5,$1,$2")
-            .unwrap_or_else(|e| panic!("STCO grammar routing regressed: {e}"));
-        assert_eq!(
-            stco_pairs.into_iter().next().unwrap().as_str(),
-            "STCO 5,$1,$2"
-        );
-        let stcoi_pairs = MMixalParser::parse(Rule::inst_stco_rri, "STCOI 5,$1,7")
-            .unwrap_or_else(|e| panic!("STCOI grammar routing regressed: {e}"));
-        assert_eq!(
-            stcoi_pairs.into_iter().next().unwrap().as_str(),
-            "STCOI 5,$1,7"
-        );
+        assert_first_instruction("STCO 5,$1,$2", MMixInstruction::STCO(5, 1, 2));
+        assert_first_instruction("STCOI 5,$1,7", MMixInstruction::STCOI(5, 1, 7));
     }
 
     /// Predicate over a parsed instruction's variant, paired with source in

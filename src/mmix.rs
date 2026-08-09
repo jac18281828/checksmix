@@ -3756,15 +3756,9 @@ impl MMix {
             }
             // Jump/Stack/System instructions (§17-19) - opcodes 0xF0-0xFF
             Opcode::JMP => {
-                // JMP XYZ - Jump (unconditional)
+                // JMP XYZ - Jump (unconditional, forward, unsigned magnitude)
                 let offset = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
-                let signed_offset = if offset & 0x800000 != 0 {
-                    // Sign extend from 24 bits
-                    (offset | 0xFF000000) as i32
-                } else {
-                    offset as i32
-                };
-                self.pc = self.pc.wrapping_add((signed_offset as i64 * 4) as u64);
+                self.pc = self.pc.wrapping_add((offset as u64) * 4);
                 true
             }
             Opcode::JMPB => {
@@ -6671,13 +6665,14 @@ mod tests {
     }
 
     #[test]
-    fn test_jmp_negative_offset() {
+    fn test_jmp_large_forward_offset() {
         let mut mmix = MMix::new();
         mmix.set_pc(100);
-        // JMP -5 (offset = -5, encoded as 0xFFFFFB in 24-bit signed)
-        mmix.write_tetra(100, 0xF0FFFFFB); // JMP with offset -5
+        // XYZ = 0xFFFFFB: bit 23 is set, but JMP has no sign check, so this
+        // decodes as the unsigned magnitude 16777211, not as -5.
+        mmix.write_tetra(100, 0xF0FFFFFB); // JMP 0xFFFFFB
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 80); // PC = 100 + (-5)*4 = 80
+        assert_eq!(mmix.get_pc(), 100 + 16777211 * 4); // PC = 100 + 16777211*4
     }
 
     #[test]
@@ -7151,6 +7146,21 @@ mod tests {
         mmix.write_tetra(0, 0x01010203); // FCMP $1,$2,$3
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 2); // Unordered
+    }
+
+    #[test]
+    fn test_cmp_cmpu_signed_unsigned_divergence() {
+        let mut mmix = MMix::new();
+        // $2 has its top bit set: negative as i64, huge as u64. $3 is a
+        // small positive value. Signed and unsigned 3-way compare disagree.
+        mmix.set_register(2, 0x8000000000000000);
+        mmix.set_register(3, 1);
+        mmix.write_tetra(0, 0x30010203); // CMP $1,$2,$3
+        mmix.write_tetra(4, 0x32040203); // CMPU $4,$2,$3
+        assert!(mmix.execute_instruction());
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1); // signed: $2 < $3
+        assert_eq!(mmix.get_register(4) as i64, 1); // unsigned: $2 > $3
     }
 
     #[test]
