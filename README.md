@@ -104,6 +104,21 @@ Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
 ## Legacy MIX support
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.
 
+## Using checksmix as a library
+`checksmix` is usable as a library, independent of the three binaries above. CLI
+support (`checksmix`, `mmixasm`, `mmixdb`, and their `clap`/`rustyline`/
+`tracing-subscriber` dependencies) lives behind the `cli` feature, which is on by
+default. A library-only consumer, including `wasm32-unknown-unknown` targets, disables
+it:
+
+```toml
+# default: library + binaries
+checksmix = "0.2"
+
+# library only, no CLI deps
+checksmix = { version = "0.2", default-features = false }
+```
+
 ## Tribute
 
 Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me alot about how to think about programming and system design.
