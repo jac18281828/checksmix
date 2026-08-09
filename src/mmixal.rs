@@ -3770,6 +3770,81 @@ impl MMixAssembler {
 mod tests {
     use super::*;
 
+    // ---- Mnemonic word-boundary guard (adversarial) ------------------
+    // Every `mnemonic_*` rule now carries `~ !ASCII_ALPHANUMERIC`, mirroring
+    // `directive_*`'s existing guard, so a short mnemonic's literal can no
+    // longer match as a bare prefix of a longer one. `Rule::parse` doesn't
+    // require consuming the whole input, so before this guard each of these
+    // three calls returns `Ok` (the rule matches only its own shorter
+    // literal and stops); after the guard each must return `Err`.
+
+    #[test]
+    fn test_mnemonic_boundary_guard_rejects_prefix_match() {
+        use pest::Parser;
+
+        // GET is a literal prefix of GETA/GETAB (the flagged pair).
+        assert!(
+            MMixalParser::parse(Rule::mnemonic_get, "GETA").is_err(),
+            "mnemonic_get must not match a bare prefix of GETA"
+        );
+        // SET is a literal prefix of SETL/SETH/SETMH/SETML.
+        assert!(
+            MMixalParser::parse(Rule::mnemonic_set, "SETL").is_err(),
+            "mnemonic_set must not match a bare prefix of SETL"
+        );
+        // SYNC is a literal prefix of SYNCD/SYNCID/SYNCDI/SYNCIDI.
+        assert!(
+            MMixalParser::parse(Rule::mnemonic_sync, "SYNCD").is_err(),
+            "mnemonic_sync must not match a bare prefix of SYNCD"
+        );
+    }
+
+    // ---- Mnemonic word-boundary guard: whitespace-adjacency behavior -
+    // The guard has two known, intentional side effects on whitespace-
+    // adjacent constructs (settled decision 6). Both are real behavior
+    // changes, tested in both directions here rather than left to surface
+    // only as an unexplained corpus diff.
+
+    #[test]
+    fn test_boundary_guard_rejects_zero_whitespace_before_operand() {
+        // `ADDa,b,c` (no space between the mnemonic and its first operand)
+        // parsed as ADD with the three IS-aliased register operands before
+        // this guard -- an accident of the grammar's implicit whitespace,
+        // never legitimate MMIXAL syntax. After the guard, `ADDa` fails the
+        // `!ASCII_ALPHANUMERIC` boundary check ('a' is alphanumeric) and the
+        // line is a syntax error. A two-operand ADD is invalid on both
+        // sides of this change for unrelated reasons, so the repro must
+        // keep all three real, IS-aliased operands.
+        let source = "a IS $1\nb IS $2\nc IS $3\nMain ADDa,b,c";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        assert!(
+            asm.parse().is_err(),
+            "ADDa,b,c must be rejected now that the mnemonic requires a \
+             word boundary before its operand"
+        );
+    }
+
+    #[test]
+    fn test_boundary_guard_accepts_mnemonic_prefixed_label() {
+        // `HaltLoop` immediately followed by more source used to fail to
+        // parse as a label: unguarded `mnemonic_halt` greedily matched the
+        // "Halt" prefix of "HaltLoop" as a complete zero-operand HALT
+        // instruction before the grammar ever tried `label_def`, leaving an
+        // unparseable "Loop  ADD $1,$2,$3" remainder. After the guard,
+        // "Halt" immediately followed by 'L' (alphanumeric) fails the
+        // boundary check, `instruction` no longer matches at that position,
+        // and `label_def` correctly claims `HaltLoop` as a label.
+        let source = "HaltLoop  ADD $1,$2,$3\n  HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        assert_eq!(
+            asm.labels.get("HaltLoop"),
+            Some(&0),
+            "HaltLoop must resolve to address 0"
+        );
+    }
+
     #[test]
     fn test_parse_simple_label() {
         let mut asm = MMixAssembler::new("LOOP: HALT", "<test>");
@@ -4568,6 +4643,26 @@ ZSEVI $7,$8,128
         );
     }
 
+    /// Like `assert_first_instruction`, but for offset-bearing families
+    /// (branch/PB-branch offsets, GETA/GETAB and PUSHJ/PUSHJB PC-relative
+    /// addresses) where the exact computed value isn't what a prefix-
+    /// collision test is proving. Checks only the variant discriminant
+    /// (and any un-computed fields the predicate cares to check).
+    fn assert_first_instruction_matches(src: &str, predicate: impl Fn(&MMixInstruction) -> bool) {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e}"));
+        assert!(
+            !asm.instructions.is_empty(),
+            "no instructions produced for {src:?}"
+        );
+        assert!(
+            predicate(&asm.instructions[0].1),
+            "wrong instruction variant for {src:?}: got {:?}",
+            asm.instructions[0].1
+        );
+    }
+
     fn assert_parse_error_contains(src: &str, needle: &str) {
         let mut asm = MMixAssembler::new(src, "<test>");
         let err = asm
@@ -4784,6 +4879,13 @@ ZSEVI $7,$8,128
         assert_first_instruction("ANDN $1,$2,7", MMixInstruction::ANDNI(1, 2, 7));
         assert_first_instruction("ANDI $1,$2,7", MMixInstruction::ANDI(1, 2, 7));
         assert_first_instruction("ANDNI $1,$2,7", MMixInstruction::ANDNI(1, 2, 7));
+        // ANDN also collides with the wyde-field ANDNH/ANDNMH/ANDNML/ANDNL
+        // family (2-operand reg,imm shape, distinct from the 3-operand
+        // AND/ANDN/ANDNI forms above).
+        assert_first_instruction("ANDNH $1,5", MMixInstruction::ANDNH(1, 5));
+        assert_first_instruction("ANDNMH $1,5", MMixInstruction::ANDNMH(1, 5));
+        assert_first_instruction("ANDNML $1,5", MMixInstruction::ANDNML(1, 5));
+        assert_first_instruction("ANDNL $1,5", MMixInstruction::ANDNL(1, 5));
     }
 
     #[test]
@@ -4794,6 +4896,291 @@ ZSEVI $7,$8,128
         assert_first_instruction("ORN $1,$2,7", MMixInstruction::ORNI(1, 2, 7));
         assert_first_instruction("ORI $1,$2,7", MMixInstruction::ORI(1, 2, 7));
         assert_first_instruction("ORNI $1,$2,7", MMixInstruction::ORNI(1, 2, 7));
+        // OR also collides with the wyde-field ORH/ORMH/ORML/ORL family
+        // (2-operand reg,imm shape, distinct from the 3-operand OR/ORN/ORNI
+        // forms above).
+        assert_first_instruction("ORH $1,5", MMixInstruction::ORH(1, 5));
+        assert_first_instruction("ORMH $1,5", MMixInstruction::ORMH(1, 5));
+        assert_first_instruction("ORML $1,5", MMixInstruction::ORML(1, 5));
+        assert_first_instruction("ORL $1,5", MMixInstruction::ORL(1, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_set_family() {
+        // SET must not steal SETI's longer literal, and SETI/SETL/SETH/
+        // SETMH/SETML — five mnemonics sharing the "SET" prefix — must each
+        // route to their own variant.
+        assert_first_instruction("SET $1,$2", MMixInstruction::SETRR(1, 2));
+        assert_first_instruction("SETI $1,5", MMixInstruction::SET(1, 5));
+        assert_first_instruction("SETL $1,5", MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SETH $1,5", MMixInstruction::SETH(1, 5));
+        assert_first_instruction("SETMH $1,5", MMixInstruction::SETMH(1, 5));
+        assert_first_instruction("SETML $1,5", MMixInstruction::SETML(1, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_neg() {
+        // NEG/NEGU/NEGI/NEGUI: NEG must not steal NEGU's, NEGI's, or
+        // NEGUI's longer literal.
+        assert_first_instruction("NEG $1,5,$3", MMixInstruction::NEG(1, 5, 3));
+        assert_first_instruction("NEGU $1,5,$3", MMixInstruction::NEGU(1, 5, 3));
+        assert_first_instruction("NEGI $1,5,7", MMixInstruction::NEGI(1, 5, 7));
+        assert_first_instruction("NEGUI $1,5,7", MMixInstruction::NEGUI(1, 5, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_float_fix_flot() {
+        // FIX/FIXU and FLOT/FLOTI/FLOTU/FLOTUI and SFLOT/SFLOTI/SFLOTU/
+        // SFLOTUI: FIX must not steal FIXU's literal, FLOT must not steal
+        // FLOTU's/FLOTI's/FLOTUI's, and likewise for SFLOT.
+        assert_first_instruction("FIX $1,$2,$3", MMixInstruction::FIX(1, 2, 3));
+        assert_first_instruction("FIXU $1,$2,$3", MMixInstruction::FIXU(1, 2, 3));
+        assert_first_instruction("FLOT $1,$2,$3", MMixInstruction::FLOT(1, 2, 3));
+        assert_first_instruction("FLOTU $1,$2,$3", MMixInstruction::FLOTU(1, 2, 3));
+        assert_first_instruction("FLOTI $1,$2,5", MMixInstruction::FLOTI(1, 2, 5));
+        assert_first_instruction("FLOTUI $1,$2,5", MMixInstruction::FLOTUI(1, 2, 5));
+        assert_first_instruction("SFLOT $1,$2,$3", MMixInstruction::SFLOT(1, 2, 3));
+        assert_first_instruction("SFLOTU $1,$2,$3", MMixInstruction::SFLOTU(1, 2, 3));
+        assert_first_instruction("SFLOTI $1,$2,5", MMixInstruction::SFLOTI(1, 2, 5));
+        assert_first_instruction("SFLOTUI $1,$2,5", MMixInstruction::SFLOTUI(1, 2, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_load_store_families() {
+        // LDB/LDW/LDT/LDO and STB/STW/STT/STO each have a U sibling (LDBU,
+        // ...) and an I sibling (LDBI, ...) and a UI sibling (LDBUI, ...);
+        // the base mnemonic must not steal any of them.
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("LDB $1,$2,$3", MMixInstruction::LDB(1, 2, 3)),
+            ("LDBU $1,$2,$3", MMixInstruction::LDBU(1, 2, 3)),
+            ("LDBI $1,$2,5", MMixInstruction::LDBI(1, 2, 5)),
+            ("LDBUI $1,$2,5", MMixInstruction::LDBUI(1, 2, 5)),
+            ("LDW $1,$2,$3", MMixInstruction::LDW(1, 2, 3)),
+            ("LDWU $1,$2,$3", MMixInstruction::LDWU(1, 2, 3)),
+            ("LDWI $1,$2,5", MMixInstruction::LDWI(1, 2, 5)),
+            ("LDWUI $1,$2,5", MMixInstruction::LDWUI(1, 2, 5)),
+            ("LDT $1,$2,$3", MMixInstruction::LDT(1, 2, 3)),
+            ("LDTU $1,$2,$3", MMixInstruction::LDTU(1, 2, 3)),
+            ("LDTI $1,$2,5", MMixInstruction::LDTI(1, 2, 5)),
+            ("LDTUI $1,$2,5", MMixInstruction::LDTUI(1, 2, 5)),
+            ("LDO $1,$2,$3", MMixInstruction::LDO(1, 2, 3)),
+            ("LDOU $1,$2,$3", MMixInstruction::LDOU(1, 2, 3)),
+            ("LDOI $1,$2,5", MMixInstruction::LDOI(1, 2, 5)),
+            ("LDOUI $1,$2,5", MMixInstruction::LDOUI(1, 2, 5)),
+            ("STB $1,$2,$3", MMixInstruction::STB(1, 2, 3)),
+            ("STBU $1,$2,$3", MMixInstruction::STBU(1, 2, 3)),
+            ("STBI $1,$2,5", MMixInstruction::STBI(1, 2, 5)),
+            ("STBUI $1,$2,5", MMixInstruction::STBUI(1, 2, 5)),
+            ("STW $1,$2,$3", MMixInstruction::STW(1, 2, 3)),
+            ("STWU $1,$2,$3", MMixInstruction::STWU(1, 2, 3)),
+            ("STWI $1,$2,5", MMixInstruction::STWI(1, 2, 5)),
+            ("STWUI $1,$2,5", MMixInstruction::STWUI(1, 2, 5)),
+            ("STT $1,$2,$3", MMixInstruction::STT(1, 2, 3)),
+            ("STTU $1,$2,$3", MMixInstruction::STTU(1, 2, 3)),
+            ("STTI $1,$2,5", MMixInstruction::STTI(1, 2, 5)),
+            ("STTUI $1,$2,5", MMixInstruction::STTUI(1, 2, 5)),
+            ("STO $1,$2,$3", MMixInstruction::STO(1, 2, 3)),
+            ("STOU $1,$2,$3", MMixInstruction::STOU(1, 2, 3)),
+            ("STOI $1,$2,5", MMixInstruction::STOI(1, 2, 5)),
+            ("STOUI $1,$2,5", MMixInstruction::STOUI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_prefix_robust_lda() {
+        // LDA must not steal LDAI's longer literal.
+        assert_first_instruction("LDA $1,$2,5", MMixInstruction::LDA(1, 2, 5));
+        assert_first_instruction("LDAI $1,$2,5", MMixInstruction::LDAI(1, 2, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_get_geta_getab() {
+        // GET must not swallow the "GET" prefix of GETA/GETAB, and GETA
+        // must not swallow GETAB's. GETA/GETAB carry a computed PC-relative
+        // offset, so only the variant discriminant (and the un-computed X
+        // register) is checked here, per the offset-bearing-family note.
+        assert_first_instruction("GET $1,0", MMixInstruction::GET(1, 0));
+        assert_first_instruction_matches("GETA $0,4", |i| {
+            matches!(i, MMixInstruction::GETA(0, _, _))
+        });
+        let source = "LOC #100\nBACK: HALT\nGETAB $0,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        assert!(matches!(
+            asm.instructions[1].1,
+            MMixInstruction::GETAB(0, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_prefix_robust_go_pushgo() {
+        // GO/GOI and PUSHGO/PUSHGOI: the base mnemonic must not steal its
+        // *I sibling's literal.
+        assert_first_instruction("GO $1,$2,$3", MMixInstruction::GO(1, 2, 3));
+        assert_first_instruction("GOI $1,$2,5", MMixInstruction::GOI(1, 2, 5));
+        assert_first_instruction("PUSHGO $1,$2,$3", MMixInstruction::PUSHGO(1, 2, 3));
+        assert_first_instruction("PUSHGOI $1,$2,5", MMixInstruction::PUSHGOI(1, 2, 5));
+    }
+
+    #[test]
+    fn test_prefix_robust_pushj() {
+        // PUSHJ must not steal PUSHJB's longer literal. Both carry a
+        // computed offset, so only the discriminant and X register are
+        // checked (offset-bearing-family note).
+        assert_first_instruction_matches("PUSHJ $1,4", |i| {
+            matches!(i, MMixInstruction::PUSHJ(1, _, _))
+        });
+        let source = "LOC #100\nBACK: HALT\nPUSHJB $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        assert!(matches!(
+            asm.instructions[1].1,
+            MMixInstruction::PUSHJB(1, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_prefix_robust_put() {
+        // PUT must not steal PUTI's longer literal.
+        assert_first_instruction("PUT 5,$1", MMixInstruction::PUT(5, 1));
+        assert_first_instruction("PUTI 5,7", MMixInstruction::PUTI(5, 7));
+    }
+
+    #[test]
+    fn test_prefix_robust_prefetch_and_sync() {
+        // PREGO/PRELD/PREST/SYNCD/SYNCID each have an *I sibling, and SYNC
+        // itself is a literal prefix of SYNCD/SYNCDI/SYNCID/SYNCIDI.
+        assert_first_instruction("PREGO $1,$2,$3", MMixInstruction::PREGO(1, 2, 3));
+        assert_first_instruction("PREGOI $1,$2,5", MMixInstruction::PREGOI(1, 2, 5));
+        assert_first_instruction("PRELD $1,$2,$3", MMixInstruction::PRELD(1, 2, 3));
+        assert_first_instruction("PRELDI $1,$2,5", MMixInstruction::PRELDI(1, 2, 5));
+        assert_first_instruction("PREST $1,$2,$3", MMixInstruction::PREST(1, 2, 3));
+        assert_first_instruction("PRESTI $1,$2,5", MMixInstruction::PRESTI(1, 2, 5));
+        assert_first_instruction("SYNCD $1,$2,$3", MMixInstruction::SYNCD(1, 2, 3));
+        assert_first_instruction("SYNCDI $1,$2,5", MMixInstruction::SYNCDI(1, 2, 5));
+        assert_first_instruction("SYNCID $1,$2,$3", MMixInstruction::SYNCID(1, 2, 3));
+        assert_first_instruction("SYNCIDI $1,$2,5", MMixInstruction::SYNCIDI(1, 2, 5));
+        assert_first_instruction("SYNC 5", MMixInstruction::SYNC(5));
+    }
+
+    #[test]
+    fn test_prefix_robust_extra_load_store() {
+        // LDUNC/STUNC/LDHT/STHT/LDSF/STSF/LDVTS/CSWAP/STCO each have an *I
+        // sibling; the base mnemonic must not steal it.
+        assert_first_instruction("LDUNC $1,$2,$3", MMixInstruction::LDUNC(1, 2, 3));
+        assert_first_instruction("LDUNCI $1,$2,5", MMixInstruction::LDUNCI(1, 2, 5));
+        assert_first_instruction("STUNC $1,$2,$3", MMixInstruction::STUNC(1, 2, 3));
+        assert_first_instruction("STUNCI $1,$2,5", MMixInstruction::STUNCI(1, 2, 5));
+        assert_first_instruction("LDHT $1,$2,$3", MMixInstruction::LDHT(1, 2, 3));
+        assert_first_instruction("LDHTI $1,$2,5", MMixInstruction::LDHTI(1, 2, 5));
+        assert_first_instruction("STHT $1,$2,$3", MMixInstruction::STHT(1, 2, 3));
+        assert_first_instruction("STHTI $1,$2,5", MMixInstruction::STHTI(1, 2, 5));
+        assert_first_instruction("LDSF $1,$2,$3", MMixInstruction::LDSF(1, 2, 3));
+        assert_first_instruction("LDSFI $1,$2,5", MMixInstruction::LDSFI(1, 2, 5));
+        assert_first_instruction("STSF $1,$2,$3", MMixInstruction::STSF(1, 2, 3));
+        assert_first_instruction("STSFI $1,$2,5", MMixInstruction::STSFI(1, 2, 5));
+        assert_first_instruction("LDVTS $1,$2,$3", MMixInstruction::LDVTS(1, 2, 3));
+        assert_first_instruction("LDVTSI $1,$2,5", MMixInstruction::LDVTSI(1, 2, 5));
+        assert_first_instruction("CSWAP $1,$2,$3", MMixInstruction::CSWAP(1, 2, 3));
+        assert_first_instruction("CSWAPI $1,$2,5", MMixInstruction::CSWAPI(1, 2, 5));
+
+        // STCO/STCOI: proven at the grammar level (rule match, full input
+        // consumed) rather than through MMixAssembler::parse. Their
+        // parse_inst_stco_rrr/rri handlers mis-walk the silent `comma`
+        // token (pre-existing, unrelated to this guard, out of scope to
+        // fix here) and panic on a full assemble; that bug predates this
+        // change and reproduces identically against the pre-transform
+        // grammar, so it isn't a routing regression from the guard.
+        use pest::Parser;
+        let stco_pairs = MMixalParser::parse(Rule::inst_stco_rrr, "STCO 5,$1,$2")
+            .unwrap_or_else(|e| panic!("STCO grammar routing regressed: {e}"));
+        assert_eq!(
+            stco_pairs.into_iter().next().unwrap().as_str(),
+            "STCO 5,$1,$2"
+        );
+        let stcoi_pairs = MMixalParser::parse(Rule::inst_stco_rri, "STCOI 5,$1,7")
+            .unwrap_or_else(|e| panic!("STCOI grammar routing regressed: {e}"));
+        assert_eq!(
+            stcoi_pairs.into_iter().next().unwrap().as_str(),
+            "STCOI 5,$1,7"
+        );
+    }
+
+    /// Predicate over a parsed instruction's variant, paired with source in
+    /// the `branch`/`pbranch` family tests below (offset-bearing, so the
+    /// exact value isn't what those tests are proving).
+    type InstructionPredicate = fn(&MMixInstruction) -> bool;
+
+    #[test]
+    fn test_prefix_robust_branch_family() {
+        // BN/BNB/BNN/BNNB/BNP/BNPB/BNZ/BNZB/BEV/BEVB/BOD/BODB/BP/BPB/BZ/BZB:
+        // every short mnemonic in this family is a literal prefix of at
+        // least one longer sibling. Offsets are computed, so only the
+        // discriminant and X register are checked.
+        let cases: &[(&str, InstructionPredicate)] = &[
+            ("BN $1,4", |i| matches!(i, MMixInstruction::BN(1, _))),
+            ("BNB $1,4", |i| matches!(i, MMixInstruction::BNB(1, _))),
+            ("BNN $1,4", |i| matches!(i, MMixInstruction::BNN(1, _))),
+            ("BNNB $1,4", |i| matches!(i, MMixInstruction::BNNB(1, _))),
+            ("BNP $1,4", |i| matches!(i, MMixInstruction::BNP(1, _))),
+            ("BNPB $1,4", |i| matches!(i, MMixInstruction::BNPB(1, _))),
+            ("BNZ $1,4", |i| matches!(i, MMixInstruction::BNZ(1, _))),
+            ("BNZB $1,4", |i| matches!(i, MMixInstruction::BNZB(1, _))),
+            ("BEV $1,4", |i| matches!(i, MMixInstruction::BEV(1, _))),
+            ("BEVB $1,4", |i| matches!(i, MMixInstruction::BEVB(1, _))),
+            ("BOD $1,4", |i| matches!(i, MMixInstruction::BOD(1, _))),
+            ("BODB $1,4", |i| matches!(i, MMixInstruction::BODB(1, _))),
+            ("BP $1,4", |i| matches!(i, MMixInstruction::BP(1, _))),
+            ("BPB $1,4", |i| matches!(i, MMixInstruction::BPB(1, _))),
+            ("BZ $1,4", |i| matches!(i, MMixInstruction::BZ(1, _))),
+            ("BZB $1,4", |i| matches!(i, MMixInstruction::BZB(1, _))),
+        ];
+        for (src, pred) in cases {
+            assert_first_instruction_matches(src, pred);
+        }
+    }
+
+    #[test]
+    fn test_prefix_robust_pbranch_family() {
+        // Same collision shape as the branch family above, one level up
+        // (PBN/PBNB/PBNN/...). Offsets are computed, so only the
+        // discriminant and X register are checked.
+        let cases: &[(&str, InstructionPredicate)] = &[
+            ("PBN $1,4", |i| matches!(i, MMixInstruction::PBN(1, _, _))),
+            ("PBNB $1,4", |i| matches!(i, MMixInstruction::PBNB(1, _, _))),
+            ("PBNN $1,4", |i| matches!(i, MMixInstruction::PBNN(1, _, _))),
+            ("PBNNB $1,4", |i| {
+                matches!(i, MMixInstruction::PBNNB(1, _, _))
+            }),
+            ("PBNP $1,4", |i| matches!(i, MMixInstruction::PBNP(1, _, _))),
+            ("PBNPB $1,4", |i| {
+                matches!(i, MMixInstruction::PBNPB(1, _, _))
+            }),
+            ("PBNZ $1,4", |i| matches!(i, MMixInstruction::PBNZ(1, _, _))),
+            ("PBNZB $1,4", |i| {
+                matches!(i, MMixInstruction::PBNZB(1, _, _))
+            }),
+            ("PBEV $1,4", |i| matches!(i, MMixInstruction::PBEV(1, _, _))),
+            ("PBEVB $1,4", |i| {
+                matches!(i, MMixInstruction::PBEVB(1, _, _))
+            }),
+            ("PBOD $1,4", |i| matches!(i, MMixInstruction::PBOD(1, _, _))),
+            ("PBODB $1,4", |i| {
+                matches!(i, MMixInstruction::PBODB(1, _, _))
+            }),
+            ("PBP $1,4", |i| matches!(i, MMixInstruction::PBP(1, _, _))),
+            ("PBPB $1,4", |i| matches!(i, MMixInstruction::PBPB(1, _, _))),
+            ("PBZ $1,4", |i| matches!(i, MMixInstruction::PBZ(1, _, _))),
+            ("PBZB $1,4", |i| matches!(i, MMixInstruction::PBZB(1, _, _))),
+        ];
+        for (src, pred) in cases {
+            assert_first_instruction_matches(src, pred);
+        }
     }
 
     #[test]
