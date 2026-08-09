@@ -105,19 +105,22 @@ Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.
 
 ## Using checksmix as a library
-`checksmix` is usable as a library, independent of the three binaries above. CLI
-support (`checksmix`, `mmixasm`, `mmixdb`, and their `clap`/`rustyline`/
-`tracing-subscriber` dependencies) lives behind the `cli` feature, which is on by
-default. A library-only consumer, including `wasm32-unknown-unknown` targets, disables
-it:
+`checksmix` is usable as a library, independent of the three binaries above. The
+`clap`, `rustyline`, and `tracing-subscriber` dependencies the CLIs need live behind
+the `cli` feature, which is on by default. A library-only consumer — notably one
+targeting `wasm32-unknown-unknown`, where `rustyline` does not build — turns it off.
+Available from 0.2.24; earlier versions have no features and always pull the CLI tree.
 
 ```toml
-# default: library + binaries
-checksmix = "0.2"
+# default — library plus the CLI dependency tree
+checksmix = "0.2.24"
 
-# library only, no CLI deps
-checksmix = { version = "0.2", default-features = false }
+# library only
+checksmix = { version = "0.2.24", default-features = false }
 ```
+
+Either form gives you the library. The `checksmix`, `mmixasm`, and `mmixdb`
+executables come from `cargo install checksmix`, not from a `[dependencies]` entry.
 
 ## Tribute
 
