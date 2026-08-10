@@ -3311,6 +3311,7 @@ Test259 ADDUI   TestNum,TestNum,1
 Test259Callee
         SETI    $0,777
         POP     1,1
+        JMP     TestFail          % only reached if POP fails to return
 
 % ========================================
 % Test 260: PUSHGO / PUSHGOI - Push registers, absolute go, then return
@@ -3332,6 +3333,7 @@ Test260 ADDUI   TestNum,TestNum,1
 Test260Pg
         SETI    $0,999
         POP     1,1
+        JMP     TestFail          % only reached if POP fails to return
 Test260Second
         GETA    $12,Test260Pgi
         PUSHGOI $7,$12,0
@@ -3343,6 +3345,7 @@ Test260Second
 Test260Pgi
         SETI    $0,888
         POP     1,1
+        JMP     TestFail          % only reached if POP fails to return
 
 % ========================================
 % Intentional coverage exceptions
