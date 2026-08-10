@@ -2531,6 +2531,7 @@ Test199 ADDUI   TestNum,TestNum,1
 % ========================================
 Test200 ADDUI   TestNum,TestNum,1
         SETI $10,#FF
+        SETI    Result,0
         NXORI   Result,$10,#FF
         SETI Expect,#FFFFFFFFFFFFFFFF
         CMP     Temp,Result,Expect
@@ -2698,6 +2699,7 @@ Test213 ADDUI   TestNum,TestNum,1
 Test214 ADDUI   TestNum,TestNum,1
         SETI $10,#0101010101010101
         SETI $11,#0100000000000000
+        SETI    Result,0
         MXOR    Result,$10,$11
         SETI Expect,#0100000000000000
         CMP     Temp,Result,Expect
