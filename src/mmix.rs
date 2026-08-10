@@ -491,6 +491,105 @@ impl SpecialReg {
     }
 }
 
+/// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
+/// the wall clock, and diagnostic messages that today go to stderr.
+///
+/// `MMix::new()` installs `StdHost`, reproducing today's process behavior
+/// exactly. `MMix::with_host` accepts any `Box<dyn Host>`, which is how an
+/// embedder (a wasm host with no stdout, a test harness that wants to
+/// inspect bytes rather than print them) captures what the machine emits
+/// instead of losing it to the process.
+///
+/// File-descriptor traps (`Fopen`/`Fclose`/`Fread`/`Fgets`/`Fgetws`/
+/// `Fwrite`/`Fseek`/`Ftell`, and fd 3+ of `Fputs`/`Fputc`/`Fputws`) do not go
+/// through the host — they keep using `std::fs` directly and fail naturally
+/// on platforms without a filesystem.
+///
+/// `flush` and `trap` have no-op defaults, so an embedder implements only
+/// what it needs. The trait is object-safe: it is always used as
+/// `Box<dyn Host>`.
+///
+/// `MMix::with_host` consumes the `Box<dyn Host>` and offers no way to get
+/// it back. A host that wants its caller to read what it captured owns its
+/// buffers behind a shared handle — `Rc<RefCell<Vec<u8>>>` or similar —
+/// cloned *before* the host is boxed, so the caller keeps one clone and the
+/// `MMix` owns the other.
+pub trait Host {
+    /// Write raw bytes to file descriptor `fd` (only 1 or 2 reach the
+    /// host — see the trait docs). Returns `Ok(())` on success, matching
+    /// `write_all`; callers store `bytes.len()` in `$255` on success rather
+    /// than a partial-write count.
+    fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()>;
+
+    /// Flush any buffered output. Called after `Halt`, mirroring the
+    /// process exiting without running destructors. No-op by default.
+    fn flush(&mut self) {}
+
+    /// The current time in microseconds since the Unix epoch. The only
+    /// clock primitive `MMix` needs — `handle_time` derives seconds and
+    /// milliseconds from it by division.
+    fn now_micros(&mut self) -> u64;
+
+    /// Report an operator-facing diagnostic message (an unhandled trap
+    /// code, a truncated string, a HALT/TRIP notice). `StdHost` sends these
+    /// to stderr via `eprintln!`.
+    fn diagnostic(&mut self, msg: &str);
+
+    /// Observe a trap after `handle_trap`'s dispatch has run, with `$255`
+    /// captured both before and after. No-op by default.
+    ///
+    /// `arg255` and `result255` do not mean the same thing for every trap:
+    /// - `Halt` never writes `$255`, so `result255` is simply the exit code
+    ///   the program supplied in `$255` before the trap, echoed back.
+    /// - `Trip` never writes `$255` either, so `arg255` and `result255` are
+    ///   both whatever `$255` happened to hold — before and after are equal.
+    /// - `Time` takes its unit in `arg` (the Z operand), not in `$255`, so
+    ///   `arg255` is stale on entry and only `result255` reflects the trap.
+    ///
+    /// An embedder rendering a trap log should read these three cases
+    /// before trusting `arg255`/`result255` at face value.
+    fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
+        let _ = (code, arg, arg255, result255);
+    }
+}
+
+/// The `Host` behind `MMix::new()`: reproduces today's process I/O exactly
+/// — locked `stdout`/`stderr` writes, `stdout().flush()` on halt,
+/// `SystemTime` for the clock, and `eprintln!` for diagnostics.
+///
+/// `write_bytes_to_fd` only ever calls `Host::write` with fd 1 or 2 (fd 3+
+/// stays on `file_handles`), but `StdHost` is a general `Host`
+/// implementation, so it treats any other fd as an error rather than
+/// assuming that invariant.
+pub struct StdHost;
+
+impl Host for StdHost {
+    fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+        match fd {
+            1 => stdout().lock().write_all(bytes),
+            2 => stderr().lock().write_all(bytes),
+            _ => Err(std::io::Error::other(format!(
+                "StdHost: unsupported file descriptor {fd}"
+            ))),
+        }
+    }
+
+    fn flush(&mut self) {
+        let _ = stdout().flush();
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64
+    }
+
+    fn diagnostic(&mut self, msg: &str) {
+        eprintln!("{msg}");
+    }
+}
+
 /// The MMIX computer architecture.
 ///
 /// MMIX has:
@@ -561,6 +660,11 @@ pub struct MMix {
 
     /// Exit code from HALT trap (to be returned as process exit code)
     exit_code: u64,
+
+    /// Where process-level effects (writes, the clock, diagnostics, trap
+    /// events) go. `MMix::new()` installs `StdHost`; `MMix::with_host`
+    /// installs anything else.
+    host: Box<dyn Host>,
 }
 
 impl Default for MMix {
@@ -570,8 +674,17 @@ impl Default for MMix {
 }
 
 impl MMix {
-    /// Create a new MMIX computer with all registers and memory initialized to zero.
+    /// Create a new MMIX computer with all registers and memory initialized
+    /// to zero, and process I/O routed through `StdHost` — today's behavior,
+    /// unchanged.
     pub fn new() -> Self {
+        Self::with_host(Box::new(StdHost))
+    }
+
+    /// Create a new MMIX computer with all registers and memory initialized
+    /// to zero, routing every process-level write, the clock, diagnostics,
+    /// and trap events through `host` instead of the process.
+    pub fn with_host(host: Box<dyn Host>) -> Self {
         let mut mmix = Self {
             general_regs: [0; 256],
             special_regs: [0; 32],
@@ -581,6 +694,7 @@ impl MMix {
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
+            host,
         };
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
@@ -1247,7 +1361,8 @@ impl MMix {
     /// Handle TRAP system calls
     /// Returns true if execution should continue, false if halted
     fn handle_trap(&mut self, trap_code: TrapCode, arg: u8) -> bool {
-        match trap_code {
+        let arg255 = self.get_register(255);
+        let result = match trap_code {
             TrapCode::Halt => self.handle_halt(arg),
             TrapCode::Trip => self.handle_trip(arg),
             TrapCode::Fopen => self.handle_fopen(arg),
@@ -1262,7 +1377,10 @@ impl MMix {
             TrapCode::Fseek => self.handle_fseek(arg),
             TrapCode::Ftell => self.handle_ftell(arg),
             TrapCode::Time => self.handle_time(arg),
-        }
+        };
+        let result255 = self.get_register(255);
+        self.host.trap(trap_code, arg, arg255, result255);
+        result
     }
 
     /// TRAP 0: Halt - stop execution
@@ -1274,8 +1392,11 @@ impl MMix {
         // Flush stdout: process::exit will not run destructors, so any
         // buffered output from earlier Fputs/Fputc/Fputws calls would
         // otherwise be discarded when stdout is piped to a non-tty.
-        let _ = stdout().flush();
-        eprintln!("HALT trap at PC={:#018x}, exit code={}", self.pc, exit_code);
+        self.host.flush();
+        self.host.diagnostic(&format!(
+            "HALT trap at PC={:#018x}, exit code={}",
+            self.pc, exit_code
+        ));
         self.advance_pc();
         false
     }
@@ -1288,10 +1409,10 @@ impl MMix {
         let handler_addr = self.get_special(SpecialReg::RTT);
 
         if handler_addr == 0 {
-            eprintln!(
+            self.host.diagnostic(&format!(
                 "TRIP trap at PC={:#018x} - rTT not set, treating as NOP",
                 self.pc
-            );
+            ));
             self.advance_pc();
             return true;
         }
@@ -1589,7 +1710,7 @@ impl MMix {
     /// Bytes are returned verbatim (no UTF-8 widening). Truncated at `max_len`
     /// bytes if no NUL is found, with a warning. Walks memory using wrapping
     /// arithmetic so str_addr near u64::MAX cannot panic.
-    fn read_byte_string(&self, str_addr: u64, max_len: usize, label: &str) -> Vec<u8> {
+    fn read_byte_string(&mut self, str_addr: u64, max_len: usize, label: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut addr = str_addr;
         loop {
@@ -1599,7 +1720,8 @@ impl MMix {
             }
             bytes.push(byte);
             if bytes.len() >= max_len {
-                eprintln!("Warning: {} string too long, truncating", label);
+                self.host
+                    .diagnostic(&format!("Warning: {} string too long, truncating", label));
                 break;
             }
             addr = addr.wrapping_add(1);
@@ -1608,13 +1730,12 @@ impl MMix {
     }
 
     /// Write raw bytes to the destination identified by an MMIX file
-    /// descriptor: 1 = stdout, 2 = stderr, anything else looked up in
-    /// `file_handles`. `write_all` retries on short writes; the inner
-    /// stdout/stderr handle is locked once for the whole payload.
+    /// descriptor: 1 and 2 go through the installed `Host` (locked
+    /// stdout/stderr writes for `StdHost`); anything else is looked up in
+    /// `file_handles`, whose retry and locking behavior is `std::fs::File`'s.
     fn write_bytes_to_fd(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
         match fd {
-            1 => stdout().lock().write_all(bytes),
-            2 => stderr().lock().write_all(bytes),
+            1 | 2 => self.host.write(fd, bytes),
             _ => match self.file_handles.get_mut(&fd) {
                 Some(file) => file.write_all(bytes),
                 None => Err(std::io::Error::other("file descriptor not open")),
@@ -1758,14 +1879,12 @@ impl MMix {
     }
 
     fn handle_time(&mut self, unit: u8) -> bool {
-        let start = SystemTime::UNIX_EPOCH;
-        let now = SystemTime::now();
-        let duration = now.duration_since(start).unwrap_or_default();
+        let micros = self.host.now_micros();
 
         let time_value = match unit {
-            0 => duration.as_secs(),          // Seconds (default)
-            1 => duration.as_millis() as u64, // Milliseconds
-            2 => duration.as_micros() as u64, // Microseconds
+            0 => micros / 1_000_000, // Seconds (default)
+            1 => micros / 1_000,     // Milliseconds
+            2 => micros,             // Microseconds
             _ => {
                 debug!("Invalid time unit: {}", unit);
                 0
@@ -1819,7 +1938,10 @@ impl MMix {
                         Some(trap) => self.handle_trap(trap, z),
                         None => {
                             debug!(trap_code = y, arg = z, "TRAP: Unhandled trap code");
-                            eprintln!("Unhandled TRAP code {} at PC={:#018x}", y, self.pc);
+                            self.host.diagnostic(&format!(
+                                "Unhandled TRAP code {} at PC={:#018x}",
+                                y, self.pc
+                            ));
                             self.advance_pc();
                             true
                         }
@@ -1831,10 +1953,10 @@ impl MMix {
                         let z_val = self.get_register(z);
                         (y_val << 32) | z_val
                     };
-                    eprintln!(
+                    self.host.diagnostic(&format!(
                         "Register TRAP x={} y=$ {} z=$ {} val=0x{:016X} at PC={:#018x}",
                         x, y, z, trap_val, self.pc
-                    );
+                    ));
                     self.set_special(SpecialReg::RBB, trap_val);
                     self.advance_pc();
                     false // Halt by default for unhandled register traps
@@ -3930,7 +4052,8 @@ impl MMix {
             Opcode::TRIP => {
                 // TRIP XYZ - Software interrupt
                 // For now, just halt
-                eprintln!("TRIP instruction at PC={:#018x}", self.pc);
+                self.host
+                    .diagnostic(&format!("TRIP instruction at PC={:#018x}", self.pc));
                 false
             }
         }
@@ -3945,10 +4068,10 @@ impl MMix {
         while self.execute_instruction() {
             count += 1;
         }
-        eprintln!(
+        self.host.diagnostic(&format!(
             "Execution stopped at PC={:#018x} after {} instructions",
             self.pc, count
-        );
+        ));
         debug!(instruction_count = count, "Execution completed");
         count
     }
@@ -4049,6 +4172,95 @@ impl MMix {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// What a `CaptureHost` records, shared with the test via `CaptureHandle`.
+    #[derive(Default)]
+    struct CaptureLog {
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        diagnostics: Vec<String>,
+        traps: Vec<(TrapCode, u8, u64, u64)>,
+    }
+
+    /// A clone of a `CaptureHost`'s buffers, held by the test after the host
+    /// is boxed and moved into `MMix::with_host`.
+    #[derive(Clone, Default)]
+    struct CaptureHandle(Rc<RefCell<CaptureLog>>);
+
+    impl CaptureHandle {
+        fn stdout(&self) -> Vec<u8> {
+            self.0.borrow().stdout.clone()
+        }
+
+        fn stderr(&self) -> Vec<u8> {
+            self.0.borrow().stderr.clone()
+        }
+
+        fn diagnostics(&self) -> Vec<String> {
+            self.0.borrow().diagnostics.clone()
+        }
+
+        fn traps(&self) -> Vec<(TrapCode, u8, u64, u64)> {
+            self.0.borrow().traps.clone()
+        }
+    }
+
+    /// A `Host` that records writes, diagnostics, and trap events instead of
+    /// sending them to the process, and reports a fixed clock rather than
+    /// `SystemTime::now()`.
+    struct CaptureHost {
+        log: Rc<RefCell<CaptureLog>>,
+        clock_micros: u64,
+    }
+
+    impl CaptureHost {
+        fn new() -> (Self, CaptureHandle) {
+            let log = Rc::new(RefCell::new(CaptureLog::default()));
+            let handle = CaptureHandle(log.clone());
+            (
+                Self {
+                    log,
+                    clock_micros: 0,
+                },
+                handle,
+            )
+        }
+
+        fn with_clock(clock_micros: u64) -> (Self, CaptureHandle) {
+            let (mut host, handle) = Self::new();
+            host.clock_micros = clock_micros;
+            (host, handle)
+        }
+    }
+
+    impl Host for CaptureHost {
+        fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+            let mut log = self.log.borrow_mut();
+            match fd {
+                1 => log.stdout.extend_from_slice(bytes),
+                2 => log.stderr.extend_from_slice(bytes),
+                _ => return Err(std::io::Error::other("CaptureHost: unsupported fd")),
+            }
+            Ok(())
+        }
+
+        fn now_micros(&mut self) -> u64 {
+            self.clock_micros
+        }
+
+        fn diagnostic(&mut self, msg: &str) {
+            self.log.borrow_mut().diagnostics.push(msg.to_string());
+        }
+
+        fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
+            self.log
+                .borrow_mut()
+                .traps
+                .push((code, arg, arg255, result255));
+        }
+    }
 
     #[test]
     fn test_mmix_new() {
@@ -8187,7 +8399,8 @@ mod tests {
 
     #[test]
     fn test_trap_fputs_stdout() {
-        let mut mmix = MMix::new();
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(Box::new(host));
         let test_string = b"Hello, MMIX!\0";
         let str_addr = 1000u64;
 
@@ -8201,11 +8414,14 @@ mod tests {
         assert!(should_continue);
         assert_eq!(mmix.get_pc(), 4);
         assert_eq!(mmix.get_register(255), 12); // bytes written
+        assert_eq!(handle.stdout(), b"Hello, MMIX!");
+        assert!(handle.stderr().is_empty());
     }
 
     #[test]
     fn test_trap_fputs_stderr() {
-        let mut mmix = MMix::new();
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(Box::new(host));
         let test_string = b"Error message\0";
         let str_addr = 2000u64;
 
@@ -8219,22 +8435,27 @@ mod tests {
         assert!(should_continue);
         assert_eq!(mmix.get_pc(), 4);
         assert_eq!(mmix.get_register(255), 13);
+        assert_eq!(handle.stderr(), b"Error message");
+        assert!(handle.stdout().is_empty());
     }
 
     #[test]
     fn test_trap_fputc_stdout() {
-        let mut mmix = MMix::new();
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(Box::new(host));
         mmix.set_register(255, b'X' as u64);
         mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), 1 (stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success (return code 0 in $255)
         assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(handle.stdout(), b"X");
     }
 
     #[test]
     fn test_trap_fputws() {
-        let mut mmix = MMix::new();
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(Box::new(host));
         // TRAP 0, Fputws, 1 (write wide string to stdout)
         let test_string = b"Wide string\0";
         let str_addr = 3000u64;
@@ -8248,6 +8469,42 @@ mod tests {
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 11); // Character count returned in $255
+        assert_eq!(handle.stdout(), b"Wide string");
+    }
+
+    #[test]
+    fn test_host_trap_hook_reports_arg_and_both_255_values() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(Box::new(host));
+        let test_string = b"Hi\0";
+        let str_addr = 4000u64;
+
+        for (i, &byte) in test_string.iter().enumerate() {
+            mmix.write_byte(str_addr + i as u64, byte);
+        }
+
+        mmix.set_register(255, str_addr);
+        mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputs (8), 1 (stdout)
+        assert!(mmix.execute_instruction());
+
+        let traps = handle.traps();
+        assert_eq!(traps.len(), 1);
+        let (code, arg, arg255, result255) = traps[0];
+        assert_eq!(code, TrapCode::Fputs);
+        assert_eq!(arg, 1); // fd 1 (stdout)
+        assert_eq!(arg255, str_addr); // $255 before: the string address
+        assert_eq!(result255, 2); // $255 after: the byte count
+        assert!(handle.diagnostics().is_empty()); // a clean write logs no diagnostic
+    }
+
+    #[test]
+    fn test_injected_clock_drives_handle_time() {
+        let (host, _handle) = CaptureHost::with_clock(5_000_000); // 5s since epoch
+        let mut mmix = MMix::with_host(Box::new(host));
+        mmix.write_tetra(0, 0x00000D00); // TRAP 0, Time (13), unit=0 (seconds)
+        let should_continue = mmix.execute_instruction();
+        assert!(should_continue);
+        assert_eq!(mmix.get_register(255), 5);
     }
 
     #[test]

@@ -10,7 +10,7 @@ mod mmo;
 
 pub use debugger::{Command, Debugger, parse_command};
 pub use mix::Mix;
-pub use mmix::{MMix, SpecialReg, ValueFormat};
+pub use mmix::{Host, MMix, SpecialReg, StdHost, TrapCode, ValueFormat};
 pub use mmixal::{MMixAssembler, SourceLoc};
 pub use mmo::{MmoDecoder, MmoGenerator};
 

@@ -48,7 +48,9 @@ Before marking work complete, run and report:
 2. `cargo fmt --check`
 3. `cargo clippy --all-targets --all-features --no-deps -- -D warnings`
 4. All tests pass (unit, doc, and integration)
-5. `checksmix run examples/all_instructions_test.mms` ends with `All tests passed!` and exit code 0
+5. `checksmix run examples/all_instructions_test.mms` prints `All tests passed!` and exits 0
+6. `cargo check --lib --no-default-features --target wasm32-unknown-unknown`
+7. `cargo test --no-default-features`
 
 Do not mark work complete until all gates pass.
 
