@@ -520,10 +520,9 @@ impl SpecialReg {
 /// *before* the host is moved in, so the caller keeps one clone and the
 /// `MMix` owns the other.
 ///
-/// Because `MMix` stores the host as `Box<dyn Host>`, `MMix` is neither
-/// `Send` nor `Sync`. This is deliberate: the intended embedders are
-/// single-threaded (a browser playground, a test harness) and their natural
-/// capture buffer is `Rc<RefCell<_>>`, which a `Send` bound would forbid.
+/// Because `MMix` stores the host as `Box<dyn Host>`, it is none of `Send`,
+/// `Sync`, `UnwindSafe`, or `RefUnwindSafe` — see the [`MMix`] docs for why
+/// that is deliberate.
 ///
 /// ```
 /// use checksmix::{Host, MMix, TrapCode};
@@ -673,22 +672,7 @@ impl Host for StdHost {
     }
 }
 
-/// The MMIX computer architecture.
-///
-/// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore none of `Send`,
-/// `Sync`, `UnwindSafe`, or `RefUnwindSafe`. This is deliberate: the intended
-/// embedders are single-threaded and capture into `Rc<RefCell<_>>`, which a
-/// `Send` bound would forbid. Move the program, not the machine — construct
-/// an `MMix` on the thread that runs it, and wrap it in
-/// `std::panic::AssertUnwindSafe` to put one through `catch_unwind`.
-///
-/// MMIX has:
-/// - 256 general-purpose registers ($0-$255), each holding 64 bits (an octabyte)
-/// - 32 special-purpose registers (rA-rZ, rBB, rTT, rWW, rXX, rYY, rZZ)
-/// - 2^64 bytes of virtual memory
-///
-/// Instructions are tetrybytes (4 bytes) with format: OP X Y Z
-/// where OP is the opcode and X, Y, Z are operands.
+/// One frame's bookkeeping on the register stack.
 ///
 /// # Register Stack (MMIXware §1.4 / Knuth)
 ///
@@ -719,6 +703,25 @@ struct FrameInfo {
     saved_rj: u64,
 }
 
+/// The MMIX computer architecture.
+///
+/// MMIX has:
+/// - 256 general-purpose registers ($0-$255), each holding 64 bits (an octabyte)
+/// - 32 special-purpose registers (rA-rZ, rBB, rTT, rWW, rXX, rYY, rZZ)
+/// - 2^64 bytes of virtual memory
+///
+/// Instructions are tetrybytes (4 bytes) with format: OP X Y Z
+/// where OP is the opcode and X, Y, Z are operands.
+///
+/// # Thread safety
+///
+/// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore none of `Send`,
+/// `Sync`, `UnwindSafe`, or `RefUnwindSafe` — a change from 0.2.23, where it
+/// was all four. This is deliberate: the intended embedders are
+/// single-threaded and capture into `Rc<RefCell<_>>`, which a `Send` bound
+/// would forbid. Move the program, not the machine — construct an `MMix` on
+/// the thread that runs it, and wrap it in `std::panic::AssertUnwindSafe` to
+/// put one through `catch_unwind`.
 pub struct MMix {
     /// 256 general-purpose registers, each 64 bits
     general_regs: [u64; 256],
@@ -775,9 +778,17 @@ impl MMix {
     /// to zero, routing every process-level write, the clock, diagnostics,
     /// and trap events through `host` instead of the process.
     ///
-    /// The resulting `MMix` is neither `Send` nor `Sync` — see the [`Host`]
-    /// trait docs.
+    /// The resulting `MMix` is none of `Send`, `Sync`, `UnwindSafe`, or
+    /// `RefUnwindSafe` — see the [`MMix`] docs.
     pub fn with_host<H: Host + 'static>(host: H) -> Self {
+        Self::blank(Box::new(host))
+    }
+
+    /// A machine in its starting state, owning `host`. The single place every
+    /// field is named, so construction and [`MMix::reset`] cannot disagree
+    /// about what "fresh" means — adding a field to `MMix` fails to compile
+    /// here rather than silently surviving a reset.
+    fn blank(host: Box<dyn Host>) -> Self {
         let mut mmix = Self {
             general_regs: [0; 256],
             special_regs: [0; 32],
@@ -787,33 +798,28 @@ impl MMix {
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
-            host: Box::new(host),
+            host,
         };
         mmix.initialize();
         mmix
     }
 
-    /// Return the machine to its freshly-constructed state — registers,
-    /// memory, program counter, call frames, and open file handles — while
+    /// Return the machine to its freshly-constructed state — every register,
+    /// all of memory, the program counter, the call-frame stack, open file
+    /// handles, the next descriptor to allocate, and the exit code — while
     /// keeping the installed [`Host`].
     ///
     /// A caller that injected a host to capture output needs this: dropping
-    /// the machine and building another would take the host with it, and
-    /// only the machine's state is stale between runs.
+    /// the machine and building another would take the host with it, and only
+    /// the machine's state is stale between runs. The host's own buffers are
+    /// untouched, so a host that accumulates sees successive runs appended;
+    /// clear them through your own handle if that is not what you want.
     pub fn reset(&mut self) {
-        self.general_regs = [0; 256];
-        self.special_regs = [0; 32];
-        self.memory.clear();
-        self.pc = 0;
-        self.frame_info_stack.clear();
-        self.file_handles.clear();
-        self.next_fd = 3;
-        self.exit_code = 0;
-        self.initialize();
+        let host = std::mem::replace(&mut self.host, Box::new(StdHost));
+        *self = Self::blank(host);
     }
 
-    /// The special-register values a machine starts life with, shared by
-    /// construction and [`MMix::reset`] so the two cannot drift.
+    /// The special-register values a machine starts life with.
     fn initialize(&mut self) {
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
@@ -8639,6 +8645,53 @@ mod tests {
         assert_eq!(handle.flushes(), 1);
         assert!(handle.stderr().is_empty()); // no stray fd-2 write alongside it
         assert_eq!(handle.traps(), vec![(TrapCode::Halt, 0, 42, 42)]);
+    }
+
+    #[test]
+    fn test_reset_restores_a_dirtied_machine_and_keeps_the_host() {
+        let (host, handle) = CaptureHost::with_clock(11);
+        let mut mmix = MMix::with_host(host);
+
+        // Dirty every field a hermetic test can reach. File handles need a
+        // real file, so `file_handles`/`next_fd` are covered by `blank`'s
+        // exhaustive struct literal rather than here.
+        for reg in 0..=255u8 {
+            mmix.set_register(reg, 0xDEAD_0000 | u64::from(reg));
+        }
+        mmix.set_special(SpecialReg::RA, 0x1234);
+        mmix.set_special(SpecialReg::RG, 200);
+        mmix.write_tetra(0x4000, 0xFFFF_FFFF);
+        mmix.set_pc(0x4000);
+        mmix.set_register(255, 77);
+        mmix.write_tetra(0x4000, 0x00000000); // TRAP 0, Halt -> sets exit_code
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_exit_code(), 77);
+
+        mmix.reset();
+
+        let fresh = MMix::new();
+        for reg in 0..=255u8 {
+            assert_eq!(mmix.get_register(reg), fresh.get_register(reg), "$#{reg}");
+        }
+        for spec in [
+            SpecialReg::RA,
+            SpecialReg::RG,
+            SpecialReg::RL,
+            SpecialReg::RN,
+            SpecialReg::RO,
+            SpecialReg::RS,
+        ] {
+            assert_eq!(mmix.get_special(spec), fresh.get_special(spec), "{spec:?}");
+        }
+        assert_eq!(mmix.get_pc(), fresh.get_pc());
+        assert_eq!(mmix.get_exit_code(), fresh.get_exit_code());
+        assert_eq!(mmix.read_tetra(0x4000), fresh.read_tetra(0x4000));
+
+        // The host survives, and is still the injected one.
+        mmix.set_register(255, u64::from(b'A'));
+        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc, fd 1
+        assert!(mmix.execute_instruction());
+        assert_eq!(handle.stdout(), b"A");
     }
 
     #[test]

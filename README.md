@@ -148,9 +148,17 @@ let out = Rc::new(RefCell::new(Vec::new()));
 let mut mmix = MMix::with_host(Capture(out.clone()));
 ```
 
-Clone the buffer handle *before* moving the host in — `with_host` consumes it.
-An `MMix` holds its host as `Box<dyn Host>` and so is neither `Send` nor
-`Sync`; construct it on the thread that runs it.
+Clone the buffer handle *before* moving the host in — `with_host` consumes it
+and hands back no way to reach it again.
+
+`Debugger::load_with_host` takes a host the same way, for programs you want to
+step through rather than run straight out. `Debugger::load` installs `StdHost`,
+so a debugged program's output goes to the process and never reaches you.
+
+An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
+`UnwindSafe`, or `RefUnwindSafe` — a change from 0.2.23, where it was all
+four. Construct one on the thread that runs it, and wrap it in
+`std::panic::AssertUnwindSafe` to put it through `catch_unwind`.
 
 ## Tribute
 

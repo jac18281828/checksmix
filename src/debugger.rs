@@ -504,11 +504,16 @@ Sub\tSETI\t$0,3
 \tPOP\t0,0
 ";
 
-    /// Writes `Hi` to stdout, then halts.
+    /// Writes `Hi` to fd 1, then halts.
+    ///
+    /// Uses the literal 1 rather than the `StdOut` symbol: `StdOut` resolves
+    /// through `stdio_raw_identifiers`, which yields a raw handle on Windows
+    /// rather than 1, and only fd 1 and 2 reach the host. These tests are
+    /// about host routing, not symbol resolution.
     const GREETING_PROGRAM: &str = "\
 \tLOC\t#100
 Main\tLDA\t$255,Text
-\tTRAP\t0,Fputs,StdOut
+\tTRAP\t0,Fputs,1
 \tTRAP\t0,Halt,0
 Text\tBYTE\t\"Hi\",0
 ";
@@ -538,7 +543,7 @@ Text\tBYTE\t\"Hi\",0
     }
 
     #[test]
-    fn run_resets_the_machine_but_keeps_the_host() {
+    fn a_second_run_reaches_the_same_host() {
         let recorder = Recorder::default();
         let mut debugger =
             Debugger::load_with_host(assemble(GREETING_PROGRAM, "hi.mms"), recorder.clone());
