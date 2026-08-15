@@ -7,7 +7,7 @@
 //! that reads lines (via `rustyline`), calls `parse_command` and
 //! `Debugger::execute`, and prints the result.
 
-use crate::mmix::{MMix, SpecialReg, ValueFormat};
+use crate::mmix::{Host, MMix, SpecialReg, ValueFormat};
 use crate::mmixal::{MMixAssembler, SymbolType};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -159,8 +159,8 @@ fn entry_point(assembler: &MMixAssembler) -> u64 {
 /// The gdb-style debugger core: owns the loaded `MMix`, the `MMixAssembler`
 /// (for the source map and symbol tables), breakpoints, and REPL state.
 ///
-/// Holding an `MMix` makes `Debugger` neither `Send` nor `Sync` — see the
-/// [`MMix`] docs.
+/// Holding an `MMix` makes `Debugger` none of `Send`, `Sync`, `UnwindSafe`,
+/// or `RefUnwindSafe` — see the [`MMix`] docs.
 pub struct Debugger {
     mmix: MMix,
     assembler: MMixAssembler,
@@ -177,7 +177,22 @@ impl Debugger {
     /// every instruction's bytes to memory, then resolve the entry point)
     /// and set PC there.
     pub fn load(assembler: MMixAssembler) -> Debugger {
-        let mut mmix = MMix::new();
+        Self::with_machine(MMix::new(), assembler)
+    }
+
+    /// Load an assembled program into a machine whose process-level effects
+    /// go to `host` rather than the process — the entry point an embedder
+    /// needs, since [`Debugger::load`] installs [`crate::StdHost`] and offers
+    /// no way to reach the output afterwards.
+    ///
+    /// `Command::Run` resets the machine between runs but keeps the host, so
+    /// a host that accumulates output sees every run appended. Clear the
+    /// host's buffers between runs if that is not what you want.
+    pub fn load_with_host<H: Host + 'static>(assembler: MMixAssembler, host: H) -> Debugger {
+        Self::with_machine(MMix::with_host(host), assembler)
+    }
+
+    fn with_machine(mut mmix: MMix, assembler: MMixAssembler) -> Debugger {
         write_image(&mut mmix, &assembler);
         let entry = entry_point(&assembler);
         mmix.set_pc(entry);
@@ -240,7 +255,7 @@ impl Debugger {
     }
 
     fn reset(&mut self) {
-        self.mmix = MMix::new();
+        self.mmix.reset();
         write_image(&mut self.mmix, &self.assembler);
         self.mmix.set_pc(self.entry);
     }
@@ -488,6 +503,50 @@ Main\tPUSHJ\t$0,Sub
 Sub\tSETI\t$0,3
 \tPOP\t0,0
 ";
+
+    /// Writes `Hi` to stdout, then halts.
+    const GREETING_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tLDA\t$255,Text
+\tTRAP\t0,Fputs,StdOut
+\tTRAP\t0,Halt,0
+Text\tBYTE\t\"Hi\",0
+";
+
+    /// Records what a program writes to stdout, shared with the test.
+    #[derive(Clone, Default)]
+    struct Recorder(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl Host for Recorder {
+        fn write(&mut self, _fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(())
+        }
+        fn now_micros(&mut self) -> u64 {
+            0
+        }
+        fn diagnostic(&mut self, _msg: &str) {}
+    }
+
+    #[test]
+    fn load_with_host_routes_program_output_to_the_host() {
+        let recorder = Recorder::default();
+        let mut debugger =
+            Debugger::load_with_host(assemble(GREETING_PROGRAM, "hi.mms"), recorder.clone());
+        debugger.execute(Command::Run);
+        assert_eq!(&*recorder.0.borrow(), b"Hi");
+    }
+
+    #[test]
+    fn run_resets_the_machine_but_keeps_the_host() {
+        let recorder = Recorder::default();
+        let mut debugger =
+            Debugger::load_with_host(assemble(GREETING_PROGRAM, "hi.mms"), recorder.clone());
+        debugger.execute(Command::Run);
+        debugger.execute(Command::Run);
+        // A second run reaches the same host rather than a fresh StdHost.
+        assert_eq!(&*recorder.0.borrow(), b"HiHi");
+    }
 
     #[test]
     fn parse_command_maps_all_forms() {

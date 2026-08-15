@@ -608,6 +608,12 @@ pub trait Host {
 
 /// Lets a caller that already holds a boxed host — one selected at runtime
 /// from several types, say — pass it to `MMix::with_host` directly.
+///
+/// There is deliberately no matching impl for `&mut H`. Both `Box` and `&mut`
+/// are `#[fundamental]`, so downstream may implement `Host` for either and a
+/// blanket impl added later could collide — but `with_host` takes `H: 'static`
+/// by value, so a borrowed host is only usable when the borrow is `'static`,
+/// which is rare enough not to buy the surface.
 impl<H: Host + ?Sized> Host for Box<H> {
     fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
         (**self).write(fd, bytes)
@@ -669,11 +675,12 @@ impl Host for StdHost {
 
 /// The MMIX computer architecture.
 ///
-/// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore neither `Send`
-/// nor `Sync`. This is deliberate: the intended embedders are
-/// single-threaded and capture into `Rc<RefCell<_>>`, which a `Send` bound
-/// would forbid. Move the program, not the machine — construct an `MMix` on
-/// the thread that runs it.
+/// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore none of `Send`,
+/// `Sync`, `UnwindSafe`, or `RefUnwindSafe`. This is deliberate: the intended
+/// embedders are single-threaded and capture into `Rc<RefCell<_>>`, which a
+/// `Send` bound would forbid. Move the program, not the machine — construct
+/// an `MMix` on the thread that runs it, and wrap it in
+/// `std::panic::AssertUnwindSafe` to put one through `catch_unwind`.
 ///
 /// MMIX has:
 /// - 256 general-purpose registers ($0-$255), each holding 64 bits (an octabyte)
@@ -782,21 +789,46 @@ impl MMix {
             exit_code: 0,
             host: Box::new(host),
         };
+        mmix.initialize();
+        mmix
+    }
+
+    /// Return the machine to its freshly-constructed state — registers,
+    /// memory, program counter, call frames, and open file handles — while
+    /// keeping the installed [`Host`].
+    ///
+    /// A caller that injected a host to capture output needs this: dropping
+    /// the machine and building another would take the host with it, and
+    /// only the machine's state is stale between runs.
+    pub fn reset(&mut self) {
+        self.general_regs = [0; 256];
+        self.special_regs = [0; 32];
+        self.memory.clear();
+        self.pc = 0;
+        self.frame_info_stack.clear();
+        self.file_handles.clear();
+        self.next_fd = 3;
+        self.exit_code = 0;
+        self.initialize();
+    }
+
+    /// The special-register values a machine starts life with, shared by
+    /// construction and [`MMix::reset`] so the two cannot drift.
+    fn initialize(&mut self) {
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
-        mmix.set_special(SpecialReg::RN, 2009);
+        self.set_special(SpecialReg::RN, 2009);
         // Initialize rG (global threshold register) - registers $rG..$255 are global
         // With no GREG declarations, rG=32
-        mmix.set_special(SpecialReg::RG, 32);
+        self.set_special(SpecialReg::RG, 32);
         // Initialize rL (local threshold register) - number of local registers in use
         // Start with 0, will be updated by PUSHJ/POP
-        mmix.set_special(SpecialReg::RL, 0);
+        self.set_special(SpecialReg::RL, 0);
         // Initialize rO (register stack offset) - base address of register stack in memory
         // Use segment 6 per MMIX convention: 0x6000000000000000
-        mmix.set_special(SpecialReg::RO, 0x6000000000000000);
+        self.set_special(SpecialReg::RO, 0x6000000000000000);
         // Initialize rS (register stack pointer) - depth in octabytes
-        mmix.set_special(SpecialReg::RS, 0);
-        mmix
+        self.set_special(SpecialReg::RS, 0);
     }
 
     /// Get the value of a general-purpose register.
@@ -8607,6 +8639,41 @@ mod tests {
         assert_eq!(handle.flushes(), 1);
         assert!(handle.stderr().is_empty()); // no stray fd-2 write alongside it
         assert_eq!(handle.traps(), vec![(TrapCode::Halt, 0, 42, 42)]);
+    }
+
+    #[test]
+    fn test_boxed_host_delegates_every_method() {
+        let (host, handle) = CaptureHost::with_clock(7_000_000);
+        let boxed: Box<dyn Host> = Box::new(host);
+        let mut mmix = MMix::with_host(boxed);
+
+        mmix.set_register(255, u64::from(b'Z'));
+        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), fd 1 -> write
+        assert!(mmix.execute_instruction());
+
+        mmix.set_pc(4);
+        mmix.write_tetra(4, 0x00000D00); // TRAP 0, Time (13), unit 0 -> now_micros
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(255), 7);
+
+        mmix.set_pc(8);
+        mmix.set_register(255, 9);
+        mmix.write_tetra(8, 0x00000000); // TRAP 0, Halt (0) -> flush + diagnostic
+        assert!(!mmix.execute_instruction());
+
+        // One assertion per trait method, so a missed delegation names itself.
+        assert_eq!(handle.stdout(), b"Z"); // write
+        assert_eq!(handle.flushes(), 1); // flush
+        assert_eq!(handle.diagnostics().len(), 1); // diagnostic
+        assert_eq!(
+            handle.traps(),
+            vec![
+                (TrapCode::Fputc, 1, u64::from(b'Z'), 0),
+                // $255 enters Time as 0: Fputc stored 0 there on success.
+                (TrapCode::Time, 0, 0, 7),
+                (TrapCode::Halt, 0, 9, 9),
+            ]
+        ); // trap
     }
 
     #[test]
