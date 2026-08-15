@@ -109,18 +109,48 @@ Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
 `clap`, `rustyline`, and `tracing-subscriber` dependencies the CLIs need live behind
 the `cli` feature, which is on by default. A library-only consumer — notably one
 targeting `wasm32-unknown-unknown`, where `rustyline` does not build — turns it off.
-Available from 0.2.24; earlier versions have no features and always pull the CLI tree.
+Available from 0.3.0; earlier versions have no features and always pull the CLI tree.
 
 ```toml
 # default — library plus the CLI dependency tree
-checksmix = "0.2.24"
+checksmix = "0.3"
 
 # library only
-checksmix = { version = "0.2.24", default-features = false }
+checksmix = { version = "0.3", default-features = false }
 ```
 
 Either form gives you the library. The `checksmix`, `mmixasm`, and `mmixdb`
 executables come from `cargo install checksmix`, not from a `[dependencies]` entry.
+
+### Capturing what a program emits
+
+By default an `MMix` writes to the process's stdout and stderr. Implement
+`Host` to intercept that instead — what the program writes, the clock behind
+the `Time` trap, diagnostics, and every recognized `TRAP`:
+
+```rust
+use checksmix::{Host, MMix};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Capture(Rc<RefCell<Vec<u8>>>);
+
+impl Host for Capture {
+    fn write(&mut self, _fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(())
+    }
+    fn now_micros(&mut self) -> u64 { 0 }
+    fn diagnostic(&mut self, _msg: &str) {}
+}
+
+let out = Rc::new(RefCell::new(Vec::new()));
+let mut mmix = MMix::with_host(Capture(out.clone()));
+```
+
+Clone the buffer handle *before* moving the host in — `with_host` consumes it.
+An `MMix` holds its host as `Box<dyn Host>` and so is neither `Send` nor
+`Sync`; construct it on the thread that runs it.
 
 ## Tribute
 
