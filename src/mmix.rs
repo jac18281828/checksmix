@@ -524,6 +524,40 @@ impl SpecialReg {
 /// `Send` nor `Sync`. This is deliberate: the intended embedders are
 /// single-threaded (a browser playground, a test harness) and their natural
 /// capture buffer is `Rc<RefCell<_>>`, which a `Send` bound would forbid.
+///
+/// ```
+/// use checksmix::{Host, MMix, TrapCode};
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+///
+/// struct Capture(Rc<RefCell<Vec<u8>>>);
+///
+/// impl Host for Capture {
+///     fn write(&mut self, _fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+///         self.0.borrow_mut().extend_from_slice(bytes);
+///         Ok(())
+///     }
+///     fn now_micros(&mut self) -> u64 { 0 }
+///     fn diagnostic(&mut self, _msg: &str) {}
+///     fn trap(&mut self, code: TrapCode, _arg: u8, _before: u64, _after: u64) {
+///         // TrapCode is #[non_exhaustive]: a wildcard arm is required
+///         match code {
+///             TrapCode::Fputc => {}
+///             _ => {}
+///         }
+///     }
+/// }
+///
+/// // Keep one clone of the buffer; the machine owns the other.
+/// let out = Rc::new(RefCell::new(Vec::new()));
+/// let mut mmix = MMix::with_host(Capture(out.clone()));
+///
+/// mmix.set_register(255, u64::from(b'X'));
+/// mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), fd 1
+/// mmix.execute_instruction();
+///
+/// assert_eq!(&*out.borrow(), b"X");
+/// ```
 pub trait Host {
     /// Write raw bytes to file descriptor `fd` (only 1 or 2 reach the
     /// host — see the trait docs). Returns `Ok(())` on success, matching
@@ -533,9 +567,9 @@ pub trait Host {
 
     /// Flush any buffered output. `Halt` is the only event that calls this,
     /// mirroring the process exiting without running destructors — a
-    /// program that stops via register-form `TRAP` or `TRIP` never reaches
-    /// it, and `MMix` has no `Drop`. A host must not rely on `flush` for
-    /// correctness. No-op by default.
+    /// program that stops via register-form `TRAP` or the `TRIP`
+    /// instruction never reaches it, and `MMix` has no `Drop`. A host must
+    /// not rely on `flush` for correctness. No-op by default.
     fn flush(&mut self) {}
 
     /// The current time in microseconds since the Unix epoch. The only
@@ -551,9 +585,9 @@ pub trait Host {
     /// Observe a trap after `handle_trap`'s dispatch has run, with `$255`
     /// captured both before and after. No-op by default.
     ///
-    /// Only recognized trap codes reach this hook. An unhandled code, and
-    /// the register form of `TRAP` (`X != 0`, which halts the machine),
-    /// report through `diagnostic` instead.
+    /// Only recognized trap codes reach this hook. An unhandled code, the
+    /// register form of `TRAP` (`X != 0`, which halts the machine), and the
+    /// `TRIP` instruction all report through `diagnostic` instead.
     ///
     /// `arg255` and `result255` do not mean the same thing for every trap:
     /// - `Halt` never writes `$255`, so `result255` is simply the exit code
@@ -565,10 +599,34 @@ pub trait Host {
     /// - `Fputc` and `Fclose` leave a status in `result255` (0 on success,
     ///   `-1` as an unsigned octabyte on failure), not a count or a value.
     ///
-    /// An embedder rendering a trap log should read these three cases
+    /// An embedder rendering a trap log should read these four cases
     /// before trusting `arg255`/`result255` at face value.
     fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
         let _ = (code, arg, arg255, result255);
+    }
+}
+
+/// Lets a caller that already holds a boxed host — one selected at runtime
+/// from several types, say — pass it to `MMix::with_host` directly.
+impl<H: Host + ?Sized> Host for Box<H> {
+    fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+        (**self).write(fd, bytes)
+    }
+
+    fn flush(&mut self) {
+        (**self).flush()
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        (**self).now_micros()
+    }
+
+    fn diagnostic(&mut self, msg: &str) {
+        (**self).diagnostic(msg)
+    }
+
+    fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
+        (**self).trap(code, arg, arg255, result255)
     }
 }
 
@@ -610,6 +668,12 @@ impl Host for StdHost {
 }
 
 /// The MMIX computer architecture.
+///
+/// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore neither `Send`
+/// nor `Sync`. This is deliberate: the intended embedders are
+/// single-threaded and capture into `Rc<RefCell<_>>`, which a `Send` bound
+/// would forbid. Move the program, not the machine — construct an `MMix` on
+/// the thread that runs it.
 ///
 /// MMIX has:
 /// - 256 general-purpose registers ($0-$255), each holding 64 bits (an octabyte)
@@ -706,8 +770,7 @@ impl MMix {
     ///
     /// The resulting `MMix` is neither `Send` nor `Sync` — see the [`Host`]
     /// trait docs.
-    pub fn with_host(host: impl Host + 'static) -> Self {
-        let host: Box<dyn Host> = Box::new(host);
+    pub fn with_host<H: Host + 'static>(host: H) -> Self {
         let mut mmix = Self {
             general_regs: [0; 256],
             special_regs: [0; 32],
@@ -717,7 +780,7 @@ impl MMix {
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
-            host,
+            host: Box::new(host),
         };
         // Initialize rN (serial number register) to a default value
         // The MMIX specification says this should be a unique machine serial number
@@ -8542,7 +8605,8 @@ mod tests {
             vec!["HALT trap at PC=0x0000000000000000, exit code=42".to_string()]
         );
         assert_eq!(handle.flushes(), 1);
-        assert!(handle.stderr().is_empty()); // the diagnostic is not a fd-2 write
+        assert!(handle.stderr().is_empty()); // no stray fd-2 write alongside it
+        assert_eq!(handle.traps(), vec![(TrapCode::Halt, 0, 42, 42)]);
     }
 
     #[test]

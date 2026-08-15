@@ -158,6 +158,9 @@ fn entry_point(assembler: &MMixAssembler) -> u64 {
 
 /// The gdb-style debugger core: owns the loaded `MMix`, the `MMixAssembler`
 /// (for the source map and symbol tables), breakpoints, and REPL state.
+///
+/// Holding an `MMix` makes `Debugger` neither `Send` nor `Sync` — see the
+/// [`MMix`] docs.
 pub struct Debugger {
     mmix: MMix,
     assembler: MMixAssembler,
