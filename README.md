@@ -156,7 +156,7 @@ step through rather than run straight out. `Debugger::load` installs `StdHost`,
 so a debugged program's output goes to the process and never reaches you.
 
 An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
-`UnwindSafe`, or `RefUnwindSafe` — a change from 0.2.23, where it was all
+`UnwindSafe`, or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that — a change from 0.2.23, where it was all
 four. Construct one on the thread that runs it, and wrap it in
 `std::panic::AssertUnwindSafe` to put it through `catch_unwind`.
 

@@ -522,8 +522,9 @@ impl SpecialReg {
 /// `MMix` owns the other.
 ///
 /// Because `MMix` stores the host as `Box<dyn Host>`, it is none of `Send`,
-/// `Sync`, `UnwindSafe`, or `RefUnwindSafe` — see the [`MMix`] docs for why
-/// that is deliberate.
+/// `Sync`, `UnwindSafe`, or `RefUnwindSafe`. The intended embedders are
+/// single-threaded — a browser playground, a test harness — and capture into
+/// `Rc<RefCell<_>>`; see the [`MMix`] docs.
 ///
 /// ```
 /// use checksmix::{Host, MMix, TrapCode};
@@ -8685,18 +8686,26 @@ mod tests {
         let (host, handle) = CaptureHost::with_clock(11);
         let mut mmix = MMix::with_host(host);
 
-        // Dirty every field a hermetic test can reach. File handles need a
-        // real file, so `file_handles`/`next_fd` are covered by `blank`'s
-        // exhaustive struct literal rather than here.
+        // Dirty seven of the nine fields. `file_handles` and `next_fd` need a
+        // real file, so they are left to `blank`'s exhaustive struct literal.
+        const SCRATCH: u64 = 0x5000; // never executed, so nothing overwrites it
         for reg in 0..=255u8 {
             mmix.set_register(reg, 0xDEAD_0000 | u64::from(reg));
         }
         mmix.set_special(SpecialReg::RA, 0x1234);
         mmix.set_special(SpecialReg::RG, 200);
-        mmix.write_tetra(0x4000, 0xFFFF_FFFF);
+        mmix.write_tetra(SCRATCH, 0xFFFF_FFFF);
+        assert_ne!(mmix.read_tetra(SCRATCH), 0, "memory must start dirty");
+
+        // A real PUSHJ, so `frame_info_stack` is genuinely non-empty.
         mmix.set_pc(0x4000);
+        mmix.write_tetra(0x4000, 0xF2_02_00_01); // PUSHJ $2, forward 1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 1, "PUSHJ must push a frame");
+
+        mmix.set_pc(0x4100);
         mmix.set_register(255, 77);
-        mmix.write_tetra(0x4000, 0x00000000); // TRAP 0, Halt -> sets exit_code
+        mmix.write_tetra(0x4100, 0x00000000); // TRAP 0, Halt -> sets exit_code
         assert!(!mmix.execute_instruction());
         assert_eq!(mmix.get_exit_code(), 77);
 
@@ -8718,7 +8727,8 @@ mod tests {
         }
         assert_eq!(mmix.get_pc(), fresh.get_pc());
         assert_eq!(mmix.get_exit_code(), fresh.get_exit_code());
-        assert_eq!(mmix.read_tetra(0x4000), fresh.read_tetra(0x4000));
+        assert_eq!(mmix.call_depth(), fresh.call_depth(), "frames");
+        assert_eq!(mmix.read_tetra(SCRATCH), 0, "memory");
 
         // The host survives, and is still the injected one.
         mmix.set_register(255, u64::from(b'A'));
