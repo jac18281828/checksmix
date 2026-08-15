@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use lyn::Scanner; // Still used by MIX parser
 use std::fmt;
 
@@ -976,37 +978,59 @@ mod tests {
         assert_eq!(mix.i[1], 50);
     }
 
-    #[test]
-    fn test_program_cmpa_equal() {
-        let mut program = Program::new("CMPA 100\n");
+    /// Run `CMPA 100` against `mem[100] = 50`, then take `jump` past a
+    /// marker that would overwrite rA. Returns rA afterwards: unchanged when
+    /// the jump fired, `MARKER` when it fell through.
+    ///
+    /// The comparison indicator is crate-private, so a conditional jump is
+    /// the observable that reports what `CMPA` decided.
+    fn cmpa_then_jump(a: i64, jump: &str) -> i64 {
+        const MARKER: i64 = 999;
+        let source = format!("CMPA 100\n{jump} 3\nENTA {MARKER}\n");
+        let mut program = Program::new(&source);
         program.parse().unwrap();
         let mut mix = Mix::new();
-        mix.a = 50;
+        mix.a = a;
         mix.memory[100] = 50;
         mix.execute(&program);
-        // Can't access cmp directly anymore, so we'll test via jump
+        mix.a
+    }
+
+    #[test]
+    fn test_program_cmpa_equal() {
+        assert_eq!(cmpa_then_jump(50, "JE"), 50, "JE must fire on equal");
+        assert_eq!(cmpa_then_jump(50, "JL"), 999, "JL must not fire on equal");
+        assert_eq!(cmpa_then_jump(50, "JG"), 999, "JG must not fire on equal");
     }
 
     #[test]
     fn test_program_cmpa_less() {
-        let mut program = Program::new("CMPA 100\n");
-        program.parse().unwrap();
-        let mut mix = Mix::new();
-        mix.a = 30;
-        mix.memory[100] = 50;
-        mix.execute(&program);
-        // Can't access cmp directly anymore, so we'll test via jump
+        assert_eq!(cmpa_then_jump(30, "JL"), 30, "JL must fire when A < mem");
+        assert_eq!(
+            cmpa_then_jump(30, "JE"),
+            999,
+            "JE must not fire when A < mem"
+        );
+        assert_eq!(
+            cmpa_then_jump(30, "JG"),
+            999,
+            "JG must not fire when A < mem"
+        );
     }
 
     #[test]
     fn test_program_cmpa_greater() {
-        let mut program = Program::new("CMPA 100\n");
-        program.parse().unwrap();
-        let mut mix = Mix::new();
-        mix.a = 70;
-        mix.memory[100] = 50;
-        mix.execute(&program);
-        // Can't access cmp directly anymore, so we'll test via jump
+        assert_eq!(cmpa_then_jump(70, "JG"), 70, "JG must fire when A > mem");
+        assert_eq!(
+            cmpa_then_jump(70, "JE"),
+            999,
+            "JE must not fire when A > mem"
+        );
+        assert_eq!(
+            cmpa_then_jump(70, "JL"),
+            999,
+            "JL must not fire when A > mem"
+        );
     }
 
     #[test]

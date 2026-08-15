@@ -209,6 +209,18 @@ impl Debugger {
         }
     }
 
+    /// The loaded machine, for reading final register or memory state after
+    /// a run without parsing the command output.
+    pub fn machine(&self) -> &MMix {
+        &self.mmix
+    }
+
+    /// The loaded machine, mutably — the route to the installed [`Host`] via
+    /// [`MMix::host_mut`].
+    pub fn machine_mut(&mut self) -> &mut MMix {
+        &mut self.mmix
+    }
+
     pub fn set_fullname(&mut self, on: bool) {
         self.fullname = on;
     }

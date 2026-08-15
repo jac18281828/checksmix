@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -557,7 +558,7 @@ impl SpecialReg {
 ///
 /// assert_eq!(&*out.borrow(), b"X");
 /// ```
-pub trait Host {
+pub trait Host: Any {
     /// Write raw bytes to file descriptor `fd` (only 1 or 2 reach the
     /// host — see the trait docs). Returns `Ok(())` on success, matching
     /// `write_all` rather than reporting a partial-write count. On success
@@ -817,6 +818,38 @@ impl MMix {
     pub fn reset(&mut self) {
         let host = std::mem::replace(&mut self.host, Box::new(StdHost));
         *self = Self::blank(host);
+    }
+
+    /// The installed [`Host`], for a caller that needs to reach it after
+    /// construction rather than keeping a shared handle.
+    ///
+    /// [`Host`] requires [`Any`], so an embedder can recover its concrete
+    /// host type:
+    ///
+    /// ```
+    /// # use checksmix::{Host, MMix};
+    /// # use std::any::Any;
+    /// # struct Capture(Vec<u8>);
+    /// # impl Host for Capture {
+    /// #     fn write(&mut self, _fd: u8, b: &[u8]) -> std::io::Result<()> {
+    /// #         self.0.extend_from_slice(b); Ok(())
+    /// #     }
+    /// #     fn now_micros(&mut self) -> u64 { 0 }
+    /// #     fn diagnostic(&mut self, _m: &str) {}
+    /// # }
+    /// let mut mmix = MMix::with_host(Capture(Vec::new()));
+    /// let host: &mut dyn Any = mmix.host_mut();
+    /// let capture = host.downcast_mut::<Capture>().expect("our own host type");
+    /// capture.0.clear();
+    /// ```
+    pub fn host_mut(&mut self) -> &mut dyn Host {
+        &mut *self.host
+    }
+
+    /// Consume the machine and return its [`Host`], for a caller that wants
+    /// what the host captured once the program is done.
+    pub fn into_host(self) -> Box<dyn Host> {
+        self.host
     }
 
     /// The special-register values a machine starts life with.
