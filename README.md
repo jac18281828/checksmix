@@ -5,7 +5,7 @@ MMIX assembler and emulator with fast feedback for learning, experimenting, and 
 ## What’s inside
 - `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
 - `mmixasm`: assemble `.mms` to `.mmo` for reuse or distribution.
-- `mmixdb`: gdb-style interactive debugger for `.mms` programs (step, breakpoints, print, Emacs GUD mode).
+- `mmixdb`: interactive source-level debugger for `.mms` programs (step, breakpoints, print, Emacs GUD mode).
 - Emulator: 256 general-purpose registers, 32 special registers, sparse 64-bit address space, and basic TRAP support (Halt and Fputs for console output).
 
 ## Quick start
@@ -71,7 +71,7 @@ Main    LDA     $0,Text
 
 ## mmixdb — the interactive debugger
 
-`mmixdb` is a gdb-style debugger for MMIX `.mms` programs: step, breakpoint,
+`mmixdb` is an interactive source-level debugger for MMIX `.mms` programs: step, breakpoint,
 inspect registers/memory, and see the current source line as you go.
 
 ```bash

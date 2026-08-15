@@ -1,6 +1,6 @@
 //! `mmixdb` debugger core.
 //!
-//! This module holds all state and command logic for the gdb-style MMIX
+//! This module holds all state and command logic for the interactive MMIX
 //! debugger. It has no TTY dependency: every command is a method that
 //! mutates a `Debugger` and returns rendered text, so the whole thing is
 //! unit-testable without a terminal. `src/bin/mmixdb.rs` is a thin shell
@@ -36,7 +36,7 @@ pub enum Command {
 
 /// Parse one line of debugger input into a `Command`.
 ///
-/// Supports both the short letter and the gdb long word for each command
+/// Supports both the short letter and the long word for each command
 /// (the long words matter: Emacs GUD sends them). Blank input is `Repeat`.
 /// Unknown input returns an error string for the REPL to print and continue.
 pub fn parse_command(input: &str) -> Result<Command, String> {
@@ -156,7 +156,7 @@ fn entry_point(assembler: &MMixAssembler) -> u64 {
         .unwrap_or(0x100)
 }
 
-/// The gdb-style debugger core: owns the loaded `MMix`, the `MMixAssembler`
+/// The interactive debugger core: owns the loaded `MMix`, the `MMixAssembler`
 /// (for the source map and symbol tables), breakpoints, and REPL state.
 ///
 /// Holding an `MMix` makes `Debugger` none of `Send`, `Sync`, `UnwindSafe`,
@@ -402,7 +402,7 @@ impl Debugger {
 
     /// The report shown on every stop: the Emacs GUD marker (if `fullname`
     /// mode is on and the current PC has a known source location) followed
-    /// by the gdb-style current-line display, or a halt message.
+    /// by the current-line display, or a halt message.
     fn report(&self, halted: bool) -> Vec<String> {
         if halted {
             return vec![format!(

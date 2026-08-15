@@ -9,7 +9,7 @@ use std::process;
 #[derive(Parser, Debug)]
 #[command(
     name = "mmixdb",
-    about = "A gdb-style interactive debugger for MMIX .mms programs",
+    about = "An interactive source-level debugger for MMIX .mms programs",
     version,
     author
 )]

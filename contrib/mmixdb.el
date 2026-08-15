@@ -3,7 +3,7 @@
 ;; Minimal GUD integration for `mmixdb'.  Provides `M-x mmixdb', which starts
 ;; the debugger with `--fullname' and parses its Emacs marker
 ;; (`\x1a\x1a FILE:LINE:...') to jump `gud' to the current source line, plus
-;; the standard gdb-style key bindings mapped onto mmixdb's long command
+;; the standard GUD key bindings mapped onto mmixdb's long command
 ;; words.
 
 ;;; Code:
