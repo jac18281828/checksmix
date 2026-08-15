@@ -1,0 +1,120 @@
+.TH MMIXDB 1 "August 2026" "checksmix 0.3.0"
+.SH NAME
+mmixdb \- gdb-style interactive debugger for MMIX assembly sources
+.SH SYNOPSIS
+.B mmixdb
+.RI [ \-\-fullname ]
+.RI FILE.mms
+.RI [ FILE.mms ... ]
+.SH DESCRIPTION
+.B mmixdb
+is a gdb-style interactive debugger for MMIX assembly
+.RB ( .mms )
+sources. It loads one or more source files, assembles them, and drops into
+a command loop for stepping, breaking, and inspecting a running program.
+.PP
+Only
+.B .mms
+sources are accepted; a
+.B .mmo
+object file is rejected with an explicit error, because source-line
+debugging requires the source. Multiple
+.B .mms
+files are assembled into one shared symbol space before execution, exactly
+as
+.B checksmix run
+does.
+.SH OPTIONS
+.TP
+.BR \-\-fullname , \ \-\-emacs
+Emit Emacs GUD stop markers on every stop, for use as the debugger under
+.B M-x gud-mmixdb
+or equivalent. Automatically enabled when the environment variable
+.B INSIDE_EMACS
+is set, so an Emacs session need not pass the flag explicitly. See
+.I contrib/mmixdb.el
+for the Emacs integration.
+.SH COMMANDS
+At the
+.B (mmixdb)
+prompt, each command accepts a short letter and a long gdb-style word;
+Emacs GUD sends the long words. Blank input repeats the last command.
+.TP
+.BR s ", " step
+Execute exactly one instruction, following into calls and branches.
+.TP
+.BR n ", " next
+Execute one instruction; if it entered a call, keep stepping until it
+returns.
+.TP
+.BR c ", " continue
+Resume, single-stepping until a subsequent breakpoint or a halt. A
+breakpoint at the address execution is already stopped at does not fire on
+this call; the current instruction runs first.
+.TP
+.BR r ", " run
+Reset to the freshly-loaded image, then behave like
+.BR continue .
+.TP
+.BR "b " \fILINE\fR|\fILABEL\fR ", " "break " \fILINE\fR|\fILABEL\fR
+Set a breakpoint at a decimal source line number in the current file, or
+at an exact label. No other address form is accepted.
+.TP
+.BR "p " \fIARG\fR ", " "print " \fIARG\fR
+Print a general register (\fB$\fIN\fR or bare \fIN\fR), a special
+register, a label's address, an IS/GREG symbol, or a memory octa at a hex
+address.
+.TP
+.BR bt ", " backtrace ", " "info reg" ", " "info registers"
+Print the full register dump.
+.TP
+.BR l ", " list
+Print source lines around the current program counter.
+.TP
+.BR h ", " help ", " ?
+Show the command summary.
+.TP
+.BR q ", " quit ", " exit
+Exit the debugger.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Enable tracing output from the emulator. Example:
+.BR RUST_LOG=checksmix=debug .
+.TP
+.B INSIDE_EMACS
+When set, auto-enables
+.B \-\-fullname
+stop markers, as Emacs sets this variable for subprocesses of a
+.B compile
+or
+.B gud
+session.
+.SH EXAMPLES
+Debug a single source file:
+.PP
+.RS
+.nf
+mmixdb examples/hello_world.mms
+.fi
+.RE
+.PP
+Debug multiple sources assembled into one shared symbol space:
+.PP
+.RS
+.nf
+mmixdb examples/module1.mms examples/module2.mms
+.fi
+.RE
+.PP
+Set a breakpoint at a label, then run to it:
+.PP
+.RS
+.nf
+(mmixdb) break Main
+(mmixdb) run
+.fi
+.RE
+.SH SEE ALSO
+.BR checksmix (1),
+.BR mmixasm (1)
