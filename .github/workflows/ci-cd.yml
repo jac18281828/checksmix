@@ -65,3 +65,31 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Check library for wasm32-unknown-unknown
         run: cargo check --lib --no-default-features --target wasm32-unknown-unknown
+  man-check:
+    name: Man Page Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install mandoc and groff
+        run: sudo apt-get update && sudo apt-get install -y mandoc groff
+      - name: Lint man pages
+        run: |
+          shopt -s nullglob
+          pages=(man/*.1)
+          if [ ${#pages[@]} -eq 0 ]; then
+            echo "no man pages found -- the glob is wrong or man/ was moved"
+            exit 1
+          fi
+          status=0
+          for page in "${pages[@]}"; do
+            echo "== $page"
+            # mandoc lints macro use; -W warning makes every diagnostic exit
+            # nonzero so a malformed page fails the job instead of printing
+            # into a green log.
+            mandoc -T lint -W warning "$page" || status=1
+            # groff renders as man(1) will, catching what mandoc accepts but
+            # the GNU macro package rejects. -z discards output, -ww warns.
+            groff -man -Tascii -ww -z "$page" || status=1
+          done
+          exit $status
