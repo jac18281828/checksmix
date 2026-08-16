@@ -1,4 +1,6 @@
-use checksmix::{MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat};
+use checksmix::{
+    MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat, entry_point, write_image,
+};
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -236,24 +238,8 @@ fn run_mms(filenames: &[String], value_format: ValueFormat) {
 
     let mut mmix = MMix::new();
 
-    for (addr, inst) in &assembler.instructions {
-        let bytes = assembler.encode_instruction_bytes(inst);
-        for (offset, &byte) in bytes.iter().enumerate() {
-            mmix.write_byte(addr + offset as u64, byte);
-        }
-    }
-
-    if let Some(&main_addr) = assembler.labels.get("Main") {
-        mmix.set_pc(main_addr);
-    } else {
-        let code_addr = assembler
-            .instructions
-            .iter()
-            .find(|(addr, _)| *addr < 0x2000000000000000)
-            .map(|(addr, _)| *addr)
-            .unwrap_or(0x100);
-        mmix.set_pc(code_addr);
-    }
+    write_image(&mut mmix, &assembler);
+    mmix.set_pc(entry_point(&assembler));
 
     println!("=== Initial Machine State ===");
     println!("{}", mmix.display_with(value_format));

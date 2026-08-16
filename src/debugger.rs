@@ -132,7 +132,8 @@ fn format_value(value: u64, format: ValueFormat) -> String {
     }
 }
 
-fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
+/// Write every assembled instruction's encoded bytes into `mmix`'s memory.
+pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
     for (addr, inst) in &assembler.instructions {
         let bytes = assembler.encode_instruction_bytes(inst);
         for (offset, &byte) in bytes.iter().enumerate() {
@@ -141,10 +142,9 @@ fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
     }
 }
 
-/// Replicates `run_mms`'s entry-point selection (`src/bin/checksmix.rs:213-273`):
-/// the `Main` label if present, else the first code address below the
-/// text/data segment boundary.
-fn entry_point(assembler: &MMixAssembler) -> u64 {
+/// The program's entry point: the `Main` label if present, else the first
+/// code address below the text/data segment boundary.
+pub fn entry_point(assembler: &MMixAssembler) -> u64 {
     if let Some(&main_addr) = assembler.labels.get("Main") {
         return main_addr;
     }
