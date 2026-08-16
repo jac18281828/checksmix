@@ -45,11 +45,13 @@ Execute exactly one instruction, following into calls and branches.
 .TP
 .BR n ", " next
 Execute one instruction; if it entered a call, keep stepping until it
-returns.
+returns. Also stops, distinguishably, if an internal step budget is
+exhausted first.
 .TP
 .BR c ", " continue
 Resume, single-stepping until a subsequent breakpoint or a halt. A
 breakpoint at the current address does not fire; the instruction there runs
+first. Also stops, distinguishably, if an internal step budget is exhausted
 first.
 .TP
 .BR r ", " run
