@@ -9586,14 +9586,25 @@ mod tests {
 
     #[test]
     fn occupied_yields_nonzero_bytes_ascending_after_a_zero_write() {
+        // Six surviving addresses written out of ascending order: with only two
+        // survivors, HashMap iteration lands in ascending order by chance often
+        // enough that deleting the sort in `occupied` doesn't reliably fail this
+        // test. Six addresses drops that accidental-pass rate to roughly 1/720.
         let mut mmix = MMix::new();
-        mmix.write_byte(300, 5);
-        mmix.write_byte(100, 9);
-        mmix.write_byte(200, 1);
+        mmix.write_byte(500, 5);
+        mmix.write_byte(100, 1);
+        mmix.write_byte(700, 7);
+        mmix.write_byte(300, 3);
+        mmix.write_byte(900, 9);
+        mmix.write_byte(400, 4);
+        mmix.write_byte(200, 6);
         mmix.write_byte(200, 0); // zero-write: removed, must not appear
 
         let items: Vec<(u64, u8)> = mmix.occupied().collect();
-        assert_eq!(items, vec![(100, 9), (300, 5)]);
+        assert_eq!(
+            items,
+            vec![(100, 1), (300, 3), (400, 4), (500, 5), (700, 7), (900, 9)]
+        );
     }
 
     #[test]

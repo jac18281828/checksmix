@@ -667,7 +667,7 @@ Text\tBYTE\t\"Hi\",0
         let mut dbg = Debugger::load(asm);
         let depth0 = dbg.mmix.call_depth();
         let return_pc = dbg.mmix.get_pc().wrapping_add(4);
-        dbg.execute(Command::Next);
+        let lines = dbg.execute(Command::Next);
         assert_eq!(
             dbg.mmix.call_depth(),
             depth0,
@@ -677,6 +677,10 @@ Text\tBYTE\t\"Hi\",0
             dbg.mmix.get_pc(),
             return_pc,
             "next across PUSHJ must land back at the return address"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("step budget exhausted")),
+            "a normal call-depth return must not be reported as budget-exhausted: {lines:?}"
         );
     }
 
@@ -690,11 +694,15 @@ Text\tBYTE\t\"Hi\",0
             .expect("line 3 must have an address");
         let mut dbg = Debugger::load(asm);
         dbg.execute(Command::Break(target_line.to_string()));
-        dbg.execute(Command::Continue);
+        let lines = dbg.execute(Command::Continue);
         assert_eq!(dbg.mmix.get_pc(), target_addr);
         assert_eq!(dbg.current_file().as_deref(), Some("bp.mms"));
         let loc = dbg.assembler.source_loc(dbg.mmix.get_pc()).unwrap();
         assert_eq!(loc.line, target_line);
+        assert!(
+            !lines.iter().any(|l| l.contains("step budget exhausted")),
+            "a breakpoint stop must not be reported as budget-exhausted: {lines:?}"
+        );
     }
 
     #[test]
