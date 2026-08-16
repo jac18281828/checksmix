@@ -61,8 +61,15 @@ All commits land on the branch; `main` only ever sees a fast-forward.
 1. Branch as `claude/<topic>`; never commit to `main` directly.
 2. Add an `X.Y.Z` entry to `CHANGELOG.md` and commit — this is the release commit.
 3. Tag `X.Y.Z` (signed, annotated) on the release commit.
-4. Bump `Cargo.toml` to `X.Y.(Z+1)` and commit as `docs: X.Y.(Z+1)`.
+4. Bump `Cargo.toml` to `X.Y.(Z+1)`, set the `.TH` version in **every** `man/*.1` to the
+   same value, and commit both as `docs: X.Y.(Z+1)`.
 5. FF-merge the branch into `main`; push `main` and the tag — the `deploy-crate` workflow publishes on tag push.
 6. Delete the feature branch (local and remote).
 
 The tag version matches the code version *at the tagged commit*; the `docs: X.Y.(Z+1)` commit prepares the *next* release.
+
+`Cargo.toml` and the man pages must agree at every commit —
+`docs_consistency::man_page_versions_match_cargo_toml` enforces it, so bumping one
+without the other turns `main` red and every open branch red on its next rebase.
+Step 4 is the only place they can drift, because it is the only step that changes the
+version.
