@@ -17,6 +17,11 @@ use std::path::{Path, PathBuf};
 /// the first instruction address below this boundary.
 const SEGMENT_BOUNDARY: u64 = 0x2000000000000000;
 
+/// Per-instruction cap on `do_continue`'s and `do_next`'s step loops, so a
+/// subroutine or program that never returns/halts can't hang the debugger.
+/// Not configurable from the public API.
+const STEP_BUDGET: usize = 1_000_000;
+
 /// A parsed debugger command. One variant per command in the command table;
 /// `Repeat` represents blank input, which re-runs the last executed command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,13 +285,20 @@ impl Debugger {
     /// `next`: execute one instruction; if it entered a call (call depth
     /// increased -- PUSHJ/PUSHGO push a frame; GO does not), keep
     /// single-stepping until the depth returns to the pre-call level, a
-    /// breakpoint is hit, or the program halts. Otherwise stop after the one
-    /// instruction, same as `step`.
+    /// breakpoint is hit, the program halts, or `STEP_BUDGET` is reached (a
+    /// callee that never returns can't hang this). Otherwise stop after the
+    /// one instruction, same as `step`.
     fn do_next(&mut self) -> Vec<String> {
         let d0 = self.mmix.call_depth();
         let mut halted = !self.mmix.execute_instruction();
+        let mut budget_exhausted = false;
         if !halted {
+            let mut steps = 0usize;
             while self.mmix.call_depth() > d0 {
+                if steps >= STEP_BUDGET {
+                    budget_exhausted = true;
+                    break;
+                }
                 if self.breakpoints.contains(&self.mmix.get_pc()) {
                     break;
                 }
@@ -294,25 +306,34 @@ impl Debugger {
                     halted = true;
                     break;
                 }
+                steps += 1;
             }
         }
-        self.report(halted)
+        self.report_stop(halted, budget_exhausted)
     }
 
     /// `continue`: single-step from the current PC until a breakpoint
-    /// address is hit or the program halts.
+    /// address is hit, the program halts, or `STEP_BUDGET` is reached (a
+    /// program that never halts can't hang this).
     fn do_continue(&mut self) -> Vec<String> {
         let mut halted = false;
+        let mut budget_exhausted = false;
+        let mut steps = 0usize;
         loop {
+            if steps >= STEP_BUDGET {
+                budget_exhausted = true;
+                break;
+            }
             if !self.mmix.execute_instruction() {
                 halted = true;
                 break;
             }
+            steps += 1;
             if self.breakpoints.contains(&self.mmix.get_pc()) {
                 break;
             }
         }
-        self.report(halted)
+        self.report_stop(halted, budget_exhausted)
     }
 
     /// `run`/reset: reset the machine to the freshly-loaded image, then
@@ -429,6 +450,18 @@ impl Debugger {
             lines.push(marker);
         }
         lines.push(self.location_line());
+        lines
+    }
+
+    /// [`Debugger::report`], with one line appended when `STEP_BUDGET` —
+    /// not a halt or a breakpoint — is what stopped `do_continue`/`do_next`.
+    /// Appending rather than replacing keeps `report`'s shape intact for
+    /// every other stop reason.
+    fn report_stop(&self, halted: bool, budget_exhausted: bool) -> Vec<String> {
+        let mut lines = self.report(halted);
+        if budget_exhausted {
+            lines.push("still running (step budget exhausted)".to_string());
+        }
         lines
     }
 
@@ -725,5 +758,55 @@ Text\tBYTE\t\"Hi\",0
         dbg.execute(Command::Repeat);
         let pc2 = dbg.mmix.get_pc();
         assert_ne!(pc1, pc2, "blank repeat must advance the PC again");
+    }
+
+    const INFINITE_LOOP_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tJMP\tMain
+";
+
+    #[test]
+    fn command_run_on_a_program_that_never_halts_reports_budget_exhaustion() {
+        let asm = assemble(INFINITE_LOOP_PROGRAM, "loop.mms");
+        let mut dbg = Debugger::load(asm);
+        let output = dbg.execute(Command::Run);
+        assert!(!output.iter().any(|line| line.starts_with("Program exited")));
+        assert_eq!(
+            output.last().map(String::as_str),
+            Some("still running (step budget exhausted)")
+        );
+    }
+
+    #[test]
+    fn command_next_on_a_call_that_never_returns_reports_budget_exhaustion() {
+        let source = "\
+\tLOC\t#100
+Main\tPUSHJ\t$0,Loop
+\tTRAP\t0,Halt,0
+Loop\tJMP\tLoop
+";
+        let asm = assemble(source, "loopcall.mms");
+        let mut dbg = Debugger::load(asm);
+        let output = dbg.execute(Command::Next);
+        assert!(!output.iter().any(|line| line.starts_with("Program exited")));
+        assert_eq!(
+            output.last().map(String::as_str),
+            Some("still running (step budget exhausted)")
+        );
+    }
+
+    #[test]
+    fn journal_enabled_flag_survives_debugger_runs_reset() {
+        let asm = assemble(CALL_PROGRAM, "call.mms");
+        let mut dbg = Debugger::load(asm);
+        dbg.machine_mut().set_journal(true);
+        dbg.execute(Command::Run);
+        dbg.machine_mut().take_journal(); // drain the first run's writes
+        // `disable` is never called; `Command::Run` resets the machine.
+        dbg.execute(Command::Run);
+        assert!(
+            !dbg.machine_mut().take_journal().is_empty(),
+            "the enabled flag must survive do_run's reset()"
+        );
     }
 }
