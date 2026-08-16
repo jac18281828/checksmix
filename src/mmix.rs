@@ -735,7 +735,7 @@ pub struct MMix {
     /// Virtual memory
     /// this should use paging/segmentation
     /// Key is the memory address, value is the byte
-    /// Using IndexMap for deterministic iteration order
+    /// Iteration order is unspecified; [`MMix::occupied`] sorts it.
     memory: HashMap<u64, u8>,
 
     /// Program counter (location of next instruction)
@@ -1052,6 +1052,15 @@ impl MMix {
         } else {
             self.memory.insert(addr, value);
         }
+    }
+
+    /// Every address with a nonzero byte, in ascending address order — the
+    /// sparse memory's contents for a caller that wants to display or diff
+    /// them, since the underlying map's iteration order is unspecified.
+    pub fn occupied(&self) -> impl Iterator<Item = (u64, u8)> {
+        let mut addrs: Vec<u64> = self.memory.keys().copied().collect();
+        addrs.sort_unstable();
+        addrs.into_iter().map(|addr| (addr, self.memory[&addr]))
     }
 
     /// Read a wyde (2 bytes) from memory starting at the given address.
@@ -4221,18 +4230,64 @@ impl MMix {
     /// Returns the number of instructions executed.
     #[instrument(skip(self))]
     pub fn run(&mut self) -> usize {
+        self.run_bounded(usize::MAX).0
+    }
+
+    /// Execute instructions starting from the current PC until the machine
+    /// halts or `budget` instructions have run, whichever comes first.
+    /// Returns the instruction count and which condition stopped it.
+    ///
+    /// `MMix` has no breakpoint concept, so the result is never
+    /// [`Stop::Breakpoint`] — that variant exists for [`crate::Debugger`]'s
+    /// use.
+    #[instrument(skip(self))]
+    pub fn run_bounded(&mut self, budget: usize) -> (usize, Stop) {
         debug!("Starting MMIX execution");
         let mut count = 0;
-        while self.execute_instruction() {
+        let stop = loop {
+            if count >= budget {
+                break Stop::BudgetExhausted;
+            }
+            if !self.execute_instruction() {
+                break Stop::Halted;
+            }
             count += 1;
+        };
+        match stop {
+            Stop::Halted => self.host.diagnostic(&format!(
+                "Execution stopped at PC={:#018x} after {} instructions",
+                self.pc, count
+            )),
+            Stop::BudgetExhausted => self.host.diagnostic(&format!(
+                "Execution paused at PC={:#018x} after {} instructions (budget exhausted)",
+                self.pc, count
+            )),
+            Stop::Breakpoint(_) => unreachable!("run_bounded never returns Stop::Breakpoint"),
         }
-        self.host.diagnostic(&format!(
-            "Execution stopped at PC={:#018x} after {} instructions",
-            self.pc, count
-        ));
         debug!(instruction_count = count, "Execution completed");
-        count
+        (count, stop)
     }
+}
+
+/// Why [`MMix::run_bounded`] or a [`crate::Debugger`] step loop stopped.
+///
+/// More variants may be added in future releases, so downstream matches
+/// must carry a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Stop {
+    /// The machine halted (TRAP 0, an unhandled TRIP, or an unhandled
+    /// register trap — `execute_instruction` returning `false` covers all
+    /// three with no finer distinction).
+    Halted,
+    /// The instruction budget ran out before the machine halted. The
+    /// machine is unchanged; resuming from here is calling the same
+    /// bounded-run method again.
+    BudgetExhausted,
+    /// A breakpoint address was reached. `MMix` itself has no breakpoint
+    /// concept, so [`MMix::run_bounded`] never produces this — it exists for
+    /// [`crate::Debugger`], which owns the breakpoint set.
+    Breakpoint(u64),
 }
 
 impl fmt::Display for MMix {
@@ -9461,5 +9516,83 @@ mod tests {
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
         assert!(r.is_infinite() && r.is_sign_negative());
+    }
+
+    /// `JMP 0,0,0` at address `addr`: offset 0 branches back to itself,
+    /// forever. Shared by every never-halts test below.
+    fn write_infinite_loop(mmix: &mut MMix, addr: u64) {
+        mmix.write_tetra(addr, 0xF0000000);
+    }
+
+    #[test]
+    fn run_bounded_halts_normally_and_reports_the_count() {
+        let mut mmix = MMix::new();
+        mmix.write_tetra(0, 0xE7010000); // INCL $1, YZ=0
+        mmix.write_tetra(4, 0xE7010203); // INCL $1, YZ=0x0203
+        mmix.write_tetra(8, 0xE7010203); // INCL $1, YZ=0x0203
+        mmix.write_tetra(12, 0xFF000000); // TRIP (halt)
+
+        let (count, stop) = mmix.run_bounded(100);
+        assert_eq!(count, 3);
+        assert_eq!(stop, Stop::Halted);
+    }
+
+    #[test]
+    fn run_bounded_stops_at_the_budget_on_a_program_that_never_halts() {
+        let mut mmix = MMix::new();
+        write_infinite_loop(&mut mmix, 0);
+
+        let (count, stop) = mmix.run_bounded(1_000);
+        assert_eq!(count, 1_000);
+        assert_eq!(stop, Stop::BudgetExhausted);
+    }
+
+    #[test]
+    fn occupied_yields_nonzero_bytes_ascending_after_a_zero_write() {
+        let mut mmix = MMix::new();
+        mmix.write_byte(300, 5);
+        mmix.write_byte(100, 9);
+        mmix.write_byte(200, 1);
+        mmix.write_byte(200, 0); // zero-write: removed, must not appear
+
+        let items: Vec<(u64, u8)> = mmix.occupied().collect();
+        assert_eq!(items, vec![(100, 9), (300, 5)]);
+    }
+
+    #[test]
+    fn run_bounded_halted_diagnostic_matches_runs_pre_existing_text() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.write_tetra(0, 0xFF000000); // TRIP (halt)
+
+        let (count, stop) = mmix.run_bounded(100);
+        assert_eq!(stop, Stop::Halted);
+        // TRIP itself emits its own diagnostic first; run_bounded's is last.
+        assert_eq!(
+            handle.diagnostics().last(),
+            Some(&format!(
+                "Execution stopped at PC={:#018x} after {} instructions",
+                mmix.get_pc(),
+                count
+            ))
+        );
+    }
+
+    #[test]
+    fn run_bounded_exhausted_diagnostic_is_visibly_different() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        write_infinite_loop(&mut mmix, 0);
+
+        let (count, stop) = mmix.run_bounded(1_000);
+        assert_eq!(stop, Stop::BudgetExhausted);
+        assert_eq!(
+            handle.diagnostics().last(),
+            Some(&format!(
+                "Execution paused at PC={:#018x} after {} instructions (budget exhausted)",
+                mmix.get_pc(),
+                count
+            ))
+        );
     }
 }
