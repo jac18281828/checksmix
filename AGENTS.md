@@ -6,8 +6,7 @@ These guidelines apply to all AI-assisted code changes in this repository.
 1. Summarize current behavior and invariants before proposing edits.
 2. **Ask each time** — `Cargo.toml` deps, cross-module or public-API refactors, file deletions,
    CI or release changes.
-3. **Always ask** — merging to `main`, opening a PR, tags, force ops, anything that touches
-   shared state or `main`.
+3. **Always ask** — merging to `main`, opening a PR, tags, force ops.
 
 ## Rust Style & Design
 - Correctness first; then idiomatic, reviewable Rust.

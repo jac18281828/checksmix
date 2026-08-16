@@ -3351,7 +3351,7 @@ Test260Pgi
 % Intentional coverage exceptions
 % ========================================
 % The following grammar-defined mnemonics are deliberately not exercised
-% above (see prompts/checksmix-prompt-corpus-coverage-audit.md, settled
+% above (see checksmix-prompt-corpus-coverage-audit.md, settled
 % decisions 3, 4, 9, 10 for the full rationale):
 %   TRIP    - Opcode::TRIP unconditionally returns false ("for now, just
 %             halt") with no pass/fail signal this harness can observe;
