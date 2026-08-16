@@ -9679,6 +9679,43 @@ Main\tLDA\t$255,Text
     }
 
     #[test]
+    fn loaded_extent_is_unchanged_by_runtime_writes_during_execution() {
+        // Mirrors debugger.rs's CALL_PROGRAM fixture: PUSHJ spills the
+        // caller's frame to the register stack (addresses at
+        // 0x6000000000000000+), a real runtime write that goes through
+        // `write_byte`, not `write_loaded_byte`. `loaded_extent` tracks only
+        // what `write_image` loaded, so a run must leave it unchanged.
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        const CALL_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tPUSHJ\t$0,Sub
+\tSETI\t$1,7
+\tTRAP\t0,Halt,0
+Sub\tSETI\t$0,3
+\tPOP\t0,0
+";
+        let mut asm = MMixAssembler::new(CALL_PROGRAM, "call.mms");
+        asm.parse().expect("call.mms must assemble");
+
+        let mut mmix = MMix::new();
+        write_image(&mut mmix, &asm);
+        let before: Vec<(u64, u8)> = mmix.loaded_extent().collect();
+        assert!(!before.is_empty(), "write_image must have loaded something");
+
+        mmix.set_pc(entry_point(&asm));
+        mmix.run(); // PUSHJ spills a frame; POP restores it; TRAP halts.
+
+        let after: Vec<(u64, u8)> = mmix.loaded_extent().collect();
+        assert_eq!(
+            before, after,
+            "a runtime write (PUSHJ's register-stack spill) must not appear \
+             in loaded_extent"
+        );
+    }
+
+    #[test]
     fn journal_records_writes_only_while_enabled_including_a_zero_write() {
         let mut mmix = MMix::new();
         mmix.write_byte(10, 1); // before enabling: not recorded

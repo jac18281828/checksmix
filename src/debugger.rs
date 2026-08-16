@@ -853,11 +853,14 @@ Main\tTRAP\t0,Halt,0
     }
 
     #[test]
-    fn write_image_derives_rg_from_greg_allocation_all_three_cases() {
+    fn write_image_derives_rg_from_one_greg() {
         // One GREG: rG becomes that register.
         let dbg = Debugger::load(assemble(ONE_GREG_PROGRAM, "one_greg.mms"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 254);
+    }
 
+    #[test]
+    fn write_image_derives_rg_from_two_gregs_takes_lower() {
         // Two GREGs: rG becomes the lower of the two allocated registers.
         const TWO_GREG_PROGRAM: &str = "\
 A\tGREG\t1
@@ -867,7 +870,10 @@ Main\tTRAP\t0,Halt,0
 ";
         let dbg = Debugger::load(assemble(TWO_GREG_PROGRAM, "two_greg.mms"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 253);
+    }
 
+    #[test]
+    fn write_image_derives_rg_stays_32_with_no_greg() {
         // No GREG: rG stays at MMix::initialize's default.
         const NO_GREG_PROGRAM: &str = "\
 \tLOC\t#100
