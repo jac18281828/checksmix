@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write, stderr, stdout};
@@ -768,6 +768,12 @@ pub struct MMix {
     /// Addresses [`MMix::write_byte`] has touched since the last
     /// [`MMix::take_journal`], while the journal is enabled.
     journal: HashSet<u64>,
+
+    /// Addresses `write_image` loaded, zero byte or not. Only
+    /// [`MMix::write_loaded_byte`] records into this; plain
+    /// [`MMix::write_byte`] calls (including everything a running program
+    /// does after load) never touch it. Backs [`MMix::loaded_extent`].
+    loaded: BTreeSet<u64>,
 }
 
 impl Default for MMix {
@@ -811,6 +817,7 @@ impl MMix {
             host,
             journal_enabled: false,
             journal: HashSet::new(),
+            loaded: BTreeSet::new(),
         };
         mmix.initialize();
         mmix
@@ -1080,6 +1087,33 @@ impl MMix {
         let mut addrs: Vec<u64> = self.memory.keys().copied().collect();
         addrs.sort_unstable();
         addrs.into_iter().map(|addr| (addr, self.memory[&addr]))
+    }
+
+    /// [`MMix::write_byte`], plus recording `addr` into `loaded` regardless
+    /// of value. `write_image`'s per-byte loop calls this in place of
+    /// `write_byte` so that a zero byte the loaded program actually placed
+    /// stays visible to [`MMix::loaded_extent`] even after the sparse-memory
+    /// write drops it from `self.memory`. Not for general writes: a running
+    /// program's own stores (register-stack spills, `STO`, ...) must go
+    /// through plain `write_byte`, or `loaded_extent` would degrade into the
+    /// write journal's noise.
+    pub(crate) fn write_loaded_byte(&mut self, addr: u64, value: u8) {
+        self.write_byte(addr, value);
+        self.loaded.insert(addr);
+    }
+
+    /// Every address `write_image` loaded, in ascending order, paired with
+    /// its **current** byte value (a later overwrite during execution shows
+    /// the new value here, same as [`MMix::occupied`] would if that value is
+    /// nonzero).
+    ///
+    /// Unlike [`MMix::occupied`], this includes a byte that the loaded
+    /// program set to zero — sparse memory drops a zero-write from
+    /// `self.memory`, so `occupied` can't tell "loaded and zero" from
+    /// "never written." This can, so it is what a caller wants for the
+    /// real loaded extent instead of a set with silent holes.
+    pub fn loaded_extent(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
+        self.loaded.iter().map(|&addr| (addr, self.read_byte(addr)))
     }
 
     /// Enable or disable the write journal. While enabled, every
@@ -9605,6 +9639,43 @@ mod tests {
             items,
             vec![(100, 1), (300, 3), (400, 4), (500, 5), (700, 7), (900, 9)]
         );
+    }
+
+    #[test]
+    fn loaded_extent_includes_the_hello_world_nul_terminator_that_occupied_omits() {
+        // Reproduces examples/hello_world.mms's Text BYTE directive: its
+        // trailing NUL is a real loaded byte that write_byte's zero-removal
+        // hides from `occupied`, checked by address rather than by a total
+        // count (write_image also writes every instruction, so the totals
+        // include far more than this one directive).
+        use crate::debugger::write_image;
+        use crate::mmixal::MMixAssembler;
+
+        const HELLO_WORLD: &str = "\
+\tLOC\tData_Segment
+\tGREG\t@
+Text\tBYTE\t\"Hello world!\",'\\n',0
+
+\tLOC\t#100
+
+Main\tLDA\t$255,Text
+\tTRAP\t0,Fputs,StdOut
+\tTRAP\t0,Halt,0
+";
+        let mut asm = MMixAssembler::new(HELLO_WORLD, "hello_world.mms");
+        asm.parse().expect("hello_world.mms must assemble");
+        let text_addr = *asm.labels.get("Text").expect("Text label");
+        // "Hello world!",'\n',0 is 14 bytes; the NUL terminator is the last.
+        let nul_addr = text_addr + 13;
+
+        let mut mmix = MMix::new();
+        write_image(&mut mmix, &asm);
+
+        let loaded: Vec<(u64, u8)> = mmix.loaded_extent().collect();
+        assert!(loaded.contains(&(nul_addr, 0)));
+
+        let occupied: Vec<(u64, u8)> = mmix.occupied().collect();
+        assert!(!occupied.iter().any(|&(addr, _)| addr == nul_addr));
     }
 
     #[test]

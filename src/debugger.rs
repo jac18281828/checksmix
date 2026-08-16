@@ -137,13 +137,29 @@ fn format_value(value: u64, format: ValueFormat) -> String {
     }
 }
 
-/// Write every assembled instruction's encoded bytes into `mmix`'s memory.
+/// Write every assembled instruction's encoded bytes into `mmix`'s memory,
+/// apply every `GREG` initializer to its allocated register, and raise `rG`
+/// to mark where the global register range actually starts.
 pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
     for (addr, inst) in &assembler.instructions {
         let bytes = assembler.encode_instruction_bytes(inst);
         for (offset, &byte) in bytes.iter().enumerate() {
-            mmix.write_byte(addr + offset as u64, byte);
+            mmix.write_loaded_byte(addr + offset as u64, byte);
         }
+    }
+
+    for &(reg, value) in &assembler.greg_inits {
+        mmix.set_register(reg, value);
+    }
+
+    // GREG allocates downward from $254, so the lowest-numbered allocated
+    // register is where the global range starts. MMIX requires rG >= 32
+    // (set_register relies on it to keep local-window growth confined to
+    // registers below rG), so the derived value is floored there, never
+    // clamped down. With no GREG directive, rG keeps MMix::initialize's
+    // default of 32.
+    if let Some(min_reg) = assembler.greg_inits.iter().map(|&(reg, _)| reg).min() {
+        mmix.set_special(SpecialReg::RG, std::cmp::max(min_reg as u64, 32));
     }
 }
 
@@ -816,5 +832,83 @@ Loop\tJMP\tLoop
             !dbg.machine_mut().take_journal().is_empty(),
             "the enabled flag must survive do_run's reset()"
         );
+    }
+
+    const ONE_GREG_PROGRAM: &str = "\
+Base\tGREG\t1000
+\tLOC\t#100
+Main\tTRAP\t0,Halt,0
+";
+
+    #[test]
+    fn write_image_applies_greg_initializer_to_its_register() {
+        let dbg = Debugger::load(assemble(ONE_GREG_PROGRAM, "one_greg.mms"));
+        let &(reg, value) = dbg
+            .assembler
+            .greg_inits
+            .first()
+            .expect("one GREG directive");
+        assert_eq!(value, 1000);
+        assert_eq!(dbg.mmix.get_register(reg), 1000);
+    }
+
+    #[test]
+    fn write_image_derives_rg_from_greg_allocation_all_three_cases() {
+        // One GREG: rG becomes that register.
+        let dbg = Debugger::load(assemble(ONE_GREG_PROGRAM, "one_greg.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 254);
+
+        // Two GREGs: rG becomes the lower of the two allocated registers.
+        const TWO_GREG_PROGRAM: &str = "\
+A\tGREG\t1
+B\tGREG\t2
+\tLOC\t#100
+Main\tTRAP\t0,Halt,0
+";
+        let dbg = Debugger::load(assemble(TWO_GREG_PROGRAM, "two_greg.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 253);
+
+        // No GREG: rG stays at MMix::initialize's default.
+        const NO_GREG_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tTRAP\t0,Halt,0
+";
+        let dbg = Debugger::load(assemble(NO_GREG_PROGRAM, "no_greg.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 32);
+    }
+
+    #[test]
+    fn greg_program_with_pushj_executes_correctly_under_raised_rg() {
+        // One GREG directive raises rG to 254 (see the derivation test
+        // above); this program then makes a PUSHJ/POP call, modeled on
+        // examples/function.mms, to confirm the register-window slide is
+        // unaffected by push_frame zeroing the wider `new_rl..rG` range.
+        const PROGRAM: &str = "\
+Base\tGREG\t1000
+\tLOC\t#100
+Main\tSETI\t$1,40
+\tSETI\t$2,2
+\tPUSHJ\t$0,AddFunc
+\tSET\t$255,$0
+\tTRAP\t0,Halt,0
+AddFunc\tADDU\t$0,$0,$1
+\tPOP\t1,0
+";
+        let mut dbg = Debugger::load(assemble(PROGRAM, "greg_pushj.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 254);
+
+        dbg.execute(Command::Run);
+
+        // Expected values from the same push_frame/pop_frame slide already
+        // exercised by test_pushj_window_slide_return_value (src/mmix.rs):
+        // the two SETIs grow rL to 3 ($1, then $2, each >= the then-current
+        // rL); PUSHJ $0 slides caller's $1, $2 (40, 2) down to callee's $0,
+        // $1; POP 1 places the callee's $0 (the sum) at the caller's hole
+        // $0, and restores rL to max(saved_rl, saved_x + n) = max(3, 0 + 1)
+        // = 3.
+        assert_eq!(dbg.mmix.get_register(0), 42);
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 3);
+        assert_eq!(dbg.mmix.get_register(255), 42);
+        assert_eq!(dbg.mmix.get_exit_code(), 42);
     }
 }
