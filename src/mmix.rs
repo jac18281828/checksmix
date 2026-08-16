@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write, stderr, stdout};
@@ -760,6 +760,14 @@ pub struct MMix {
     /// events) go. `MMix::new()` installs `StdHost`; `MMix::with_host`
     /// installs anything else.
     host: Box<dyn Host>,
+
+    /// Whether [`MMix::write_byte`] records the address it touches. Survives
+    /// [`MMix::reset`]; see [`MMix::set_journal`].
+    journal_enabled: bool,
+
+    /// Addresses [`MMix::write_byte`] has touched since the last
+    /// [`MMix::take_journal`], while the journal is enabled.
+    journal: HashSet<u64>,
 }
 
 impl Default for MMix {
@@ -801,6 +809,8 @@ impl MMix {
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
             host,
+            journal_enabled: false,
+            journal: HashSet::new(),
         };
         mmix.initialize();
         mmix
@@ -816,9 +826,15 @@ impl MMix {
     /// the machine's state is stale between runs. The host's own buffers are
     /// untouched, so a host that accumulates sees successive runs appended;
     /// clear them through your own handle if that is not what you want.
+    ///
+    /// The journal's enabled flag (see [`MMix::set_journal`]) survives; the
+    /// accumulated buffer does not, since a fresh machine has written
+    /// nothing yet.
     pub fn reset(&mut self) {
         let host = std::mem::replace(&mut self.host, Box::new(StdHost));
+        let journal_enabled = self.journal_enabled;
         *self = Self::blank(host);
+        self.journal_enabled = journal_enabled;
     }
 
     /// The installed [`Host`], for a caller that needs to reach it after
@@ -1052,6 +1068,9 @@ impl MMix {
         } else {
             self.memory.insert(addr, value);
         }
+        if self.journal_enabled {
+            self.journal.insert(addr);
+        }
     }
 
     /// Every address with a nonzero byte, in ascending address order — the
@@ -1061,6 +1080,24 @@ impl MMix {
         let mut addrs: Vec<u64> = self.memory.keys().copied().collect();
         addrs.sort_unstable();
         addrs.into_iter().map(|addr| (addr, self.memory[&addr]))
+    }
+
+    /// Enable or disable the write journal. While enabled, every
+    /// [`MMix::write_byte`] call records its address (including a
+    /// zero-write, which removes the address from [`MMix::occupied`] — that
+    /// removal is itself a state change worth journaling). Survives
+    /// [`MMix::reset`]; the accumulated addresses do not.
+    pub fn set_journal(&mut self, on: bool) {
+        self.journal_enabled = on;
+    }
+
+    /// Drain the journal, returning every address written since the last
+    /// call, deduplicated and in ascending order — matching
+    /// [`MMix::occupied`]'s ordering.
+    pub fn take_journal(&mut self) -> Vec<u64> {
+        let mut addrs: Vec<u64> = self.journal.drain().collect();
+        addrs.sort_unstable();
+        addrs
     }
 
     /// Read a wyde (2 bytes) from memory starting at the given address.
@@ -9557,6 +9594,40 @@ mod tests {
 
         let items: Vec<(u64, u8)> = mmix.occupied().collect();
         assert_eq!(items, vec![(100, 9), (300, 5)]);
+    }
+
+    #[test]
+    fn journal_records_writes_only_while_enabled_including_a_zero_write() {
+        let mut mmix = MMix::new();
+        mmix.write_byte(10, 1); // before enabling: not recorded
+
+        mmix.set_journal(true);
+        mmix.write_byte(20, 2);
+        // A zero-write to a fresh address (never written before) is still a
+        // recorded state change, distinct from the nonzero write above.
+        mmix.write_byte(25, 0);
+        mmix.write_byte(30, 3);
+        mmix.set_journal(false);
+        mmix.write_byte(40, 4); // journal off again: not recorded
+
+        assert_eq!(mmix.take_journal(), vec![20, 25, 30]);
+        // Drained: the next call is empty without another write.
+        assert!(mmix.take_journal().is_empty());
+    }
+
+    #[test]
+    fn journal_enabled_flag_survives_reset_but_the_buffer_does_not() {
+        let mut mmix = MMix::new();
+        mmix.set_journal(true);
+        mmix.write_byte(50, 7);
+        assert_eq!(mmix.take_journal(), vec![50]);
+
+        mmix.reset();
+        assert!(mmix.take_journal().is_empty());
+
+        // The flag itself survived the reset.
+        mmix.write_byte(60, 8);
+        assert_eq!(mmix.take_journal(), vec![60]);
     }
 
     #[test]
