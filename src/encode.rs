@@ -679,8 +679,8 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::SYNC(xyz) => {
             bytes.extend_from_slice(&[0xFC, 0, 0, *xyz]);
         }
-        MMixInstruction::SWYM => {
-            bytes.extend_from_slice(&[0xFD, 0, 0, 0]);
+        MMixInstruction::SWYM(x, y, z) => {
+            bytes.extend_from_slice(&[0xFD, *x, *y, *z]);
         }
         MMixInstruction::HALT => {
             bytes.extend_from_slice(&[0x00, 0, 0, 0]); // TRAP 0,Halt,0
@@ -2217,10 +2217,14 @@ mod tests {
             encode_instruction_bytes(&MMixInstruction::SYNC(0)),
             vec![0xFC, 0, 0, 0]
         );
-        // SWYM - 0xFD
+        // SWYM - 0xFD, operands carried through and ignored at execute
         assert_eq!(
-            encode_instruction_bytes(&MMixInstruction::SWYM),
+            encode_instruction_bytes(&MMixInstruction::SWYM(0, 0, 0)),
             vec![0xFD, 0, 0, 0]
+        );
+        assert_eq!(
+            encode_instruction_bytes(&MMixInstruction::SWYM(1, 2, 3)),
+            vec![0xFD, 1, 2, 3]
         );
         // GET - 0xFE
         assert_eq!(

@@ -645,7 +645,7 @@ inst_stco_rri = { mnemonic_stcoi ~ expr_value ~ comma ~ register ~ comma ~ expr_
 // System instructions  
 inst_resume = { mnemonic_resume ~ operand_imm }
 inst_trip = { mnemonic_trip ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
-inst_swym = { mnemonic_swym }
+inst_swym = { mnemonic_swym ~ (expr_value ~ comma ~ expr_value ~ comma ~ expr_value)? }
 inst_sync = { mnemonic_sync ~ operand_imm }
 
 // Operand patterns

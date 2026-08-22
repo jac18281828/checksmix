@@ -2305,6 +2305,7 @@ Test183 ADDUI   TestNum,TestNum,1
 Test184 ADDUI   TestNum,TestNum,1
         SWYM                    % Do nothing (no operation)
         SWYM                    % Do nothing again
+        SWYM    1,2,3           % Operands are carried and ignored
         SETI Result,42
         SETI Expect,42
         CMP     Temp,Result,Expect

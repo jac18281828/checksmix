@@ -343,7 +343,7 @@ pub enum MMixInstruction {
     UNSAVE(u8, u8),      // UNSAVE 0, $Z - unsave/restore context
     RESUME(u8),          // RESUME XYZ - resume after interrupt
     SYNC(u8),            // SYNC XYZ - synchronize
-    SWYM,                // SWYM - sympathize with your machinery (nop)
+    SWYM(u8, u8, u8),    // SWYM X, Y, Z - sympathize with your machinery (nop)
     PRELD(u8, u8, u8),   // PRELD X, $Y, $Z - preload data
     PRELDI(u8, u8, u8),  // PRELDI X, $Y, Z - preload data (immediate)
     PREGO(u8, u8, u8),   // PREGO X, $Y, $Z - prefetch to go
@@ -1778,7 +1778,7 @@ impl MMixAssembler {
             Rule::inst_syncid_rri => self.parse_inst_syncid_rri(inner),
             Rule::inst_resume => self.parse_inst_resume(inner),
             Rule::inst_trip => self.parse_inst_trip(inner),
-            Rule::inst_swym => Ok(MMixInstruction::SWYM),
+            Rule::inst_swym => self.parse_inst_swym(inner),
             Rule::inst_sync => self.parse_inst_sync(inner),
             Rule::inst_trap => self.parse_inst_trap(inner),
             Rule::inst_halt => Ok(MMixInstruction::HALT),
@@ -3223,6 +3223,24 @@ impl MMixAssembler {
         Ok(MMixInstruction::TRIP(x, y, z))
     }
 
+    /// The operand group is all or nothing; a bare `SWYM` carries 0,0,0.
+    fn parse_inst_swym(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let (x, y, z) = match parts.next() {
+            Some(first) => (
+                self.parse_number(first)? as u8,
+                self.parse_number(parts.next().unwrap())? as u8,
+                self.parse_number(parts.next().unwrap())? as u8,
+            ),
+            None => (0, 0, 0),
+        };
+        Ok(MMixInstruction::SWYM(x, y, z))
+    }
+
     fn parse_inst_sync(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -3869,6 +3887,26 @@ mod tests {
                 "{name} must be claimed as a label at {address}"
             );
         }
+    }
+
+    #[test]
+    fn test_swym_carries_its_operands() {
+        let source = "SWYM 1,2,3\nSWYM";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        assert_eq!(asm.instructions.len(), 2, "both SWYM forms must assemble");
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SWYM(1, 2, 3));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SWYM(0, 0, 0));
+    }
+
+    #[test]
+    fn test_swym_rejects_a_partial_operand_list() {
+        let mut asm = MMixAssembler::new("SWYM 1,2", "<test>");
+        assert!(
+            asm.parse().is_err(),
+            "SWYM takes zero or three operands, never two"
+        );
     }
 
     #[test]
