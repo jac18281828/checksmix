@@ -415,7 +415,7 @@ inst_setl_ri = { mnemonic_setl ~ operand_reg_imm }
 inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
 inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
 inst_setml_ri = { mnemonic_setml ~ operand_reg_imm }
-inst_incl_rrr = { mnemonic_incl ~ operand_reg_reg_reg }
+inst_incl_ri = { mnemonic_incl ~ operand_reg_imm }
 inst_inch_ri = { mnemonic_inch ~ operand_reg_imm }
 inst_incmh_ri = { mnemonic_incmh ~ operand_reg_imm }
 inst_incml_ri = { mnemonic_incml ~ operand_reg_imm }
@@ -657,7 +657,7 @@ inst_halt = { mnemonic_halt }
 // Combined instruction rule
 // PEG requires longest match first: rrr before rri
 instruction = {
-    inst_seti | inst_set | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_rrr |
+    inst_seti | inst_set | inst_setl_ri | inst_seth_ri | inst_setmh_ri | inst_setml_ri | inst_incl_ri |
     inst_inch_ri | inst_incmh_ri | inst_incml_ri |
     inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
     inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |

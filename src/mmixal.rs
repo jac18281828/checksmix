@@ -202,7 +202,7 @@ pub enum MMixInstruction {
     CMPU(u8, u8, u8),  // CMPU $X, $Y, $Z - compare unsigned
     CMPUI(u8, u8, u8), // CMPU $X, $Y, Z - compare unsigned immediate
 
-    INCL(u8, u8, u8), // INCL $X, $Y, $Z
+    INCL(u8, u16), // INCL $X, YZ - increment low wyde
 
     // Bitwise operations (§10)
     AND(u8, u8, u8),   // AND $X, $Y, $Z - bitwise and
@@ -1628,7 +1628,7 @@ impl MMixAssembler {
             Rule::inst_seth_ri => Ok(MMixInstruction::SETH(0, 0)),
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
             Rule::inst_setml_ri => Ok(MMixInstruction::SETML(0, 0)),
-            Rule::inst_incl_rrr => Ok(MMixInstruction::INCL(0, 0, 0)),
+            Rule::inst_incl_ri => Ok(MMixInstruction::INCL(0, 0)),
             // LDA $X,$Y,Z (3-operand form): parse_inst_lda_rri always emits a
             // real 4-byte LDA regardless of Z's value -- it never expands to
             // SET, unlike the 2-operand form below.
@@ -1707,7 +1707,7 @@ impl MMixAssembler {
             Rule::inst_seth_ri => self.parse_inst_seth(inner),
             Rule::inst_setmh_ri => self.parse_inst_setmh(inner),
             Rule::inst_setml_ri => self.parse_inst_setml(inner),
-            Rule::inst_incl_rrr => self.parse_inst_incl(inner),
+            Rule::inst_incl_ri => self.parse_inst_incl(inner),
             Rule::inst_inch_ri => self.parse_inst_inch(inner),
             Rule::inst_incmh_ri => self.parse_inst_incmh(inner),
             Rule::inst_incml_ri => self.parse_inst_incml(inner),
@@ -1884,10 +1884,9 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
-        Ok(MMixInstruction::INCL(x, y, z))
+        let reg = self.parse_register(ops.next().unwrap())?;
+        let val = self.parse_number(ops.next().unwrap())? as u16;
+        Ok(MMixInstruction::INCL(reg, val))
     }
 
     fn parse_inst_inch(
@@ -4244,6 +4243,14 @@ mod tests {
         let mut asm = MMixAssembler::new(backward, "<test>");
         let err = asm.parse().unwrap_err();
         assert!(err.contains("out of range"), "{err}");
+    }
+
+    #[test]
+    fn test_incl_takes_a_16_bit_immediate() {
+        // INCL adds YZ to $X, like its INCH/INCMH/INCML siblings.
+        let mut asm = MMixAssembler::new("INCL $1,#203", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::INCL(1, 0x203));
     }
 
     #[test]

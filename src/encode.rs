@@ -685,8 +685,8 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
         MMixInstruction::HALT => {
             bytes.extend_from_slice(&[0x00, 0, 0, 0]); // TRAP 0,Halt,0
         }
-        MMixInstruction::INCL(x, y, z) => {
-            bytes.extend_from_slice(&[0xE7, *x, *y, *z]);
+        MMixInstruction::INCL(x, yz) => {
+            bytes.extend_from_slice(&[0xE7, *x, (yz >> 8) as u8, (yz & 0xFF) as u8]);
         }
         // Floating point instructions
         MMixInstruction::FCMP(x, y, z) => {
@@ -2099,8 +2099,8 @@ mod tests {
         );
         // INCL - 0xE7
         assert_eq!(
-            encode_instruction_bytes(&MMixInstruction::INCL(1, 2, 3)),
-            vec![0xE7, 1, 2, 3]
+            encode_instruction_bytes(&MMixInstruction::INCL(1, 0x0203)),
+            vec![0xE7, 1, 0x02, 0x03]
         );
         // ORH - 0xE8
         assert_eq!(

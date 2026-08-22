@@ -2753,17 +2753,11 @@ Test218 ADDUI   TestNum,TestNum,1
         JMP     TestFail
 
 % ========================================
-% Test 219: INCL - Increase by low wyde (register-number operands)
-% ========================================
-% INCL's grammar takes three register operands, but $Y and $Z's register
-% NUMBERS (not their runtime contents) are packed as the 16-bit YZ
-% immediate added to $X (src/mmixal.rs parse_inst_incl; src/encode.rs
-% INCL test asserts INCL(1,2,3) -> [0xE7,1,2,3]). Using $5,$6 here adds
-% (5<<8|6) = 1286, regardless of what those registers hold.
+% Test 219: INCL - Increase by low wyde
 % ========================================
 Test219 ADDUI   TestNum,TestNum,1
         SETI    Result,100
-        INCL    Result,$5,$6
+        INCL    Result,#506
         SETI    Expect,1386
         CMP     Temp,Result,Expect
         PBZ     Temp,Test220

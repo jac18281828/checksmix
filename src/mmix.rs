@@ -7313,6 +7313,18 @@ Far\tSETI\t$0,42
     }
 
     #[test]
+    fn incl_adds_its_immediate() {
+        let source = "\
+\tLOC\t#100
+Main\tSETI\t$1,100
+\tINCL\t$1,#203
+\tSET\t$255,$1
+\tTRAP\t0,Halt,0
+";
+        assert_eq!(run_to_halt(source), 100 + 0x203);
+    }
+
+    #[test]
     fn test_geta_forward_field_above_half_the_range() {
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
