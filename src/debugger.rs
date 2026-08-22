@@ -195,6 +195,9 @@ pub struct Debugger {
     entry: u64,
     primary_file: Option<String>,
     breakpoints: BTreeSet<u64>,
+    /// Set when a resume saw the program halt, so a later resume refuses
+    /// rather than executing past the end of the image. `reset` clears it.
+    exited: bool,
     last_command: Option<Command>,
     fullname: bool,
     format: ValueFormat,
@@ -231,6 +234,7 @@ impl Debugger {
             entry,
             primary_file,
             breakpoints: BTreeSet::new(),
+            exited: false,
             last_command: None,
             fullname: false,
             format: ValueFormat::Signed,
@@ -299,12 +303,23 @@ impl Debugger {
         self.mmix.reset();
         write_image(&mut self.mmix, &self.assembler);
         self.mmix.set_pc(self.entry);
+        self.exited = false;
+    }
+
+    /// gdb's refusal for a resume command issued after the program has
+    /// exited. `run` never sees it: it resets first.
+    fn refuse_when_exited(&self) -> Option<Vec<String>> {
+        self.exited
+            .then(|| vec!["The program is not being run.".to_string()])
     }
 
     /// `stepi`: execute exactly one instruction, following into calls and
     /// branches. The stop lands wherever the instruction left the PC, which
     /// for a pseudo-op is usually mid-expansion.
     fn do_stepi(&mut self) -> Vec<String> {
+        if let Some(refusal) = self.refuse_when_exited() {
+            return refusal;
+        }
         let running = self.mmix.execute_instruction();
         self.report_stop(!running, false)
     }
@@ -314,6 +329,9 @@ impl Debugger {
     /// `STEP_BUDGET` (a line that never ends can't hang this). An address
     /// with no source location is not a new line.
     fn do_step(&mut self) -> Vec<String> {
+        if let Some(refusal) = self.refuse_when_exited() {
+            return refusal;
+        }
         let origin = self.origin_line();
         let mut halted = false;
         let mut budget_exhausted = false;
@@ -341,6 +359,9 @@ impl Debugger {
     /// instruction is on a different source line, so testing the line alone
     /// would stop inside the call.
     fn do_next(&mut self) -> Vec<String> {
+        if let Some(refusal) = self.refuse_when_exited() {
+            return refusal;
+        }
         let origin = self.origin_line();
         let depth = self.mmix.call_depth();
         let mut halted = false;
@@ -391,6 +412,9 @@ impl Debugger {
     /// address is hit, the program halts, or `STEP_BUDGET` is reached (a
     /// program that never halts can't hang this).
     fn do_continue(&mut self) -> Vec<String> {
+        if let Some(refusal) = self.refuse_when_exited() {
+            return refusal;
+        }
         let mut halted = false;
         let mut budget_exhausted = false;
         let mut steps = 0usize;
@@ -411,10 +435,17 @@ impl Debugger {
         self.report_stop(halted, budget_exhausted)
     }
 
-    /// `run`/reset: reset the machine to the freshly-loaded image, then
-    /// behave like `continue`.
+    /// `run`/reset: reset the machine to the freshly-loaded image, stop
+    /// there if a breakpoint sits on the entry point, and otherwise behave
+    /// like `continue`. `continue` executes an instruction before testing
+    /// the breakpoint set, so that resuming from a stop does not re-trigger
+    /// on the breakpoint it is sitting at; after a reset nothing has run
+    /// yet, so the entry breakpoint has to be honored first.
     fn do_run(&mut self) -> Vec<String> {
         self.reset();
+        if self.breakpoints.contains(&self.mmix.get_pc()) {
+            return self.report(false);
+        }
         self.do_continue()
     }
 
@@ -531,8 +562,10 @@ impl Debugger {
     /// [`Debugger::report`], with one line appended when `STEP_BUDGET` —
     /// not a halt or a breakpoint — is what stopped the step loop.
     /// Appending rather than replacing keeps `report`'s shape intact for
-    /// every other stop reason.
-    fn report_stop(&self, halted: bool, budget_exhausted: bool) -> Vec<String> {
+    /// every other stop reason. Records a halt, which is what makes the
+    /// next resume refuse.
+    fn report_stop(&mut self, halted: bool, budget_exhausted: bool) -> Vec<String> {
+        self.exited |= halted;
         let mut lines = self.report(halted);
         if budget_exhausted {
             lines.push("still running (step budget exhausted)".to_string());
@@ -861,6 +894,93 @@ Text\tBYTE\t\"Hi\",0
                 format!("0x{:016x}\texpand.mms:2\tMain\tSETI\t$1,7", 0x100 + offset)
             );
         }
+    }
+
+    /// A breakpoint on the entry point fires on `run`: the reset means
+    /// nothing has executed yet, so `continue`'s execute-then-test order
+    /// would run straight past it.
+    #[test]
+    fn run_stops_at_a_breakpoint_on_the_entry_point() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("8".to_string()));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x100);
+        assert!(
+            stop.starts_with("stack.mms:8\t"),
+            "run must stop at the entry breakpoint, got {stop:?}"
+        );
+    }
+
+    /// A breakpoint away from the entry point still fires, so the entry
+    /// case is not bought by short-circuiting the normal path.
+    #[test]
+    fn run_stops_at_a_breakpoint_away_from_the_entry_point() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("11".to_string()));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x118);
+        assert!(
+            stop.starts_with("stack.mms:11\t"),
+            "run must stop at the line-11 breakpoint, got {stop:?}"
+        );
+    }
+
+    /// `continue` does not re-trigger on the breakpoint it is sitting at:
+    /// the instruction there runs first. This is what forces `run` to test
+    /// the entry breakpoint itself.
+    #[test]
+    fn continue_does_not_retrigger_on_the_breakpoint_it_is_sitting_at() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("8".to_string()));
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x100);
+        let stop = dbg.execute(Command::Continue).join("\n");
+        assert_ne!(dbg.mmix.get_pc(), 0x100);
+        assert!(stop.starts_with("Program exited with code 42."), "{stop:?}");
+    }
+
+    /// After the program exits, a resume is refused rather than executing
+    /// the zeroed memory past the end of the image.
+    #[test]
+    fn resuming_after_exit_is_refused() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Run);
+        let pc = dbg.mmix.get_pc();
+        for cmd in [
+            Command::Step,
+            Command::Stepi,
+            Command::Next,
+            Command::Continue,
+        ] {
+            assert_eq!(
+                dbg.execute(cmd.clone()),
+                vec!["The program is not being run.".to_string()],
+                "{cmd:?} after exit must be refused"
+            );
+            assert_eq!(dbg.mmix.get_pc(), pc, "{cmd:?} after exit must not run");
+        }
+    }
+
+    /// `print`, `state` and `list` keep answering after exit: the register
+    /// file is what the operator ran the program to see.
+    #[test]
+    fn inspection_still_works_after_exit() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.do_print("$255"), "42");
+        assert!(!dbg.execute(Command::State).is_empty());
+        assert!(!dbg.execute(Command::List).is_empty());
+    }
+
+    /// `run` always works: it resets, which clears the exited state.
+    #[test]
+    fn run_after_exit_restarts_the_program() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Run);
+        dbg.execute(Command::Break("11".to_string()));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert!(stop.starts_with("stack.mms:11\t"), "{stop:?}");
+        assert_eq!(dbg.execute(Command::Step).len(), 1);
     }
 
     #[test]
