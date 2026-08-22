@@ -3769,12 +3769,12 @@ mod tests {
     use super::*;
 
     // ---- Mnemonic word-boundary guard (adversarial) ------------------
-    // Every `mnemonic_*` rule now carries `~ !ASCII_ALPHANUMERIC`, mirroring
-    // `directive_*`'s existing guard, so a short mnemonic's literal can no
-    // longer match as a bare prefix of a longer one. `Rule::parse` doesn't
-    // require consuming the whole input, so before this guard each of these
-    // three calls returns `Ok` (the rule matches only its own shorter
-    // literal and stops); after the guard each must return `Err`.
+    // Every `mnemonic_*` and `directive_*` rule closes with the shared
+    // `word_end` rule: a keyword ends where a symbol could not continue, so a
+    // short mnemonic's literal cannot match as a bare prefix of a longer one.
+    // `Rule::parse` doesn't require consuming the whole input, so without the
+    // guard each of these three calls returns `Ok` (the rule matches only its
+    // own shorter literal and stops); with it each must return `Err`.
 
     #[test]
     fn test_mnemonic_boundary_guard_rejects_prefix_match() {
@@ -3808,11 +3808,10 @@ mod tests {
         // `ADDa,b,c` (no space between the mnemonic and its first operand)
         // parsed as ADD with the three IS-aliased register operands before
         // this guard -- an accident of the grammar's implicit whitespace,
-        // never legitimate MMIXAL syntax. After the guard, `ADDa` fails the
-        // `!ASCII_ALPHANUMERIC` boundary check ('a' is alphanumeric) and the
-        // line is a syntax error. A two-operand ADD is invalid on both
-        // sides of this change for unrelated reasons, so the repro must
-        // keep all three real, IS-aliased operands.
+        // never legitimate MMIXAL syntax. `ADDa` fails `word_end` ('a' could
+        // continue a symbol) and the line is a syntax error. A two-operand
+        // ADD is invalid on both sides of this change for unrelated reasons,
+        // so the repro must keep all three real, IS-aliased operands.
         let source = "a IS $1\nb IS $2\nc IS $3\nMain ADDa,b,c";
         let mut asm = MMixAssembler::new(source, "<test>");
         assert!(
@@ -3841,6 +3840,35 @@ mod tests {
             Some(&0),
             "HaltLoop must resolve to address 0"
         );
+    }
+
+    #[test]
+    fn test_keyword_boundary_admits_underscore_in_label() {
+        // A symbol continues on '_', so a keyword must not end before one:
+        // `Halt_Loop` is a label, not HALT trailing garbage. These cover the
+        // three shapes that misparsed -- an operand-less mnemonic, a mnemonic
+        // whose operand would absorb the tail, and a directive.
+        let source = "Halt_Loop SETL $1,1\n\
+                      Swym_x SETL $2,2\n\
+                      Resume_x SETL $3,3\n\
+                      Loc_Start SETL $4,4\n\
+                      Greg_Base SETL $5,5\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        for (name, address) in [
+            ("Halt_Loop", 0u64),
+            ("Swym_x", 4),
+            ("Resume_x", 8),
+            ("Loc_Start", 12),
+            ("Greg_Base", 16),
+        ] {
+            assert_eq!(
+                asm.labels.get(name),
+                Some(&address),
+                "{name} must be claimed as a label at {address}"
+            );
+        }
     }
 
     #[test]
