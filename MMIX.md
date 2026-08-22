@@ -144,12 +144,12 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 
 | Mnemonic | Operands | Description |
 | --- | --- | --- |
-| `SET` | `SET $X, $Y` | Register copy pseudo-instruction — emits `ORI $X, $Y, 0` |
-| `SETI` | `SETI $X, imm` | Register set immediate pseudo-instruction |
-| `SETL` | `SETL $X, YZ` | Set low wyde |
-| `SETH` | `SETH $X, YZ` | Set high wyde |
-| `SETMH` | `SETMH $X, YZ` | Set medium-high wyde |
-| `SETML` | `SETML $X, YZ` | Set medium-low wyde |
+| `SET` | `SET $X, $Y` / `SET $X, imm` | MMIXAL alias — emits `ORI $X, $Y, 0` for a register, `SETL $X, imm` for a wyde-wide immediate |
+| `SETI` | `SETI $X, imm` | checksmix extension, no Knuth counterpart — sets a full 64-bit constant in four tetras, clearing the register |
+| `SETL` | `SETL $X, YZ` | Set low wyde; the other 48 bits become zero |
+| `SETH` | `SETH $X, YZ` | Set high wyde; the other 48 bits become zero |
+| `SETMH` | `SETMH $X, YZ` | Set medium-high wyde; the other 48 bits become zero |
+| `SETML` | `SETML $X, YZ` | Set medium-low wyde; the other 48 bits become zero |
 | `INCH` | `INCH $X, YZ` | Increase by high wyde |
 | `INCMH` | `INCMH $X, YZ` | Increase by medium-high wyde |
 | `INCML` | `INCML $X, YZ` | Increase by medium-low wyde |

@@ -2682,9 +2682,8 @@ impl MMix {
                 // ADDUI $X, $Y, Z
                 binop_ri!(self, x, y, z, u64::wrapping_add)
             }
-            // SET instructions
-            // SET family instructions - opcodes 0xE0-0xEF
-            // Each SET* places YZ in its own wyde and zeroes the other 48 bits.
+            // Opcodes 0xE0-0xE3. Each places YZ in its own wyde and zeroes the
+            // other 48 bits; the INC/OR/ANDN families below preserve them.
             Opcode::SETH => {
                 // SETH $X, YZ - u($X) <- YZ * 2^48
                 let yz = ((y as u64) << 8) | (z as u64);
