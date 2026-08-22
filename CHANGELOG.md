@@ -1,3 +1,7 @@
+0.3.4 (2026-08-22)
+
+* Every special register prints under its own name. `impl Display for MMix` indexed an alphabetically ordered name array by slot number, but `SpecialReg`'s discriminants follow Knuth's ISA order, so the two agreed at a handful of indices and disagreed everywhere else: `rN` printed as `rJ`, `rO` as `rK`, `rG` as `rT`, `rL` as `rU`, and the real `rG` never appeared at all. This was the whole of checksmix's special-register presentation — every `checksmix run` state dump, and `mmixdb`'s `state` and `bt`. New `SpecialReg::name` is the single table the dump and the debugger's name lookup now share, so the two cannot drift apart again; the assembler's own predefined-symbol seeding is unchanged and pinned by a test against it
+
 0.3.3 (2026-08-22)
 
 * **Breaking: `Command` is `#[non_exhaustive]` and gained a `Stepi` variant.** A downstream exhaustive match now needs a wildcard arm, the same migration `TrapCode` asked for in 0.3.0
