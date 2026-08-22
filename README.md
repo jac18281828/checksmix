@@ -166,7 +166,7 @@ four. Construct one on the thread that runs it, and wrap it in
 
 ## Learning MMIX
 
-MMIX is Knuth's own machine, and he documented it himself:
+MMIX is Knuth's own "pretty clean" machine architecture, and he documented it himself:
 
 - [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html) — the
   canonical home: design rationale, current news, and why MIX was retired.
