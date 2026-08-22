@@ -2,6 +2,8 @@
 
 MMIX assembler and emulator with fast feedback for learning, experimenting, and debugging Knuth’s 64-bit machine. MIX source still parses and emulates, but the checksmix now focuses on MMIX with `.mms` and `.mmo` workflows.
 
+**Try it in your browser: [playmmix.2ad.com](https://playmmix.2ad.com).** A playground built on this crate — edit MMIX assembly, run it, step through with breakpoints, and watch the registers and memory change. No toolchain to install.
+
 ## What’s inside
 - `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
 - `mmixasm`: assemble `.mms` to `.mmo` for reuse or distribution.
@@ -110,6 +112,8 @@ Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
 the `cli` feature, which is on by default. A library-only consumer — notably one
 targeting `wasm32-unknown-unknown`, where `rustyline` does not build — turns it off.
 Available from 0.3.0; earlier versions have no features and always pull the CLI tree.
+[playmmix](https://playmmix.2ad.com) is built this way, on `checksmix = { version = "0.3",
+default-features = false }`, and runs the emulator in the browser as wasm.
 
 ```toml
 # default — library plus the CLI dependency tree
