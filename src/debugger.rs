@@ -92,49 +92,13 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
     }
 }
 
-/// Map a special-register name to its `SpecialReg`, from the SAME
-/// name/discriminant pairs the assembler pre-seeds at `src/mmixal.rs:1154-1189`
-/// (`("rJ", 4)`, `("rA", 21)`, ...). Do NOT build this from the display's
-/// `special_names` array (`src/mmix.rs` ~:4020) -- that array is alphabetically
-/// ordered and does not align with `SpecialReg`'s real discriminants except at
-/// a few coincidental indices.
+/// Resolve a special-register name against `SpecialReg::name`, the single
+/// table the state dump and the assembler's predefined symbols also spell
+/// registers from.
 fn special_reg_from_name(name: &str) -> Option<SpecialReg> {
-    let num: u8 = match name {
-        "rB" => 0,
-        "rD" => 1,
-        "rE" => 2,
-        "rH" => 3,
-        "rJ" => 4,
-        "rM" => 5,
-        "rR" => 6,
-        "rBB" => 7,
-        "rC" => 8,
-        "rN" => 9,
-        "rO" => 10,
-        "rS" => 11,
-        "rI" => 12,
-        "rT" => 13,
-        "rTT" => 14,
-        "rK" => 15,
-        "rQ" => 16,
-        "rU" => 17,
-        "rV" => 18,
-        "rG" => 19,
-        "rL" => 20,
-        "rA" => 21,
-        "rF" => 22,
-        "rP" => 23,
-        "rW" => 24,
-        "rX" => 25,
-        "rY" => 26,
-        "rZ" => 27,
-        "rWW" => 28,
-        "rXX" => 29,
-        "rYY" => 30,
-        "rZZ" => 31,
-        _ => return None,
-    };
-    SpecialReg::from_u8(num)
+    (0u8..32)
+        .filter_map(SpecialReg::from_u8)
+        .find(|reg| reg.name() == name)
 }
 
 fn format_value(value: u64, format: ValueFormat) -> String {
@@ -1020,19 +984,46 @@ Text\tBYTE\t\"Hi\",0
     }
 
     #[test]
-    fn print_special_register_uses_the_correct_table_not_special_names() {
+    fn print_resolves_a_special_register_by_its_discriminant() {
         let source = "\tLOC\t#100\nMain\tTRAP\t0,Halt,0\n";
         let asm = assemble(source, "special.mms");
         let mut dbg = Debugger::load(asm);
-        // rJ's real discriminant is 4; `special_names`'s alphabetical order
-        // puts "rJ" at index 9, not 4 -- a mapping built from that array
-        // would read the wrong slot.
+        // rJ's discriminant is 4, so `print` must read slot 4 whatever
+        // index "rJ" occupies in any other ordering of the names.
         dbg.mmix.set_special(SpecialReg::RJ, 0xDEAD_BEEF_1234);
         assert_eq!(
             dbg.do_print("rJ"),
             format_value(dbg.mmix.get_special(SpecialReg::RJ), dbg.format)
         );
         assert_eq!(dbg.do_print("rJ"), "244837814047284");
+    }
+
+    /// Every register number resolves to the variant with that discriminant,
+    /// and that variant's name resolves back to it. A duplicate name would
+    /// round-trip the higher number to the lower variant.
+    #[test]
+    fn special_register_numbers_names_and_variants_round_trip() {
+        for n in 0u8..32 {
+            let reg = SpecialReg::from_u8(n).expect("0..32 are all special registers");
+            assert_eq!(reg as u8, n);
+            assert_eq!(special_reg_from_name(reg.name()), Some(reg));
+        }
+    }
+
+    /// The assembler seeds its predefined special-register symbols from a list
+    /// of its own; each name must belong to the register it is seeded with.
+    #[test]
+    fn assembler_predefined_symbols_agree_with_special_reg_names() {
+        let asm = MMixAssembler::new("", "symbols.mms");
+        for n in 0u8..32 {
+            let reg = SpecialReg::from_u8(n).expect("0..32 are all special registers");
+            assert_eq!(
+                asm.symbols.get(reg.name()),
+                Some(&SymbolType::Constant(u64::from(n))),
+                "the assembler must predefine {} as special register {n}",
+                reg.name()
+            );
+        }
     }
 
     #[test]

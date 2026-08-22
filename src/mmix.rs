@@ -456,6 +456,45 @@ pub enum SpecialReg {
 }
 
 impl SpecialReg {
+    /// The MMIXAL spelling of this register, as the assembler predefines it,
+    /// the debugger resolves it and the state dump labels it.
+    pub fn name(self) -> &'static str {
+        match self {
+            SpecialReg::RB => "rB",
+            SpecialReg::RD => "rD",
+            SpecialReg::RE => "rE",
+            SpecialReg::RH => "rH",
+            SpecialReg::RJ => "rJ",
+            SpecialReg::RM => "rM",
+            SpecialReg::RR => "rR",
+            SpecialReg::RBB => "rBB",
+            SpecialReg::RC => "rC",
+            SpecialReg::RN => "rN",
+            SpecialReg::RO => "rO",
+            SpecialReg::RS => "rS",
+            SpecialReg::RI => "rI",
+            SpecialReg::RT => "rT",
+            SpecialReg::RTT => "rTT",
+            SpecialReg::RK => "rK",
+            SpecialReg::RQ => "rQ",
+            SpecialReg::RU => "rU",
+            SpecialReg::RV => "rV",
+            SpecialReg::RG => "rG",
+            SpecialReg::RL => "rL",
+            SpecialReg::RA => "rA",
+            SpecialReg::RF => "rF",
+            SpecialReg::RP => "rP",
+            SpecialReg::RW => "rW",
+            SpecialReg::RX => "rX",
+            SpecialReg::RY => "rY",
+            SpecialReg::RZ => "rZ",
+            SpecialReg::RWW => "rWW",
+            SpecialReg::RXX => "rXX",
+            SpecialReg::RYY => "rYY",
+            SpecialReg::RZZ => "rZZ",
+        }
+    }
+
     /// Convert a u8 register number to a SpecialReg variant
     pub fn from_u8(n: u8) -> Option<Self> {
         match n {
@@ -4421,18 +4460,18 @@ impl MMix {
 
         // Display non-zero special registers
         writeln!(f, "Special Registers:")?;
-        let special_names = [
-            "rA", "rB", "rC", "rD", "rE", "rF", "rG", "rH", "rI", "rJ", "rK", "rL", "rM", "rN",
-            "rO", "rP", "rQ", "rR", "rS", "rT", "rU", "rV", "rW", "rX", "rY", "rZ", "rBB", "rTT",
-            "rWW", "rXX", "rYY", "rZZ",
-        ];
         any_nonzero = false;
         for (i, &value) in self.special_regs.iter().enumerate() {
             if value != 0 {
+                let name = match SpecialReg::from_u8(i as u8) {
+                    Some(reg) => reg.name(),
+                    // No register carries this number; still show the value.
+                    None => "r??",
+                };
                 writeln!(
                     f,
                     "  {:<4} = {:#018x} ({})",
-                    special_names[i],
+                    name,
                     value,
                     display_value(value, format)
                 )?;
@@ -9928,5 +9967,30 @@ Sub\tSETI\t$0,3
                 count
             ))
         );
+    }
+
+    /// The dump labels each slot with the name of the register that slot
+    /// holds, so a value never appears under a neighbour's name.
+    #[test]
+    fn display_labels_each_special_register_with_its_own_name() {
+        let mut mmix = MMix::new();
+        let expected = [
+            (SpecialReg::RN, "rN", 0x1111_u64),
+            (SpecialReg::RO, "rO", 0x2222),
+            (SpecialReg::RG, "rG", 0x3333),
+            (SpecialReg::RL, "rL", 0x4444),
+        ];
+        for (reg, _, value) in expected {
+            mmix.set_special(reg, value);
+        }
+
+        let dump = mmix.to_string();
+        for (_, name, value) in expected {
+            let line = format!("{:<4} = {:#018x}", name, value);
+            assert!(
+                dump.contains(&line),
+                "expected `{line}` in the dump, got:\n{dump}"
+            );
+        }
     }
 }
