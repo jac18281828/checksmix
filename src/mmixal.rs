@@ -4822,6 +4822,16 @@ mod tests {
     }
 
     #[test]
+    fn test_set_rejects_a_wide_symbol_operand() {
+        let mut asm = MMixAssembler::new("C IS #12345\nSET $1,C", "<test>");
+        let err = asm.parse().expect_err("expected out-of-range error");
+        assert!(
+            err.contains("SETI"),
+            "error should name SETI as the wide form, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_seti_accepts_an_immediate_above_a_wyde() {
         let mut asm = MMixAssembler::new("SETI $1,#10000", "<test>");
         asm.parse().unwrap();
