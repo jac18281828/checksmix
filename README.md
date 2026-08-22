@@ -164,6 +164,25 @@ An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
 four. Construct one on the thread that runs it, and wrap it in
 `std::panic::AssertUnwindSafe` to put it through `catch_unwind`.
 
+## Learning MMIX
+
+MMIX is Knuth's own machine, and he documented it himself:
+
+- [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html) — the
+  canonical home: design rationale, current news, and why MIX was retired.
+- [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
+  — the complete specification, with Knuth's own assembler and simulator
+  (Springer LNCS 1750, 1999).
+- [*The Art of Computer Programming*](https://www-cs-faculty.stanford.edu/~knuth/taocp.html),
+  Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005) — the
+  instruction set as Knuth teaches it, and the shortest path in.
+- [The MMIX Home Page](http://mmix.cs.hm.edu/) — Martin Ruckert's collection at Munich
+  University of Applied Sciences: documentation, sources, binaries, worked examples,
+  and *The MMIX Supplement*.
+
+`checksmix` follows the same instruction set, so a program written from any of these
+runs here — and in [playmmix](https://playmmix.2ad.com) without installing anything.
+
 ## Tribute
 
 Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me alot about how to think about programming and system design.
