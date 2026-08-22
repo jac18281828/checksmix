@@ -2684,43 +2684,32 @@ impl MMix {
             }
             // SET instructions
             // SET family instructions - opcodes 0xE0-0xEF
+            // Each SET* places YZ in its own wyde and zeroes the other 48 bits.
             Opcode::SETH => {
-                // SETH $X, YZ - Set high wyde (clears low 48 bits)
+                // SETH $X, YZ - u($X) <- YZ * 2^48
                 let yz = ((y as u64) << 8) | (z as u64);
-                let value = yz << 48;
-                self.set_register(x, value);
+                self.set_register(x, yz << 48);
                 self.advance_pc();
                 true
             }
             Opcode::SETMH => {
-                // SETMH $X, YZ - Set medium high wyde (clears bits 32-47, then sets them)
+                // SETMH $X, YZ - u($X) <- YZ * 2^32
                 let yz = ((y as u64) << 8) | (z as u64);
-                let value = yz << 32;
-                let current = self.get_register(x);
-                // Clear bits 32-47, then OR in the new value
-                let mask = !(0xFFFF_u64 << 32);
-                self.set_register(x, (current & mask) | value);
+                self.set_register(x, yz << 32);
                 self.advance_pc();
                 true
             }
             Opcode::SETML => {
-                // SETML $X, YZ - Set medium low wyde (clears bits 16-31, then sets them)
+                // SETML $X, YZ - u($X) <- YZ * 2^16
                 let yz = ((y as u64) << 8) | (z as u64);
-                let value = yz << 16;
-                let current = self.get_register(x);
-                // Clear bits 16-31, then OR in the new value
-                let mask = !(0xFFFF_u64 << 16);
-                self.set_register(x, (current & mask) | value);
+                self.set_register(x, yz << 16);
                 self.advance_pc();
                 true
             }
             Opcode::SETL => {
-                // SETL $X, YZ - Set low wyde (clears bits 0-15, then sets them)
+                // SETL $X, YZ - u($X) <- YZ
                 let yz = ((y as u64) << 8) | (z as u64);
-                let current = self.get_register(x);
-                // Clear bits 0-15, then OR in the new value
-                let mask = !0xFFFF_u64;
-                self.set_register(x, (current & mask) | yz);
+                self.set_register(x, yz);
                 self.advance_pc();
                 true
             }
@@ -5502,33 +5491,87 @@ mod tests {
     }
 
     #[test]
-    fn test_all_set_instructions_have_tests() {
-        // SETH, SETMH, SETML, SETL are tested via SET instruction tests in mmixal module
-        // Verify they exist by executing them
+    fn test_wyde_set_replaces_whole_register() {
+        // SETH, SETMH, SETML, SETL each deposit YZ in one wyde and zero the
+        // other 48 bits. The all-ones preload is what distinguishes a set
+        // from a merge.
+        for (opcode, shift) in [(0xE0_u32, 48_u32), (0xE1, 32), (0xE2, 16), (0xE3, 0)] {
+            let mut mmix = MMix::new();
+            mmix.set_register(1, u64::MAX);
+            mmix.write_tetra(0, (opcode << 24) | (1 << 16) | 0xABCD);
+
+            mmix.execute_instruction();
+
+            let reg = mmix.get_register(1);
+            assert_eq!((reg >> shift) & 0xFFFF, 0xABCD, "opcode {opcode:#04X} wyde");
+            assert_eq!(
+                reg & !(0xFFFF_u64 << shift),
+                0,
+                "opcode {opcode:#04X} residue"
+            );
+            assert_eq!(mmix.get_pc(), 4);
+        }
+    }
+
+    #[test]
+    fn test_setl_zero_clears_whole_register() {
         let mut mmix = MMix::new();
+        mmix.set_register(1, u64::MAX);
+        // SETL $1, 0 - Knuth's one-instruction register clear
+        mmix.write_tetra(0, 0xE3010000);
 
-        // SETH $1, 0x0001
-        mmix.write_tetra(0, 0xE0010001);
         mmix.execute_instruction();
-        assert_eq!(mmix.get_register(1), 0x0001000000000000);
+        assert_eq!(mmix.get_register(1), 0);
+    }
 
-        // SETMH $2, 0x0002
+    /// Assemble `source`, load its image and execute `steps` instructions
+    /// from the first assembled address.
+    fn assemble_and_run(source: &str, steps: usize) -> MMix {
+        use crate::debugger::write_image;
+        use crate::mmixal::MMixAssembler;
+
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().expect("test source must assemble");
+        let start = asm.instructions[0].0;
+
+        let mut mmix = MMix::new();
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(start);
+        for _ in 0..steps {
+            mmix.execute_instruction();
+        }
+        mmix
+    }
+
+    #[test]
+    fn test_seti_lands_a_wide_constant() {
+        let mmix = assemble_and_run("SETI $1,#0123456789ABCDEF", 4);
+        assert_eq!(mmix.get_register(1), 0x0123456789ABCDEF);
+    }
+
+    #[test]
+    fn test_lda_large_address_lands_whole_address() {
+        // LDA $X,Label above #FF expands to the same four tetras SETI uses;
+        // examples/hello_world.mms gets its string pointer this way.
+        let mmix = assemble_and_run("\tLOC\t#2000000000001234\nMain\tLDA\t$255,Main\n", 4);
+        assert_eq!(mmix.get_register(255), 0x2000_0000_0000_1234);
+    }
+
+    #[test]
+    fn test_inc_and_or_wydes_preserve_the_others() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 0x1111_2222_3333_4444);
+
+        // INCML $1, 0x0001
+        mmix.write_tetra(0, 0xE6010001);
+        mmix.execute_instruction();
+        assert_eq!(mmix.get_register(1), 0x1111_2222_3334_4444);
+
+        // ORL $1, 0x000F
         mmix.set_pc(4);
-        mmix.write_tetra(4, 0xE1020002);
+        mmix.write_tetra(4, 0xEB01000F);
         mmix.execute_instruction();
-        assert_eq!(mmix.get_register(2), 0x0000000200000000);
-
-        // SETML $3, 0x0003
-        mmix.set_pc(8);
-        mmix.write_tetra(8, 0xE2030003);
-        mmix.execute_instruction();
-        assert_eq!(mmix.get_register(3), 0x0000000000030000);
-
-        // SETL $4, 0x0004
-        mmix.set_pc(12);
-        mmix.write_tetra(12, 0xE3040004);
-        mmix.execute_instruction();
-        assert_eq!(mmix.get_register(4), 0x0000000000000004);
+        assert_eq!(mmix.get_register(1), 0x1111_2222_3334_444F);
     }
 
     #[test]

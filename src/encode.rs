@@ -16,10 +16,12 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             let b1 = (value >> 32) as u16;
             let b2 = (value >> 16) as u16;
             let b3 = *value as u16;
+            // SETH clears the register, so the increments land the whole
+            // constant regardless of what the register held.
             bytes.extend_from_slice(&encode_instruction(0xE0, *x, b0)); // SETH
-            bytes.extend_from_slice(&encode_instruction(0xE1, *x, b1)); // SETMH
-            bytes.extend_from_slice(&encode_instruction(0xE2, *x, b2)); // SETML
-            bytes.extend_from_slice(&encode_instruction(0xE3, *x, b3)); // SETL
+            bytes.extend_from_slice(&encode_instruction(0xE5, *x, b1)); // INCMH
+            bytes.extend_from_slice(&encode_instruction(0xE6, *x, b2)); // INCML
+            bytes.extend_from_slice(&encode_instruction(0xE7, *x, b3)); // INCL
         }
         MMixInstruction::SETRR(x, y) => {
             // SET $X, $Y -> ORI $X, $Y, 0 (machine copy)
@@ -2308,15 +2310,15 @@ mod tests {
 
     #[test]
     fn test_set_pseudo_instruction() {
-        // SET should expand to SETH, SETMH, SETML, SETL
+        // SET expands to SETH, INCMH, INCML, INCL
         let bytes = encode_instruction_bytes(&MMixInstruction::SET(1, 0x123456789ABCDEF0));
         assert_eq!(
             bytes,
             vec![
                 0xE0, 1, 0x12, 0x34, // SETH $1, 0x1234
-                0xE1, 1, 0x56, 0x78, // SETMH $1, 0x5678
-                0xE2, 1, 0x9A, 0xBC, // SETML $1, 0x9ABC
-                0xE3, 1, 0xDE, 0xF0, // SETL $1, 0xDEF0
+                0xE5, 1, 0x56, 0x78, // INCMH $1, 0x5678
+                0xE6, 1, 0x9A, 0xBC, // INCML $1, 0x9ABC
+                0xE7, 1, 0xDE, 0xF0, // INCL $1, 0xDEF0
             ]
         );
     }

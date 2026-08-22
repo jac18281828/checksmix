@@ -38,13 +38,13 @@ Test1   ADDUI   TestNum,TestNum,1       % Increment test counter
         JMP     TestFail
 
 % ========================================
-% Test 2: SETL, SETH, SETMH, SETML
+% Test 2: SETH then INCMH, INCML, INCL
 % ========================================
 Test2   ADDUI   TestNum,TestNum,1       % Increment test counter
         SETH    Result,#0123
-        SETMH   Result,#4567
-        SETML   Result,#89AB
-        SETL    Result,#CDEF
+        INCMH   Result,#4567
+        INCML   Result,#89AB
+        INCL    Result,#CDEF
         SETI Expect,#0123456789ABCDEF
         CMP     Temp,Result,Expect
         PBZ     Temp,Test3

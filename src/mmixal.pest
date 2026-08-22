@@ -403,14 +403,16 @@ operand_reg_reg_imm = { register ~ comma ~ register ~ comma ~ expr_value }
 // chooses the RRR or RRI MMixInstruction variant after resolving Z.
 operand_reg_reg_z = { register ~ comma ~ register ~ comma ~ (register | expr_value) }
 operand_reg_reg = { register ~ comma ~ register }
+// Auto-immediate operand shape for SET: the source is either a register
+// reference or an expression value, and the parser chooses SETRR or SETL.
+operand_reg_z = { register ~ comma ~ (register | expr_value) }
 operand_reg_imm = { register ~ comma ~ expr_value }
 operand_reg = { register }
 operand_imm = { expr_value }
 
 // Instructions with different operand patterns
-// SET/SETI follow MMIX convention: SET for register, SETI for immediate
-inst_set = { mnemonic_set ~ operand_reg_reg }  // SET $X,$Y -> ORI $X,$Y,0
-inst_seti = { mnemonic_seti ~ operand_reg_imm }  // SETI $X,IMM -> SETL/INCML/etc
+inst_set = { mnemonic_set ~ operand_reg_z }
+inst_seti = { mnemonic_seti ~ operand_reg_imm }
 inst_setl_ri = { mnemonic_setl ~ operand_reg_imm }
 inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
 inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
@@ -428,17 +430,18 @@ inst_andnmh_ri = { mnemonic_andnmh ~ operand_reg_imm }
 inst_andnml_ri = { mnemonic_andnml ~ operand_reg_imm }
 inst_andnl_ri = { mnemonic_andnl ~ operand_reg_imm }
 
-// Load/Store (can take reg+reg or reg+imm) - ordered longest first
-inst_load_store_rrr = {
-    (mnemonic_ldbui | mnemonic_ldbu | mnemonic_ldbi | mnemonic_ldb |
-     mnemonic_ldwui | mnemonic_ldwu | mnemonic_ldwi | mnemonic_ldw |
-     mnemonic_ldtui | mnemonic_ldtu | mnemonic_ldti | mnemonic_ldt |
-     mnemonic_ldoui | mnemonic_ldou | mnemonic_ldoi | mnemonic_ldo |
-     mnemonic_stbui | mnemonic_stbu | mnemonic_stbi | mnemonic_stb |
-     mnemonic_stwui | mnemonic_stwu | mnemonic_stwi | mnemonic_stw |
-     mnemonic_sttui | mnemonic_sttu | mnemonic_stti | mnemonic_stt |
-     mnemonic_stoui | mnemonic_stou | mnemonic_stoi | mnemonic_sto) ~
-    operand_reg_reg_reg
+// Load/Store base mnemonics auto-select RRR/RRI by Z.
+// Ordered longest first so prefixes like LDBU win over LDB.
+inst_load_store_auto = {
+    (mnemonic_ldbu | mnemonic_ldb |
+     mnemonic_ldwu | mnemonic_ldw |
+     mnemonic_ldtu | mnemonic_ldt |
+     mnemonic_ldou | mnemonic_ldo |
+     mnemonic_stbu | mnemonic_stb |
+     mnemonic_stwu | mnemonic_stw |
+     mnemonic_sttu | mnemonic_stt |
+     mnemonic_stou | mnemonic_sto) ~
+    operand_reg_reg_z
 }
 
 inst_load_store_rri = {
@@ -661,7 +664,7 @@ instruction = {
     inst_inch_ri | inst_incmh_ri | inst_incml_ri |
     inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
     inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |
-    inst_load_store_rrr | inst_load_store_rri |
+    inst_load_store_auto | inst_load_store_rri |
     inst_ldunc_rrr | inst_ldunc_rri | inst_stunc_rrr | inst_stunc_rri |
     inst_ldht_rrr | inst_ldht_rri | inst_stht_rrr | inst_stht_rri |
     inst_ldsf_rrr | inst_ldsf_rri | inst_stsf_rrr | inst_stsf_rri |

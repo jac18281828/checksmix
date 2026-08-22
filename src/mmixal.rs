@@ -1622,7 +1622,8 @@ impl MMixAssembler {
         let inner = pair.into_inner().next().ok_or("Empty instruction")?;
 
         match inner.as_rule() {
-            Rule::inst_set => Ok(MMixInstruction::SETRR(0, 0)), // Placeholder: SET $X,$Y -> ORI
+            // SET is one tetra whichever variant it selects.
+            Rule::inst_set => Ok(MMixInstruction::SETRR(0, 0)),
             Rule::inst_seti => Ok(MMixInstruction::SET(0, 0)), // Placeholder: SETI $X,IMM (will expand)
             Rule::inst_setl_ri => Ok(MMixInstruction::SETL(0, 0)),
             Rule::inst_seth_ri => Ok(MMixInstruction::SETH(0, 0)),
@@ -1719,7 +1720,7 @@ impl MMixAssembler {
             Rule::inst_andnmh_ri => self.parse_inst_andnmh(inner),
             Rule::inst_andnml_ri => self.parse_inst_andnml(inner),
             Rule::inst_andnl_ri => self.parse_inst_andnl(inner),
-            Rule::inst_load_store_rrr => self.parse_inst_load_store_rrr(inner),
+            Rule::inst_load_store_auto => self.parse_inst_load_store_auto(inner),
             Rule::inst_load_store_rri => self.parse_inst_load_store_rri(inner),
             Rule::inst_lda_rri => self.parse_inst_lda_rri(inner),
             Rule::inst_lda_ri => self.parse_inst_lda_ri(inner),
@@ -1800,13 +1801,56 @@ impl MMixAssembler {
     fn parse_inst_set(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // mnemonic_set
-        let operands = parts.next().unwrap(); // operand_reg_reg
+        let operands = parts.next().unwrap(); // operand_reg_z
         let mut ops = operands.into_inner();
-        let dest_reg = self.parse_register(ops.next().unwrap())?;
-        let src_reg = self.parse_register(ops.next().unwrap())?;
+        let dest = self.parse_register(ops.next().unwrap())?;
+        self.lower_set_source(dest, ops.next().unwrap())
+    }
 
-        // SET $X,$Y expands to ORI $X,$Y,0 (register-to-register copy)
-        Ok(MMixInstruction::SETRR(dest_reg, src_reg))
+    /// Resolve `SET`'s source operand into the instruction it selects: a
+    /// register reference copies, anything else sets the low wyde. Knuth's
+    /// SET is one tetra, so the immediate form carries 16 bits.
+    fn lower_set_source(
+        &self,
+        dest: u8,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
+
+        let value_pair = if pair.as_rule() == Rule::register {
+            let inner = pair
+                .clone()
+                .into_inner()
+                .next()
+                .expect("register rule has at least one child");
+            if inner.as_rule() == Rule::register_num {
+                return Ok(MMixInstruction::SETRR(dest, self.parse_register(pair)?));
+            }
+            let qualified = self.qualify_name(inner.as_str());
+            if let Some(SymbolType::Register(r)) = self.symbols.get(&qualified).copied() {
+                return Ok(MMixInstruction::SETRR(dest, r));
+            }
+            inner
+        } else {
+            pair
+        };
+
+        // A negative literal wraps into the field it names, as the 8-bit
+        // immediates do; SETI is the sign-extended 64-bit form.
+        let negative = value_pair
+            .clone()
+            .into_inner()
+            .next()
+            .is_some_and(|inner| inner.as_rule() == Rule::signed_number_literal);
+        let value = self.parse_number(value_pair)?;
+
+        if !negative && value > 0xFFFF {
+            return Err(format!(
+                "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; use SETI for a wider constant",
+                self.current_filename, line, col, value
+            ));
+        }
+        Ok(MMixInstruction::SETL(dest, value as u16))
     }
 
     fn parse_inst_seti(
@@ -1820,7 +1864,6 @@ impl MMixAssembler {
         let dest_reg = self.parse_register(ops.next().unwrap())?;
         let val = self.parse_number(ops.next().unwrap())?;
 
-        // SETI $X,IMM expands to SETL/INCML/INCMH/INCH as needed
         Ok(MMixInstruction::SET(dest_reg, val))
     }
 
@@ -2026,37 +2069,54 @@ impl MMixAssembler {
         Ok(MMixInstruction::ANDNL(reg, val))
     }
 
-    fn parse_inst_load_store_rrr(
+    fn parse_inst_load_store_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let mnem_pair = parts.next().unwrap();
+        let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let z_pair = ops.next().unwrap();
+        let z = self.lower_z_operand(z_pair, &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "LDB" => Ok(MMixInstruction::LDB(x, y, z)),
-            "LDBU" => Ok(MMixInstruction::LDBU(x, y, z)),
-            "LDW" => Ok(MMixInstruction::LDW(x, y, z)),
-            "LDWU" => Ok(MMixInstruction::LDWU(x, y, z)),
-            "LDT" => Ok(MMixInstruction::LDT(x, y, z)),
-            "LDTU" => Ok(MMixInstruction::LDTU(x, y, z)),
-            "LDO" => Ok(MMixInstruction::LDO(x, y, z)),
-            "LDOU" => Ok(MMixInstruction::LDOU(x, y, z)),
-            "LDA" => Ok(MMixInstruction::LDA(x, y, z)),
-            "STB" => Ok(MMixInstruction::STB(x, y, z)),
-            "STBU" => Ok(MMixInstruction::STBU(x, y, z)),
-            "STW" => Ok(MMixInstruction::STW(x, y, z)),
-            "STWU" => Ok(MMixInstruction::STWU(x, y, z)),
-            "STT" => Ok(MMixInstruction::STT(x, y, z)),
-            "STTU" => Ok(MMixInstruction::STTU(x, y, z)),
-            "STO" => Ok(MMixInstruction::STO(x, y, z)),
-            "STOU" => Ok(MMixInstruction::STOU(x, y, z)),
-            _ => Err(format!("Unknown load/store instruction: {}", mnem.as_str())),
+        match (mnem.as_str(), z) {
+            ("LDB", ZForm::Reg(z)) => Ok(MMixInstruction::LDB(x, y, z)),
+            ("LDB", ZForm::Imm(z)) => Ok(MMixInstruction::LDBI(x, y, z)),
+            ("LDBU", ZForm::Reg(z)) => Ok(MMixInstruction::LDBU(x, y, z)),
+            ("LDBU", ZForm::Imm(z)) => Ok(MMixInstruction::LDBUI(x, y, z)),
+            ("LDW", ZForm::Reg(z)) => Ok(MMixInstruction::LDW(x, y, z)),
+            ("LDW", ZForm::Imm(z)) => Ok(MMixInstruction::LDWI(x, y, z)),
+            ("LDWU", ZForm::Reg(z)) => Ok(MMixInstruction::LDWU(x, y, z)),
+            ("LDWU", ZForm::Imm(z)) => Ok(MMixInstruction::LDWUI(x, y, z)),
+            ("LDT", ZForm::Reg(z)) => Ok(MMixInstruction::LDT(x, y, z)),
+            ("LDT", ZForm::Imm(z)) => Ok(MMixInstruction::LDTI(x, y, z)),
+            ("LDTU", ZForm::Reg(z)) => Ok(MMixInstruction::LDTU(x, y, z)),
+            ("LDTU", ZForm::Imm(z)) => Ok(MMixInstruction::LDTUI(x, y, z)),
+            ("LDO", ZForm::Reg(z)) => Ok(MMixInstruction::LDO(x, y, z)),
+            ("LDO", ZForm::Imm(z)) => Ok(MMixInstruction::LDOI(x, y, z)),
+            ("LDOU", ZForm::Reg(z)) => Ok(MMixInstruction::LDOU(x, y, z)),
+            ("LDOU", ZForm::Imm(z)) => Ok(MMixInstruction::LDOUI(x, y, z)),
+            ("STB", ZForm::Reg(z)) => Ok(MMixInstruction::STB(x, y, z)),
+            ("STB", ZForm::Imm(z)) => Ok(MMixInstruction::STBI(x, y, z)),
+            ("STBU", ZForm::Reg(z)) => Ok(MMixInstruction::STBU(x, y, z)),
+            ("STBU", ZForm::Imm(z)) => Ok(MMixInstruction::STBUI(x, y, z)),
+            ("STW", ZForm::Reg(z)) => Ok(MMixInstruction::STW(x, y, z)),
+            ("STW", ZForm::Imm(z)) => Ok(MMixInstruction::STWI(x, y, z)),
+            ("STWU", ZForm::Reg(z)) => Ok(MMixInstruction::STWU(x, y, z)),
+            ("STWU", ZForm::Imm(z)) => Ok(MMixInstruction::STWUI(x, y, z)),
+            ("STT", ZForm::Reg(z)) => Ok(MMixInstruction::STT(x, y, z)),
+            ("STT", ZForm::Imm(z)) => Ok(MMixInstruction::STTI(x, y, z)),
+            ("STTU", ZForm::Reg(z)) => Ok(MMixInstruction::STTU(x, y, z)),
+            ("STTU", ZForm::Imm(z)) => Ok(MMixInstruction::STTUI(x, y, z)),
+            ("STO", ZForm::Reg(z)) => Ok(MMixInstruction::STO(x, y, z)),
+            ("STO", ZForm::Imm(z)) => Ok(MMixInstruction::STOI(x, y, z)),
+            ("STOU", ZForm::Reg(z)) => Ok(MMixInstruction::STOU(x, y, z)),
+            ("STOU", ZForm::Imm(z)) => Ok(MMixInstruction::STOUI(x, y, z)),
+            _ => Err(format!("Unknown load/store instruction: {}", mnem)),
         }
     }
 
@@ -4729,6 +4789,106 @@ mod tests {
         let mut asm = MMixAssembler::new("ADD $1,$2,5", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 5));
+    }
+
+    // -----------------------------------------------------------------
+    // SET selects its variant from the operand's kind, and the base
+    // load/store mnemonics select RRR/RRI the same way.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_set_immediate_selects_setl() {
+        let mut asm = MMixAssembler::new("SET $1,5", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_set_accepts_a_wyde_wide_immediate() {
+        // Above the 8-bit arithmetic Z field, still inside SET's own wyde.
+        let mut asm = MMixAssembler::new("SET $1,20000", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 20000));
+    }
+
+    #[test]
+    fn test_set_rejects_an_immediate_above_a_wyde() {
+        let mut asm = MMixAssembler::new("SET $1,#10000", "<test>");
+        let err = asm.parse().expect_err("expected out-of-range error");
+        assert!(
+            err.contains("SETI"),
+            "error should name SETI as the wide form, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_seti_accepts_an_immediate_above_a_wyde() {
+        let mut asm = MMixAssembler::new("SETI $1,#10000", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SET(1, 0x10000));
+    }
+
+    #[test]
+    fn test_set_negative_literal_wraps_to_its_wyde() {
+        let mut asm = MMixAssembler::new("SET $1,-1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 0xFFFF));
+    }
+
+    #[test]
+    fn test_set_symbol_register_alias_still_copies() {
+        let mut asm = MMixAssembler::new("N IS $7\nSET $1,N", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETRR(1, 7));
+    }
+
+    #[test]
+    fn test_set_is_one_tetra_and_seti_is_four() {
+        let mut set = MMixAssembler::new("SET $1,5", "<test>");
+        set.parse().unwrap();
+        let mut seti = MMixAssembler::new("SETI $1,5", "<test>");
+        seti.parse().unwrap();
+
+        assert_eq!(
+            set.encode_instruction_bytes(&set.instructions[0].1).len(),
+            4
+        );
+        assert_eq!(
+            seti.encode_instruction_bytes(&seti.instructions[0].1).len(),
+            16
+        );
+    }
+
+    #[test]
+    fn test_auto_load_store_immediate_swap() {
+        let mut base = MMixAssembler::new("LDO $1,$2,0\nSTO $1,$2,0", "<test>");
+        base.parse().unwrap();
+        let mut explicit = MMixAssembler::new("LDOI $1,$2,0\nSTOI $1,$2,0", "<test>");
+        explicit.parse().unwrap();
+
+        assert_eq!(base.instructions[0].1, explicit.instructions[0].1);
+        assert_eq!(base.instructions[1].1, explicit.instructions[1].1);
+        assert_eq!(base.instructions[0].1, MMixInstruction::LDOI(1, 2, 0));
+        assert_eq!(base.instructions[1].1, MMixInstruction::STOI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_auto_load_store_register_form_unchanged() {
+        let mut asm = MMixAssembler::new("LDO $1,$2,$3\nSTBU $1,$2,$3", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::LDO(1, 2, 3));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::STBU(1, 2, 3));
+    }
+
+    #[test]
+    fn test_auto_load_store_immediate_out_of_range() {
+        // Z is an 8-bit field for loads and stores.
+        let mut asm = MMixAssembler::new("LDO $1,$2,300", "<test>");
+        let err = asm.parse().expect_err("expected out-of-range error");
+        assert!(
+            err.contains("out of range 0..255"),
+            "error should mention range, got: {err}"
+        );
     }
 
     #[test]

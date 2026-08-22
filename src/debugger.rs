@@ -974,8 +974,7 @@ Text\tBYTE\t\"Hi\",0
         let asm = assemble(source, "print.mms");
         let main_addr = *asm.labels.get("Main").unwrap();
         let mut dbg = Debugger::load(asm);
-        // SET $3,42 assembles to 4 real instructions (SETH/SETMH/SETML/SETL);
-        // step through all of them.
+        // SETI expands to four tetras; step through all of them.
         for _ in 0..4 {
             dbg.execute(Command::Stepi);
         }
