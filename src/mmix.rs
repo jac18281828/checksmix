@@ -1037,8 +1037,7 @@ impl MMix {
         let return_pc = self.get_special(SpecialReg::RJ);
         self.set_special(SpecialReg::RJ, saved_rj);
 
-        let yz_signed = yz as i16 as i64;
-        Some(return_pc.wrapping_add((yz_signed * 4) as u64))
+        Some(return_pc.wrapping_add((yz as u64) * 4))
     }
 
     /// Get the value of a special-purpose register.
@@ -1229,29 +1228,26 @@ impl MMix {
 
     // ========== Internal Helpers ==========
 
-    /// Conditional branch forward: if cond, PC = PC + (Y<<8|Z) * 4
+    /// Conditional branch forward: if cond, PC = PC + 4*YZ.
     #[inline]
     fn branch_forward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
-            let offset = ((y as u16) << 8 | z as u16) as i16;
-            // Branch is relative to current PC
-            self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
+            let yz = ((y as u16) << 8) | (z as u16);
+            self.pc = self.pc.wrapping_add((yz as u64) * 4);
         } else {
             self.advance_pc();
         }
     }
 
-    /// Conditional branch backward: if cond, PC = PC - (Y<<8|Z) * 4
+    /// Conditional branch backward: if cond, PC = PC + 4*(YZ - 65536).
     #[inline]
     fn branch_backward(&mut self, cond: bool, y: u8, z: u8) {
         if cond {
-            // YZ is a signed 16-bit offset in tetras (4-byte units)
-            // For backward branches, this is typically negative (e.g., 0xFFF4 = -12)
+            // YZ is unsigned in both directions; the backward opcode carries the
+            // sign, so YZ = 0 is -65536 tetras and YZ = 65535 is -1.
             let yz = ((y as u16) << 8) | (z as u16);
-            let offset = yz as i16; // Interpret as signed
-            // Backward branch: PC = PC + (offset * 4)
-            // Note: offset is negative for backward branches
-            self.pc = self.pc.wrapping_add((offset as i64 * 4) as u64);
+            let offset = yz as i64 - 65536;
+            self.pc = self.pc.wrapping_add((offset * 4) as u64);
         } else {
             self.advance_pc();
         }
@@ -4116,45 +4112,48 @@ impl MMix {
             }
             // Jump/Stack/System instructions (§17-19) - opcodes 0xF0-0xFF
             Opcode::JMP => {
-                // JMP XYZ - Jump (unconditional, forward, unsigned magnitude)
-                let offset = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
-                self.pc = self.pc.wrapping_add((offset as u64) * 4);
+                // JMP XYZ - Jump to PC + 4*XYZ.
+                let xyz = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
+                self.pc = self.pc.wrapping_add((xyz as u64) * 4);
                 true
             }
             Opcode::JMPB => {
-                // JMPB XYZ - Jump backward
-                let offset = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
-                self.pc = self.pc.wrapping_sub((offset as u64) * 4);
+                // JMPB XYZ - Jump to PC + 4*(XYZ - 2^24).
+                let xyz = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
+                let offset = xyz as i64 - (1 << 24);
+                self.pc = self.pc.wrapping_add((offset * 4) as u64);
                 true
             }
             Opcode::PUSHJ => {
-                // PUSHJ $X, YZ - Push registers and jump (forward, signed YZ)
+                // PUSHJ $X, YZ - Push registers and jump to PC + 4*YZ.
                 let pc_at_inst = self.pc;
                 self.push_frame(x);
-                let offset = (((y as u16) << 8) | z as u16) as i16;
-                self.pc = pc_at_inst.wrapping_add((offset as i64 * 4) as u64);
+                let yz = ((y as u16) << 8) | z as u16;
+                self.pc = pc_at_inst.wrapping_add((yz as u64) * 4);
                 true
             }
             Opcode::PUSHJB => {
-                // PUSHJB $X, YZ - Push registers and jump backward (unsigned YZ)
+                // PUSHJB $X, YZ - Push registers and jump to PC + 4*(YZ - 65536).
                 let pc_at_inst = self.pc;
                 self.push_frame(x);
-                let offset = ((y as u16) << 8) | z as u16;
-                self.pc = pc_at_inst.wrapping_sub((offset as u64) * 4);
+                let yz = ((y as u16) << 8) | z as u16;
+                let offset = yz as i64 - 65536;
+                self.pc = pc_at_inst.wrapping_add((offset * 4) as u64);
                 true
             }
             Opcode::GETA => {
-                // GETA $X, YZ - Get address relative to current PC
-                let offset = ((y as u16) << 8 | z as u16) as i16;
-                let addr = self.pc.wrapping_add((offset as i64 * 4) as u64);
+                // GETA $X, YZ - Address PC + 4*YZ.
+                let yz = ((y as u16) << 8) | z as u16;
+                let addr = self.pc.wrapping_add((yz as u64) * 4);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true
             }
             Opcode::GETAB => {
-                // GETAB $X, YZ - Get address backward relative to current PC
-                let offset = (y as u16) << 8 | z as u16;
-                let addr = self.pc.wrapping_sub((offset as u64) * 4);
+                // GETAB $X, YZ - Address PC + 4*(YZ - 65536).
+                let yz = ((y as u16) << 8) | z as u16;
+                let offset = yz as i64 - 65536;
+                let addr = self.pc.wrapping_add((offset * 4) as u64);
                 self.set_register(x, addr);
                 self.advance_pc();
                 true
@@ -4190,10 +4189,9 @@ impl MMix {
                     self.pc = target;
                 } else {
                     // No frame to pop: branch via current rJ as a defensive fallback.
-                    let yz_signed = yz as i16 as i64;
                     self.pc = self
                         .get_special(SpecialReg::RJ)
-                        .wrapping_add((yz_signed * 4) as u64);
+                        .wrapping_add((yz as u64) * 4);
                 }
                 true
             }
@@ -7173,8 +7171,7 @@ mod tests {
     fn test_jmp_large_forward_offset() {
         let mut mmix = MMix::new();
         mmix.set_pc(100);
-        // XYZ = 0xFFFFFB: bit 23 is set, but JMP has no sign check, so this
-        // decodes as the unsigned magnitude 16777211, not as -5.
+        // XYZ is unsigned in the forward opcode: 0xFFFFFB is 16777211, not -5.
         mmix.write_tetra(100, 0xF0FFFFFB); // JMP 0xFFFFFB
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 100 + 16777211 * 4); // PC = 100 + 16777211*4
@@ -7184,8 +7181,8 @@ mod tests {
     fn test_jmpb() {
         let mut mmix = MMix::new();
         mmix.set_pc(100);
-        // JMPB 5 - Jump backward by 5
-        mmix.write_tetra(100, 0xF1000005); // JMPB 0,0,5
+        // XYZ = 0xFFFFFB is 0xFFFFFB - 2^24 = -5 tetras.
+        mmix.write_tetra(100, 0xF1FFFFFB); // JMPB 0xFFFFFB
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 80); // PC = 100 - 5*4 = 80
     }
@@ -7204,8 +7201,8 @@ mod tests {
     fn test_pushjb() {
         let mut mmix = MMix::new();
         mmix.set_pc(100);
-        // PUSHJB $0, 0, 5 - Push and jump backward
-        mmix.write_tetra(100, 0xF3000005); // PUSHJB $0,0,5
+        // YZ = 0xFFFB is 0xFFFB - 65536 = -5 tetras.
+        mmix.write_tetra(100, 0xF300FFFB); // PUSHJB $0,0xFFFB
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 80); // PC = 100 - 5*4 = 80
         assert_eq!(mmix.get_special(SpecialReg::RJ), 104); // Return address saved
@@ -7226,11 +7223,146 @@ mod tests {
     fn test_getab() {
         let mut mmix = MMix::new();
         mmix.set_pc(100);
-        // GETAB $1, 0, 5 - Get address backward
-        mmix.write_tetra(100, 0xF5010005); // GETAB $1,0,5
+        // YZ = 0xFFFB is 0xFFFB - 65536 = -5 tetras.
+        mmix.write_tetra(100, 0xF501FFFB); // GETAB $1,0xFFFB
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 80); // Addr = 100 - 5*4 = 80
         assert_eq!(mmix.get_pc(), 104);
+    }
+
+    /// Assemble a whole program, load it and run it to HALT, returning $255.
+    /// Zeroed memory decodes as TRAP 0,Halt,0, so a mis-jump halts with 0
+    /// rather than hanging -- which is what makes these assertions bite.
+    fn run_to_halt(source: &str) -> u64 {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().expect("program must assemble");
+        let mut mmix = MMix::new();
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(entry_point(&asm));
+        mmix.run();
+        mmix.get_register(255)
+    }
+
+    #[test]
+    fn pushjb_reaches_a_backward_callee() {
+        // The PUSHJB sits ten tetras past AddFunc, so YZ is 65536 - 10.
+        // Read as a magnitude that lands in zeroed memory and halts with 0.
+        let source = "\
+\tLOC\t#100
+AddFunc\tADDU\t$0,$0,$1
+\tPOP\t1,0
+Main\tSETI\t$1,40
+\tSETI\t$2,2
+\tPUSHJB\t$0,AddFunc
+\tSET\t$255,$0
+\tTRAP\t0,Halt,0
+";
+        assert_eq!(run_to_halt(source), 42);
+    }
+
+    #[test]
+    fn forward_branch_past_half_the_field_still_goes_forward() {
+        // BZ's YZ is 32768; sign extension reads it as -32768.
+        let source = "\
+\tLOC\t#100
+Start\tSETI\t$1,0
+\tBZ\t$1,Far
+\tSETI\t$255,1
+\tTRAP\t0,Halt,0
+\tLOC\t#20110
+Far\tSETI\t$255,42
+\tTRAP\t0,Halt,0
+";
+        assert_eq!(run_to_halt(source), 42);
+    }
+
+    #[test]
+    fn backward_branch_past_half_the_field_still_goes_backward() {
+        // BZB's YZ is 32764, which is 32764 - 65536 = -32772 tetras.
+        // Sign extension reads it as +32764.
+        let source = "\
+\tLOC\t#100
+Back\tSETI\t$255,42
+\tTRAP\t0,Halt,0
+\tLOC\t#20100
+Main\tSETI\t$1,0
+\tBZB\t$1,Back
+\tSETI\t$255,1
+\tTRAP\t0,Halt,0
+";
+        assert_eq!(run_to_halt(source), 42);
+    }
+
+    #[test]
+    fn pushj_forward_past_half_the_field_still_goes_forward() {
+        // PUSHJ's YZ is 32772; sign extension reads it as -32764.
+        let source = "\
+\tLOC\t#100
+Main\tSETI\t$1,40
+\tPUSHJ\t$0,Far
+\tSET\t$255,$0
+\tTRAP\t0,Halt,0
+\tLOC\t#20120
+Far\tSETI\t$0,42
+\tPOP\t1,0
+";
+        assert_eq!(run_to_halt(source), 42);
+    }
+
+    #[test]
+    fn test_geta_forward_field_above_half_the_range() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        // YZ = 0xC000 is 49152 tetras forward, not -16384.
+        mmix.write_tetra(0x100, 0xF401C000); // GETA $1,0xC000
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0x100 + 49152 * 4);
+    }
+
+    #[test]
+    fn test_jmpb_small_field_is_a_far_backward_jump() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x4000000);
+        // XYZ = 5 is 5 - 2^24 tetras, the far end of JMPB's reach.
+        mmix.write_tetra(0x4000000, 0xF1000005); // JMPB 5
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x4000000 - (16777216 - 5) * 4);
+    }
+
+    #[test]
+    fn test_getab_small_field_is_a_far_backward_address() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x40000);
+        // YZ = 5 is 5 - 65536 tetras, the far end of GETAB's reach.
+        mmix.write_tetra(0x40000, 0xF5010005); // GETAB $1,5
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0x40000 - (65536 - 5) * 4);
+    }
+
+    #[test]
+    fn test_pop_frame_yz_above_half_the_field_resumes_forward() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.write_tetra(0x100, 0xF2000004); // PUSHJ $0,4 -> 0x110, rJ = 0x104
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
+        // POP resumes at rJ + 4*YZ, unsigned: 0x8000 is forward, not -32768.
+        mmix.write_tetra(0x110, 0xF8008000); // POP 0,0x8000
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x104 + 32768 * 4);
+    }
+
+    #[test]
+    fn test_pop_without_a_frame_resumes_forward_from_rj() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RJ, 0x200);
+        mmix.write_tetra(0x100, 0xF8008000); // POP 0,0x8000
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x200 + 32768 * 4);
     }
 
     #[test]

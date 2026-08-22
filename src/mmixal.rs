@@ -251,8 +251,8 @@ pub enum MMixInstruction {
     SRUI(u8, u8, u8), // SRU $X, $Y, Z - shift right unsigned immediate
 
     // Branch instructions
-    JMP(u32),          // JMP offset (24-bit), forward: unsigned instruction-unit magnitude
-    JMPB(u32),         // JMPB offset (24-bit), backward: unsigned instruction-unit magnitude
+    JMP(u32),          // JMP XYZ (24-bit), jump to @ + 4*XYZ
+    JMPB(u32),         // JMPB XYZ (24-bit), jump to @ + 4*(XYZ - 2^24)
     JE(u8, u16),       // JE $X, offset
     JNE(u8, u16),      // JNE $X, offset
     JL(u8, u16),       // JL $X, offset
@@ -927,6 +927,14 @@ impl TryFrom<u8> for Opcode {
 enum ZForm {
     Reg(u8),
     Imm(u8),
+}
+
+/// A PC-relative displacement in the instruction encoding: the forward opcode
+/// carries `field` directly, the backward opcode carries `2^bits - magnitude`.
+#[derive(Debug, Clone, Copy)]
+struct RelativeField {
+    backward: bool,
+    field: u32,
 }
 
 /// One input translation unit: its filename, the PREPROCESSED source the
@@ -2614,10 +2622,77 @@ impl MMixAssembler {
         }
     }
 
+    /// Resolve a PC-relative target into the field a `bits`-wide operand
+    /// carries. Forward reaches `0..=2^bits - 1` tetras and backward
+    /// `1..=2^bits`, so a displacement of zero takes the forward opcode. A
+    /// mnemonic spelled with a trailing `B` asserts a backward target and
+    /// rejects a forward one; every other mnemonic takes its direction from
+    /// the sign of the displacement. `absolute_alternative` names an absolute
+    /// instruction to suggest when the target is unreachable, or is empty.
+    fn relative_field(
+        &self,
+        mnemonic: &str,
+        target: u64,
+        bits: u32,
+        (line, col): (usize, usize),
+        absolute_alternative: &str,
+    ) -> Result<RelativeField, String> {
+        let delta = target.wrapping_sub(self.current_addr) as i64;
+        if delta % 4 != 0 {
+            return Err(format!(
+                "{}:{}:{}: {} target 0x{:X} is not 4-byte aligned relative to the current instruction (byte delta {})",
+                self.current_filename, line, col, mnemonic, target, delta
+            ));
+        }
+        let tetras = delta / 4;
+        if let Some(forward_sibling) = mnemonic.strip_suffix('B')
+            && tetras >= 0
+        {
+            return Err(format!(
+                "{}:{}:{}: {} target 0x{:X} is not behind the current instruction ({} only encodes backward addresses; use {} instead)",
+                self.current_filename, line, col, mnemonic, target, mnemonic, forward_sibling
+            ));
+        }
+        let span = 1i64 << bits;
+        let out_of_range = |direction: &str, reach_tetras: i64| {
+            format!(
+                "{}:{}:{}: {} target 0x{:X} is out of range: {} byte delta {} exceeds {}'s {}-byte {} reach{}",
+                self.current_filename,
+                line,
+                col,
+                mnemonic,
+                target,
+                direction,
+                delta.unsigned_abs(),
+                mnemonic,
+                reach_tetras * 4,
+                direction,
+                absolute_alternative
+            )
+        };
+        if tetras >= 0 {
+            if tetras >= span {
+                return Err(out_of_range("forward", span - 1));
+            }
+            return Ok(RelativeField {
+                backward: false,
+                field: tetras as u32,
+            });
+        }
+        if -tetras > span {
+            return Err(out_of_range("backward", span));
+        }
+        Ok(RelativeField {
+            backward: true,
+            field: (span + tetras) as u32,
+        })
+    }
+
     fn parse_inst_branch(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
@@ -2625,61 +2700,57 @@ impl MMixAssembler {
         let x = self.parse_register(ops.next().unwrap())?;
         let target = self.parse_number(ops.next().unwrap())?;
 
-        // Calculate relative offset from current instruction
-        // Offset is (target - PC) / 4 as a signed 16-bit value
-        let pc = self.current_addr;
-        let offset = ((target as i64 - pc as i64) / 4) as u16;
+        // Each mnemonic names the variant to emit for a forward target and the
+        // one for a backward target. JE/JNE/JL/JG are forward-only spellings of
+        // BZ/BNZ/BN/BP, so their backward form is the sibling's.
+        type Branch = fn(u8, u16) -> MMixInstruction;
+        let mnem = mnem.as_str().to_uppercase();
+        let (forward, backward): (Branch, Branch) = match mnem.as_str() {
+            "JE" => (MMixInstruction::JE, MMixInstruction::BZB),
+            "JNE" => (MMixInstruction::JNE, MMixInstruction::BNZB),
+            "JL" => (MMixInstruction::JL, MMixInstruction::BNB),
+            "JG" => (MMixInstruction::JG, MMixInstruction::BPB),
+            "BN" | "BNB" => (MMixInstruction::BN, MMixInstruction::BNB),
+            "BZ" | "BZB" => (MMixInstruction::BZ, MMixInstruction::BZB),
+            "BP" | "BPB" => (MMixInstruction::BP, MMixInstruction::BPB),
+            "BOD" | "BODB" => (MMixInstruction::BOD, MMixInstruction::BODB),
+            "BNN" | "BNNB" => (MMixInstruction::BNN, MMixInstruction::BNNB),
+            "BNZ" | "BNZB" => (MMixInstruction::BNZ, MMixInstruction::BNZB),
+            "BNP" | "BNPB" => (MMixInstruction::BNP, MMixInstruction::BNPB),
+            "BEV" | "BEVB" => (MMixInstruction::BEV, MMixInstruction::BEVB),
+            _ => return Err(format!("Unknown branch instruction: {mnem}")),
+        };
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "JE" => Ok(MMixInstruction::JE(x, offset)),
-            "JNE" => Ok(MMixInstruction::JNE(x, offset)),
-            "JL" => Ok(MMixInstruction::JL(x, offset)),
-            "JG" => Ok(MMixInstruction::JG(x, offset)),
-            "BN" => Ok(MMixInstruction::BN(x, offset)),
-            "BNB" => Ok(MMixInstruction::BNB(x, offset)),
-            "BZ" => Ok(MMixInstruction::BZ(x, offset)),
-            "BZB" => Ok(MMixInstruction::BZB(x, offset)),
-            "BP" => Ok(MMixInstruction::BP(x, offset)),
-            "BPB" => Ok(MMixInstruction::BPB(x, offset)),
-            "BOD" => Ok(MMixInstruction::BOD(x, offset)),
-            "BODB" => Ok(MMixInstruction::BODB(x, offset)),
-            "BNN" => Ok(MMixInstruction::BNN(x, offset)),
-            "BNNB" => Ok(MMixInstruction::BNNB(x, offset)),
-            "BNZ" => Ok(MMixInstruction::BNZ(x, offset)),
-            "BNZB" => Ok(MMixInstruction::BNZB(x, offset)),
-            "BNP" => Ok(MMixInstruction::BNP(x, offset)),
-            "BNPB" => Ok(MMixInstruction::BNPB(x, offset)),
-            "BEV" => Ok(MMixInstruction::BEV(x, offset)),
-            "BEVB" => Ok(MMixInstruction::BEVB(x, offset)),
-            _ => Err(format!("Unknown branch instruction: {}", mnem.as_str())),
-        }
+        let resolved = self.relative_field(&mnem, target, 16, (line, col), "")?;
+        let field = resolved.field as u16;
+        Ok(if resolved.backward {
+            backward(x, field)
+        } else {
+            forward(x, field)
+        })
     }
 
     fn parse_inst_jmp(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
-        let _mnem = parts.next();
+        let mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let target = self.parse_number(ops.next().unwrap())?;
-        // Calculate relative offset from current instruction, in instruction
-        // units. JMP's 24-bit field is an unsigned forward magnitude and
-        // JMPB's is an unsigned backward magnitude -- neither is a signed
-        // field, so a backward jump must be encoded as JMPB, not as JMP with
-        // a value that only happens to round-trip through this assembler's
-        // own (sign-extending) decoder.
-        let pc = self.current_addr;
-        let signed = (target as i64 - pc as i64) / 4;
-        if signed < 0 {
-            Ok(MMixInstruction::JMPB((-signed) as u32 & 0xFFFFFF))
+        let mnem = mnem.map_or_else(|| "JMP".to_string(), |m| m.as_str().to_uppercase());
+        let resolved = self.relative_field(&mnem, target, 24, (line, col), " (use GO instead)")?;
+        Ok(if resolved.backward {
+            MMixInstruction::JMPB(resolved.field)
         } else {
-            Ok(MMixInstruction::JMP(signed as u32 & 0xFFFFFF))
-        }
+            MMixInstruction::JMP(resolved.field)
+        })
     }
 
     fn parse_inst_pbranch(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
@@ -2687,37 +2758,28 @@ impl MMixAssembler {
         let x = self.parse_register(ops.next().unwrap())?;
         let target = self.parse_number(ops.next().unwrap())?;
 
-        // Calculate relative offset from current instruction
-        // PBZ uses YZ as a 16-bit offset: offset = (target - PC) / 4
-        let pc = self.current_addr;
-        let offset = ((target as i64 - pc as i64) / 4) as i16;
-        // Split into Y (high byte) and Z (low byte)
-        let offset_u16 = offset as u16;
-        let y = ((offset_u16 >> 8) & 0xFF) as u8;
-        let z = (offset_u16 & 0xFF) as u8;
+        type ProbableBranch = fn(u8, u8, u8) -> MMixInstruction;
+        let mnem = mnem.as_str().to_uppercase();
+        let (forward, backward): (ProbableBranch, ProbableBranch) = match mnem.as_str() {
+            "PBN" | "PBNB" => (MMixInstruction::PBN, MMixInstruction::PBNB),
+            "PBZ" | "PBZB" => (MMixInstruction::PBZ, MMixInstruction::PBZB),
+            "PBP" | "PBPB" => (MMixInstruction::PBP, MMixInstruction::PBPB),
+            "PBOD" | "PBODB" => (MMixInstruction::PBOD, MMixInstruction::PBODB),
+            "PBNN" | "PBNNB" => (MMixInstruction::PBNN, MMixInstruction::PBNNB),
+            "PBNZ" | "PBNZB" => (MMixInstruction::PBNZ, MMixInstruction::PBNZB),
+            "PBNP" | "PBNPB" => (MMixInstruction::PBNP, MMixInstruction::PBNPB),
+            "PBEV" | "PBEVB" => (MMixInstruction::PBEV, MMixInstruction::PBEVB),
+            _ => return Err(format!("Unknown probable branch instruction: {mnem}")),
+        };
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "PBN" => Ok(MMixInstruction::PBN(x, y, z)),
-            "PBZ" => Ok(MMixInstruction::PBZ(x, y, z)),
-            "PBP" => Ok(MMixInstruction::PBP(x, y, z)),
-            "PBOD" => Ok(MMixInstruction::PBOD(x, y, z)),
-            "PBNN" => Ok(MMixInstruction::PBNN(x, y, z)),
-            "PBNZ" => Ok(MMixInstruction::PBNZ(x, y, z)),
-            "PBNP" => Ok(MMixInstruction::PBNP(x, y, z)),
-            "PBEV" => Ok(MMixInstruction::PBEV(x, y, z)),
-            "PBNB" => Ok(MMixInstruction::PBNB(x, y, z)),
-            "PBZB" => Ok(MMixInstruction::PBZB(x, y, z)),
-            "PBPB" => Ok(MMixInstruction::PBPB(x, y, z)),
-            "PBODB" => Ok(MMixInstruction::PBODB(x, y, z)),
-            "PBNNB" => Ok(MMixInstruction::PBNNB(x, y, z)),
-            "PBNZB" => Ok(MMixInstruction::PBNZB(x, y, z)),
-            "PBNPB" => Ok(MMixInstruction::PBNPB(x, y, z)),
-            "PBEVB" => Ok(MMixInstruction::PBEVB(x, y, z)),
-            _ => Err(format!(
-                "Unknown probable branch instruction: {}",
-                mnem.as_str()
-            )),
-        }
+        let resolved = self.relative_field(&mnem, target, 16, (line, col), "")?;
+        let y = (resolved.field >> 8) as u8;
+        let z = (resolved.field & 0xFF) as u8;
+        Ok(if resolved.backward {
+            backward(x, y, z)
+        } else {
+            forward(x, y, z)
+        })
     }
 
     fn parse_inst_geta(
@@ -2741,32 +2803,27 @@ impl MMixAssembler {
             self.current_addr, addr
         );
 
-        // GETA uses relative addressing: the offset is a signed 16-bit
-        // quotient of the byte delta divided by 4 (±131068-byte reach).
-        let offset = addr.wrapping_sub(self.current_addr) as i64;
-        if offset % 4 != 0 {
-            return Err(format!(
-                "{}:{}:{}: GETA target 0x{:X} is not 4-byte aligned relative to the current instruction (byte delta {})",
-                self.current_filename, line, col, addr, offset
-            ));
-        }
-        let quotient = offset / 4;
-        if !(i16::MIN as i64..=i16::MAX as i64).contains(&quotient) {
-            return Err(format!(
-                "{}:{}:{}: GETA target 0x{:X} is out of range: byte delta {} exceeds GETA's \u{b1}131068-byte reach (use LDA for longer-range addresses)",
-                self.current_filename, line, col, addr, offset
-            ));
-        }
-        let offset_16 = quotient as u16;
-        let y = ((offset_16 >> 8) & 0xFF) as u8;
-        let z = (offset_16 & 0xFF) as u8;
+        // GETA reaches 65535 tetras forward; a backward target takes GETAB.
+        let resolved = self.relative_field(
+            "GETA",
+            addr,
+            16,
+            (line, col),
+            " (use LDA for longer-range addresses)",
+        )?;
+        let y = (resolved.field >> 8) as u8;
+        let z = (resolved.field & 0xFF) as u8;
 
         debug!(
-            "GETA: quotient={}, offset_16=0x{:X}, y=0x{:X}, z=0x{:X}",
-            quotient, offset_16, y, z
+            "GETA: backward={}, field=0x{:X}, y=0x{:X}, z=0x{:X}",
+            resolved.backward, resolved.field, y, z
         );
 
-        Ok(MMixInstruction::GETA(x, y, z))
+        Ok(if resolved.backward {
+            MMixInstruction::GETAB(x, y, z)
+        } else {
+            MMixInstruction::GETA(x, y, z)
+        })
     }
 
     fn parse_inst_getab(
@@ -2785,31 +2842,15 @@ impl MMixAssembler {
         let x = self.parse_register(reg_pair)?;
         let addr = self.parse_number(addr_pair)?;
 
-        // GETAB encodes an unsigned backward-only magnitude: the VM always
-        // subtracts YZ * 4 from pc, so the target must be behind us.
-        let backward = self.current_addr as i64 - addr as i64;
-        if backward < 0 {
-            return Err(format!(
-                "{}:{}:{}: GETAB target 0x{:X} is not behind the current instruction (GETAB only encodes backward addresses; use GETA or LDA instead)",
-                self.current_filename, line, col, addr
-            ));
-        }
-        if backward % 4 != 0 {
-            return Err(format!(
-                "{}:{}:{}: GETAB target 0x{:X} is not 4-byte aligned relative to the current instruction (backward byte delta {})",
-                self.current_filename, line, col, addr, backward
-            ));
-        }
-        let quotient = backward / 4;
-        if quotient > u16::MAX as i64 {
-            return Err(format!(
-                "{}:{}:{}: GETAB target 0x{:X} is out of range: backward byte delta {} exceeds GETAB's 262140-byte reach (use LDA for longer-range addresses)",
-                self.current_filename, line, col, addr, backward
-            ));
-        }
-        let offset_16 = quotient as u16;
-        let y = ((offset_16 >> 8) & 0xFF) as u8;
-        let z = (offset_16 & 0xFF) as u8;
+        let resolved = self.relative_field(
+            "GETAB",
+            addr,
+            16,
+            (line, col),
+            " (use LDA for longer-range addresses)",
+        )?;
+        let y = (resolved.field >> 8) as u8;
+        let z = (resolved.field & 0xFF) as u8;
 
         Ok(MMixInstruction::GETAB(x, y, z))
     }
@@ -2869,33 +2910,37 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
         let mut ops = operand.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let addr = self.parse_number(ops.next().unwrap())?;
-        let offset = addr.wrapping_sub(self.current_addr) as i64;
-        let offset_16 = ((offset >> 2) & 0xFFFF) as u16;
-        let y = ((offset_16 >> 8) & 0xFF) as u8;
-        let z = (offset_16 & 0xFF) as u8;
-        Ok(MMixInstruction::PUSHJ(x, y, z))
+        let resolved = self.relative_field("PUSHJ", addr, 16, (line, col), "")?;
+        let y = (resolved.field >> 8) as u8;
+        let z = (resolved.field & 0xFF) as u8;
+        Ok(if resolved.backward {
+            MMixInstruction::PUSHJB(x, y, z)
+        } else {
+            MMixInstruction::PUSHJ(x, y, z)
+        })
     }
 
     fn parse_inst_pushjb(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
+        let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
         let mut ops = operand.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let addr = self.parse_number(ops.next().unwrap())?;
-        let offset = addr.wrapping_sub(self.current_addr) as i64;
-        let offset_16 = ((offset >> 2) & 0xFFFF) as u16;
-        let y = ((offset_16 >> 8) & 0xFF) as u8;
-        let z = (offset_16 & 0xFF) as u8;
+        let resolved = self.relative_field("PUSHJB", addr, 16, (line, col), "")?;
+        let y = (resolved.field >> 8) as u8;
+        let z = (resolved.field & 0xFF) as u8;
         Ok(MMixInstruction::PUSHJB(x, y, z))
     }
 
@@ -4011,21 +4056,19 @@ mod tests {
     #[test]
     fn test_jmp_backward_emits_jmpb() {
         // A JMP whose target is BEHIND the current instruction must assemble
-        // to JMPB (unsigned backward magnitude), not JMP (which is an
-        // always-forward unsigned magnitude per the MMIX spec).
+        // to JMPB, whose 24-bit field is 2^24 - magnitude.
         let source = "LOC #100\nBACK: HALT\nJMP BACK";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
         // JMP is at addr 0x104 (BACK's HALT is 4 bytes), target 0x100:
-        // backward magnitude = (0x104 - 0x100) / 4 = 1.
-        assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(1));
+        // magnitude = (0x104 - 0x100) / 4 = 1, field = 0x1000000 - 1.
+        assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(0xFFFFFF));
     }
 
     #[test]
     fn test_geta_offset_beyond_range_errors() {
-        // Target is 262144 bytes forward, beyond GETA's ±131068-byte reach.
-        // Reverting the fix (restoring the mask) makes this source assemble
-        // successfully with a silently wrong encoding.
+        // Target is 65536 tetras forward, one past GETA's 0..=65535 reach.
+        // Without the range check this source assembles to a wrapped field.
         let source = "GETA $0,LABEL\nLOC #40000\nLABEL: HALT";
         let mut asm = MMixAssembler::new(source, "<test>");
         let err = asm.parse().unwrap_err();
@@ -4043,16 +4086,15 @@ mod tests {
 
     #[test]
     fn test_geta_offset_within_range_succeeds() {
-        // 65536 bytes forward is within GETA's ±131068-byte reach.
-        let source = "GETA $0,LABEL\nLOC #10000\nLABEL: HALT";
+        // 65535 tetras forward is the last target GETA reaches.
+        let source = "GETA $0,LABEL\nLOC #3FFFC\nLABEL: HALT";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
         let MMixInstruction::GETA(_, y, z) = asm.instructions[0].1 else {
             panic!("expected GETA instruction");
         };
-        let offset_16 = ((y as u16) << 8) | z as u16;
-        let decoded_offset = (offset_16 as i16) as i64;
-        assert_eq!(decoded_offset, 0x10000i64 / 4);
+        let field = ((y as u16) << 8) | z as u16;
+        assert_eq!(field, 65535);
     }
 
     #[test]
@@ -4067,14 +4109,141 @@ mod tests {
     }
 
     #[test]
-    fn test_getab_backward_target_encodes_correct_magnitude() {
+    fn test_getab_backward_target_encodes_knuth_field() {
         // GETAB sits at addr 0x104 (BACK's HALT is 4 bytes), target 0x100:
-        // backward magnitude = (0x104 - 0x100) / 4 = 1.
-        // The unfixed code computes GETAB(0, 0xFF, 0xFF) for this source.
+        // magnitude = (0x104 - 0x100) / 4 = 1, field = 65536 - 1 = 0xFFFF.
         let source = "LOC #100\nBACK: HALT\nGETAB $0,BACK";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
-        assert_eq!(asm.instructions[1].1, MMixInstruction::GETAB(0, 0, 1));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::GETAB(0, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn test_geta_forward_reach_extends_past_i16() {
+        // 32769 tetras forward is inside GETA's 0..=65535 reach and outside
+        // the i16 range the old check enforced.
+        let source = "GETA $0,LABEL\nLOC #20004\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::GETA(0, 0x80, 0x01));
+    }
+
+    #[test]
+    fn test_forward_mnemonic_at_backward_target_emits_backward_sibling() {
+        // MMIXAL picks the opcode from the sign of the displacement, so a BNP
+        // one tetra behind itself becomes BNPB with field 65536 - 1.
+        let source = "LOC #100\nBACK: HALT\nBNP $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::BNPB(1, 0xFFFF));
+    }
+
+    #[test]
+    fn test_backward_je_emits_bzb() {
+        // JE has no hand-writable backward form; a backward target must still
+        // reach BZB, the sibling of the BZ it otherwise encodes to.
+        let source = "LOC #100\nBACK: HALT\nJE $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::BZB(1, 0xFFFF));
+    }
+
+    #[test]
+    fn test_pushj_at_backward_target_emits_pushjb() {
+        let source = "LOC #100\nBACK: HALT\nPUSHJ $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions[1].1,
+            MMixInstruction::PUSHJB(1, 0xFF, 0xFF)
+        );
+    }
+
+    #[test]
+    fn test_pbranch_at_backward_target_emits_knuth_field() {
+        // parse_inst_pbranch is a separate function from parse_inst_branch and
+        // needs its own coverage of both the auto-selection and the field.
+        let source = "LOC #100\nBACK: HALT\nPBZ $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::PBZB(1, 0xFF, 0xFF));
+
+        let explicit = "LOC #100\nBACK: HALT\nPBZB $1,BACK";
+        let mut asm = MMixAssembler::new(explicit, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::PBZB(1, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn test_backward_mnemonic_at_forward_target_names_forward_sibling() {
+        let source = "BZB $1,LABEL\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("BZB"), "{err}");
+        assert!(err.contains("use BZ instead"), "{err}");
+    }
+
+    #[test]
+    fn test_zero_displacement_takes_the_forward_opcode() {
+        // Forward reaches 0..=65535 tetras and backward 1..=65536, so a
+        // branch to itself is forward with an empty field.
+        let source = "HERE: BZ $1,HERE";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BZ(1, 0));
+    }
+
+    #[test]
+    fn test_branch_backward_reaches_65536_tetras() {
+        // A backward field of 0 means -65536 tetras, the far end of the reach.
+        let source = "LOC #0\nBACK: HALT\nLOC #40000\nBZ $1,BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::BZB(1, 0));
+    }
+
+    #[test]
+    fn test_branch_beyond_reach_errors() {
+        let forward = "BZ $1,LABEL\nLOC #40000\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(forward, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+
+        let backward = "LOC #0\nBACK: HALT\nLOC #40004\nBZ $1,BACK";
+        let mut asm = MMixAssembler::new(backward, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+    }
+
+    #[test]
+    fn test_branch_misaligned_target_errors() {
+        let source = "BZ $1,LABEL\nBYTE 1\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("not 4-byte aligned"), "{err}");
+    }
+
+    #[test]
+    fn test_jmp_misaligned_target_errors() {
+        let source = "JMP LABEL\nBYTE 1\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("not 4-byte aligned"), "{err}");
+    }
+
+    #[test]
+    fn test_jmp_beyond_reach_errors() {
+        // JMP's field is 24 bits: 0..=16777215 tetras forward, 1..=16777216
+        // backward. Without the check the extra bits were masked away.
+        let forward = "JMP LABEL\nLOC #4000000\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(forward, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+
+        let backward = "LOC #0\nBACK: HALT\nLOC #4000004\nJMP BACK";
+        let mut asm = MMixAssembler::new(backward, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
     }
 
     #[test]
@@ -4712,6 +4881,23 @@ ZSEVI $7,$8,128
     /// addresses) where the exact computed value isn't what a prefix-
     /// collision test is proving. Checks only the variant discriminant
     /// (and any un-computed fields the predicate cares to check).
+    /// Assert the LAST instruction of `src`, letting a case prefix its source
+    /// with a label the instruction under test can reach backward.
+    fn assert_last_instruction_matches(src: &str, predicate: impl Fn(&MMixInstruction) -> bool) {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e}"));
+        let last = asm
+            .instructions
+            .last()
+            .unwrap_or_else(|| panic!("no instructions produced for {src:?}"));
+        assert!(
+            predicate(&last.1),
+            "wrong instruction variant for {src:?}: got {:?}",
+            last.1
+        );
+    }
+
     fn assert_first_instruction_matches(src: &str, predicate: impl Fn(&MMixInstruction) -> bool) {
         let mut asm = MMixAssembler::new(src, "<test>");
         asm.parse()
@@ -5167,65 +5353,87 @@ ZSEVI $7,$8,128
         // BN/BNB/BNN/BNNB/BNP/BNPB/BNZ/BNZB/BEV/BEVB/BOD/BODB/BP/BPB/BZ/BZB:
         // every short mnemonic in this family is a literal prefix of at
         // least one longer sibling. Offsets are computed, so only the
-        // discriminant and X register are checked.
+        // discriminant and X register are checked. A *B mnemonic needs a
+        // target behind it, so those cases branch to a preceding label.
         let cases: &[(&str, InstructionPredicate)] = &[
             ("BN $1,4", |i| matches!(i, MMixInstruction::BN(1, _))),
-            ("BNB $1,4", |i| matches!(i, MMixInstruction::BNB(1, _))),
+            ("BACK: HALT\nBNB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BNB(1, _))
+            }),
             ("BNN $1,4", |i| matches!(i, MMixInstruction::BNN(1, _))),
-            ("BNNB $1,4", |i| matches!(i, MMixInstruction::BNNB(1, _))),
+            ("BACK: HALT\nBNNB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BNNB(1, _))
+            }),
             ("BNP $1,4", |i| matches!(i, MMixInstruction::BNP(1, _))),
-            ("BNPB $1,4", |i| matches!(i, MMixInstruction::BNPB(1, _))),
+            ("BACK: HALT\nBNPB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BNPB(1, _))
+            }),
             ("BNZ $1,4", |i| matches!(i, MMixInstruction::BNZ(1, _))),
-            ("BNZB $1,4", |i| matches!(i, MMixInstruction::BNZB(1, _))),
+            ("BACK: HALT\nBNZB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BNZB(1, _))
+            }),
             ("BEV $1,4", |i| matches!(i, MMixInstruction::BEV(1, _))),
-            ("BEVB $1,4", |i| matches!(i, MMixInstruction::BEVB(1, _))),
+            ("BACK: HALT\nBEVB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BEVB(1, _))
+            }),
             ("BOD $1,4", |i| matches!(i, MMixInstruction::BOD(1, _))),
-            ("BODB $1,4", |i| matches!(i, MMixInstruction::BODB(1, _))),
+            ("BACK: HALT\nBODB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BODB(1, _))
+            }),
             ("BP $1,4", |i| matches!(i, MMixInstruction::BP(1, _))),
-            ("BPB $1,4", |i| matches!(i, MMixInstruction::BPB(1, _))),
+            ("BACK: HALT\nBPB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BPB(1, _))
+            }),
             ("BZ $1,4", |i| matches!(i, MMixInstruction::BZ(1, _))),
-            ("BZB $1,4", |i| matches!(i, MMixInstruction::BZB(1, _))),
+            ("BACK: HALT\nBZB $1,BACK", |i| {
+                matches!(i, MMixInstruction::BZB(1, _))
+            }),
         ];
         for (src, pred) in cases {
-            assert_first_instruction_matches(src, pred);
+            assert_last_instruction_matches(src, pred);
         }
     }
 
     #[test]
     fn test_prefix_robust_pbranch_family() {
         // Same collision shape as the branch family above, one level up
-        // (PBN/PBNB/PBNN/...). Offsets are computed, so only the
-        // discriminant and X register are checked.
+        // (PBN/PBNB/PBNN/...), with the same backward-target requirement.
         let cases: &[(&str, InstructionPredicate)] = &[
             ("PBN $1,4", |i| matches!(i, MMixInstruction::PBN(1, _, _))),
-            ("PBNB $1,4", |i| matches!(i, MMixInstruction::PBNB(1, _, _))),
+            ("BACK: HALT\nPBNB $1,BACK", |i| {
+                matches!(i, MMixInstruction::PBNB(1, _, _))
+            }),
             ("PBNN $1,4", |i| matches!(i, MMixInstruction::PBNN(1, _, _))),
-            ("PBNNB $1,4", |i| {
+            ("BACK: HALT\nPBNNB $1,BACK", |i| {
                 matches!(i, MMixInstruction::PBNNB(1, _, _))
             }),
             ("PBNP $1,4", |i| matches!(i, MMixInstruction::PBNP(1, _, _))),
-            ("PBNPB $1,4", |i| {
+            ("BACK: HALT\nPBNPB $1,BACK", |i| {
                 matches!(i, MMixInstruction::PBNPB(1, _, _))
             }),
             ("PBNZ $1,4", |i| matches!(i, MMixInstruction::PBNZ(1, _, _))),
-            ("PBNZB $1,4", |i| {
+            ("BACK: HALT\nPBNZB $1,BACK", |i| {
                 matches!(i, MMixInstruction::PBNZB(1, _, _))
             }),
             ("PBEV $1,4", |i| matches!(i, MMixInstruction::PBEV(1, _, _))),
-            ("PBEVB $1,4", |i| {
+            ("BACK: HALT\nPBEVB $1,BACK", |i| {
                 matches!(i, MMixInstruction::PBEVB(1, _, _))
             }),
             ("PBOD $1,4", |i| matches!(i, MMixInstruction::PBOD(1, _, _))),
-            ("PBODB $1,4", |i| {
+            ("BACK: HALT\nPBODB $1,BACK", |i| {
                 matches!(i, MMixInstruction::PBODB(1, _, _))
             }),
             ("PBP $1,4", |i| matches!(i, MMixInstruction::PBP(1, _, _))),
-            ("PBPB $1,4", |i| matches!(i, MMixInstruction::PBPB(1, _, _))),
+            ("BACK: HALT\nPBPB $1,BACK", |i| {
+                matches!(i, MMixInstruction::PBPB(1, _, _))
+            }),
             ("PBZ $1,4", |i| matches!(i, MMixInstruction::PBZ(1, _, _))),
-            ("PBZB $1,4", |i| matches!(i, MMixInstruction::PBZB(1, _, _))),
+            ("BACK: HALT\nPBZB $1,BACK", |i| {
+                matches!(i, MMixInstruction::PBZB(1, _, _))
+            }),
         ];
         for (src, pred) in cases {
-            assert_first_instruction_matches(src, pred);
+            assert_last_instruction_matches(src, pred);
         }
     }
 

@@ -3296,31 +3296,40 @@ Test258GoiTarget
         JMP     TestFail
 
 % ========================================
-% Test 259: PUSHJ / POP - Push registers and jump, then return
+% Test 259: PUSHJ / PUSHJB / POP - Push registers and jump, then return
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
 % $1-$4 (settled decision 9); POP 1,1 returns one value to $5 and skips
-% the "JMP TestFail" landing pad (target = rJ + 4*1).
+% the "JMP TestFail" landing pad (target = rJ + 4*1). PUSHJB needs its
+% callee behind it, so the second half jumps over the callee to reach it.
 % ========================================
 Test259 ADDUI   TestNum,TestNum,1
         PUSHJ   $5,Test259Callee
         JMP     TestFail          % unreachable: skipped by POP's yz=1
         SETI    Expect,777
         CMP     Temp,$5,Expect
-        PBZ     Temp,Test260
+        PBZ     Temp,Test259Second
         JMP     TestFail
 Test259Callee
         SETI    $0,777
         POP     1,1
         JMP     TestFail          % only reached if POP fails to return
+Test259Second
+        JMP     Test259Caller
+Test259Back
+        SETI    $0,555
+        POP     1,1
+        JMP     TestFail          % only reached if POP fails to return
+Test259Caller
+        PUSHJB  $5,Test259Back
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SETI    Expect,555
+        CMP     Temp,$5,Expect
+        PBZ     Temp,Test260
+        JMP     TestFail
 
 % ========================================
 % Test 260: PUSHGO / PUSHGOI - Push registers, absolute go, then return
-% ========================================
-% PUSHJB is deliberately not tested here or anywhere else in this file --
-% see the intentional-exception block above TestPass for why (settled
-% decision 9's "flag it, don't force it" escape hatch: its assembler
-% encoding is broken for every genuinely-backward target).
 % ========================================
 Test260 ADDUI   TestNum,TestNum,1
         GETA    $10,Test260Pg
@@ -3362,23 +3371,6 @@ Test260Pgi
 %             "self.advance_pc(); true" with no observable state change at
 %             all, so no operand choice can make a CMP/PBZ against them
 %             non-vacuous.
-%   PUSHJB  - discovered while implementing this task's stack/control
-%             family (settled decision 9's "flag it, don't force it"
-%             escape hatch): the assembler's Rule::inst_pushjb handler
-%             (src/mmixal.rs, parse_inst_pushjb) computes the backward
-%             branch offset as `addr - current_addr` (negative), but
-%             Opcode::PUSHJB's VM handler (src/mmix.rs) subtracts YZ as
-%             an UNSIGNED magnitude (`pc.wrapping_sub(yz * 4)`), the same
-%             convention PUSHJB's own spec and every already-covered
-%             *B branch mnemonic use. The two's-complement low 16 bits of
-%             a negative offset, reinterpreted as unsigned, produce a
-%             wild multi-hundred-KB "backward" jump for any genuinely
-%             backward target -- there is no operand choice that avoids
-%             this, since PUSHJB by definition always targets a backward
-%             label. Reported separately per this prompt's scope-out
-%             clause (repro: LOC #100 / Main JMP Fwd / Back SETI $0,42 /
-%             POP 1,1 / Fwd PUSHJB $5,Back -- PC ends up at
-%             0xfffffffffffc0130 instead of Back's address).
 % HALT itself is not on this list: TestPass below now executes plain HALT
 % (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
 % skipped, which is real (if narrow) coverage of HALT's assembler path.
