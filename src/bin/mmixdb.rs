@@ -108,6 +108,11 @@ fn assemble_sources(filenames: &[String]) -> Result<MMixAssembler, String> {
             .map_err(|err| format!("error reading '{}': {}", path.display(), err))?;
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         let units = MMixAssembler::resolve_includes(&src, &path.to_string_lossy(), base, &reader)?;
+        // A trimmed-away segment (blank space, or an INCLUDE resolving to
+        // nothing) leaves this input with no translation unit at all.
+        if units.is_empty() {
+            return Err(format!("'{}' contributed no source", path.display()));
+        }
         sources.extend(units);
     }
     let (first_name, first_src) = &sources[0];

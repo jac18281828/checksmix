@@ -1,10 +1,22 @@
 #![cfg(feature = "cli")]
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 fn checksmix() -> Command {
     Command::new(env!("CARGO_BIN_EXE_checksmix"))
+}
+
+fn mmixasm() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_mmixasm"))
+}
+
+fn mmixdb() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mmixdb"));
+    // mmixdb assembles before opening its REPL; any invocation that
+    // assembles successfully would otherwise block on readline.
+    cmd.stdin(Stdio::null());
+    cmd
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -12,6 +24,24 @@ fn fixture(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
+}
+
+fn assert_exit_1_names_input(out: &Output, input: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected exit 1; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(input),
+        "stderr should name '{input}'; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("contributed no source"),
+        "stderr should say 'contributed no source'; stderr: {stderr}"
+    );
 }
 
 // ── check: clean two-file program ────────────────────────────────────────────
@@ -166,5 +196,206 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
         !stderr.contains("DBG write_byte"),
         "stderr should not contain leftover debug output from write_byte; stderr: {}",
         stderr
+    );
+}
+
+// ── an input contributing no source: diagnostic, not a panic ─────────────────
+//
+// resolve_includes trims away a blank segment; an input made entirely of
+// such segments collects zero translation units. Covers all three failing
+// rows of the empty/whitespace/INCLUDE-to-nothing predicate, across all
+// three binaries.
+
+#[test]
+fn check_empty_file_exits_one() {
+    let out = checksmix()
+        .args(["check"])
+        .arg(fixture("empty.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+#[test]
+fn mmixasm_empty_file_exits_one() {
+    let out = mmixasm().arg(fixture("empty.mms")).output().unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+#[test]
+fn mmixdb_empty_file_exits_one() {
+    let out = mmixdb().arg(fixture("empty.mms")).output().unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+#[test]
+fn check_whitespace_only_file_exits_one() {
+    let out = checksmix()
+        .args(["check"])
+        .arg(fixture("whitespace_only.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "whitespace_only.mms");
+}
+
+#[test]
+fn mmixasm_whitespace_only_file_exits_one() {
+    let out = mmixasm()
+        .arg(fixture("whitespace_only.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "whitespace_only.mms");
+}
+
+#[test]
+fn mmixdb_whitespace_only_file_exits_one() {
+    let out = mmixdb()
+        .arg(fixture("whitespace_only.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "whitespace_only.mms");
+}
+
+#[test]
+fn check_include_of_empty_file_exits_one() {
+    let out = checksmix()
+        .args(["check"])
+        .arg(fixture("include_empty.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "include_empty.mms");
+}
+
+#[test]
+fn mmixasm_include_of_empty_file_exits_one() {
+    let out = mmixasm()
+        .arg(fixture("include_empty.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "include_empty.mms");
+}
+
+#[test]
+fn mmixdb_include_of_empty_file_exits_one() {
+    let out = mmixdb().arg(fixture("include_empty.mms")).output().unwrap();
+    assert_exit_1_names_input(&out, "include_empty.mms");
+}
+
+// ── checksmix run/build on an empty input ─────────────────────────────────────
+
+#[test]
+fn run_empty_file_exits_one_without_doubled_prefix() {
+    let out = checksmix()
+        .args(["run"])
+        .arg(fixture("empty.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("Error: ").count(),
+        1,
+        "run_mms prefixes the error itself; embedding a second prefix in the \
+         guard would double it; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn build_empty_file_exits_one() {
+    let out = checksmix()
+        .args(["build"])
+        .arg(fixture("empty.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+// ── one empty input among others: per-path, not aggregate ────────────────────
+//
+// hello.mms alone is a valid, self-contained program (multi_main.mms is not:
+// it references :Lib, defined only in multi_lib.mms, so checking it alone
+// fails on an undefined symbol and would mask what this case tests).
+
+#[test]
+fn check_empty_file_among_others_still_exits_one() {
+    let out = checksmix()
+        .args(["check"])
+        .arg(fixture("empty.mms"))
+        .arg(fixture("hello.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+#[test]
+fn mmixasm_empty_file_among_others_exits_one_without_banner() {
+    let out = mmixasm()
+        .arg(fixture("empty.mms"))
+        .arg(fixture("hello.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("Assembling 0 inputs:"),
+        "the per-path guard fires before the input-count banner; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn mmixdb_empty_file_among_others_still_exits_one() {
+    let out = mmixdb()
+        .arg(fixture("empty.mms"))
+        .arg(fixture("hello.mms"))
+        .output()
+        .unwrap();
+    assert_exit_1_names_input(&out, "empty.mms");
+}
+
+// ── regression: legitimate zero-instruction inputs stay unaffected ───────────
+//
+// The guard keys off resolved units, never instruction count: a comment-only
+// file and a definitions-only module both contribute source and must keep
+// exiting 0 on `check`.
+
+#[test]
+fn check_comment_only_file_exits_zero() {
+    let status = checksmix()
+        .args(["check"])
+        .arg(fixture("comment_only.mms"))
+        .status()
+        .unwrap();
+    assert!(status.success(), "a comment-only file is a valid program");
+}
+
+#[test]
+fn check_defs_only_file_exits_zero() {
+    let status = checksmix()
+        .args(["check"])
+        .arg(fixture("defs_only.mms"))
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "a definitions-only module has zero instructions and is still valid"
+    );
+}
+
+#[test]
+fn build_defs_only_file_fails_on_instruction_count_not_the_new_guard() {
+    let out = checksmix()
+        .args(["build"])
+        .arg(fixture("defs_only.mms"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no instructions"),
+        "build's existing zero-instruction guard must still fire; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("contributed no source"),
+        "defs_only.mms resolves to a unit; the new guard must not fire; stderr: {stderr}"
     );
 }

@@ -53,6 +53,12 @@ fn main() {
                 eprintln!("{}", err);
                 process::exit(1);
             });
+        // A trimmed-away segment (blank space, or an INCLUDE resolving to
+        // nothing) leaves this input with no translation unit at all.
+        if units.is_empty() {
+            eprintln!("Error: '{}' contributed no source", path.display());
+            process::exit(1);
+        }
         sources.extend(units);
     }
 
