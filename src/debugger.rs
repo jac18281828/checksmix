@@ -481,17 +481,23 @@ impl Debugger {
         lines
     }
 
+    /// The current-line display: `file:line<TAB>text`, prefixed with
+    /// `0x<ADDR><TAB>` when the PC sits inside a line rather than at its
+    /// first address. An address no statement emitted has no line to name.
     fn location_line(&self) -> String {
         let pc = self.mmix.get_pc();
-        match self.assembler.source_loc(pc) {
-            Some(loc) => {
-                let text = self
-                    .assembler
-                    .source_text(&loc.file, loc.line)
-                    .unwrap_or("");
-                format!("{}:{}\t{}", loc.file, loc.line, text)
-            }
-            None => format!("0x{pc:016x} in ?? (no source line)"),
+        let Some(loc) = self.assembler.source_loc(pc) else {
+            return format!("0x{pc:016x} in ?? (no source line)");
+        };
+        let text = self
+            .assembler
+            .source_text(&loc.file, loc.line)
+            .unwrap_or("");
+        let line = format!("{}:{}\t{}", loc.file, loc.line, text);
+        if self.assembler.addr_for_line(&loc.file, loc.line) == Some(pc) {
+            line
+        } else {
+            format!("0x{pc:016x}\t{line}")
         }
     }
 
@@ -719,6 +725,25 @@ Text\tBYTE\t\"Hi\",0
             !lines.iter().any(|l| l.contains("step budget exhausted")),
             "a breakpoint stop must not be reported as budget-exhausted: {lines:?}"
         );
+    }
+
+    /// `SETI $X,imm` expands to four tetras. The first address renders the
+    /// bare source line; the three inside it name the same line with the
+    /// address in front, gdb's `stepi` shape.
+    #[test]
+    fn location_line_prefixes_the_address_inside_a_line() {
+        let source = "\tLOC\t#100\nMain\tSETI\t$1,7\n\tTRAP\t0,Halt,0\n";
+        let asm = assemble(source, "expand.mms");
+        let mut dbg = Debugger::load(asm);
+        assert_eq!(dbg.location_line(), "expand.mms:2\tMain\tSETI\t$1,7");
+
+        for offset in [4, 8, 12] {
+            dbg.mmix.set_pc(0x100 + offset);
+            assert_eq!(
+                dbg.location_line(),
+                format!("0x{:016x}\texpand.mms:2\tMain\tSETI\t$1,7", 0x100 + offset)
+            );
+        }
     }
 
     #[test]

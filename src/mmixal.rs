@@ -3631,11 +3631,28 @@ impl MMixAssembler {
         crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone()).generate()
     }
 
-    /// The original source location of the instruction at `addr`, or `None`
-    /// for compiler-generated code (e.g. the appended debug-subroutine
-    /// block) or an address with no instruction.
+    /// The original source location of the code at `addr`, or `None` for
+    /// compiler-generated code (e.g. the appended debug-subroutine block) or
+    /// an address no statement emitted.
+    ///
+    /// `addr` need not be an entry address: an address inside a multi-tetra
+    /// expansion resolves to the statement that emitted it. Each entry
+    /// covers exactly the bytes its own item emitted, so an address past the
+    /// end of a run maps to nothing -- the gap between the text and data
+    /// segments, and the generated block after the last user statement, both
+    /// stay unmapped.
     pub fn source_loc(&self, addr: u64) -> Option<&SourceLoc> {
-        self.debug_info.get(&addr)
+        let (&start, loc) = self.debug_info.range(..=addr).next_back()?;
+        (addr - start < self.emitted_size(start)?).then_some(loc)
+    }
+
+    /// The byte extent of the item emitted at `addr`, or `None` if no item
+    /// starts there.
+    fn emitted_size(&self, addr: u64) -> Option<u64> {
+        self.instructions
+            .iter()
+            .find(|(at, _)| *at == addr)
+            .map(|(_, inst)| Self::instruction_size(inst))
     }
 
     /// The lowest instruction address whose source location is `(file,
@@ -5886,6 +5903,68 @@ ZSP  $3,$4,2
             assert_eq!(loc.line, 1);
         }
         assert_eq!(asm.addr_for_line("<test>", 1), Some(base_addr));
+    }
+
+    /// A stack program with both a data and a text region, so `source_loc`
+    /// is asked about an address in the gap between them.
+    const TWO_REGION_PROGRAM: &str = "\
+        LOC     Data_Segment
+Cells   OCTA    0
+        OCTA    0
+        OCTA    0
+Sp      GREG    Cells
+
+        LOC     #100
+Main    SETI    $1,7
+        STOI    $1,Sp,0
+        ADDUI   Sp,Sp,8
+        SETI    $1,35
+        STOI    $1,Sp,0
+        LDOI    $2,Sp,0
+        SUBUI   Sp,Sp,8
+        LDOI    $3,Sp,0
+        ADDU    $255,$2,$3
+        TRAP    0,Halt,0
+";
+
+    /// `SETI $X,imm` expands to four tetras. Every address in the expansion
+    /// belongs to the statement that emitted it, and the address just past
+    /// the last text entry belongs to nothing -- the data region lies far
+    /// above it, and a lookup that ran to the end of the image would hand
+    /// that whole gap to the last text line.
+    #[test]
+    fn test_source_loc_covers_an_expansion_and_stops_at_its_end() {
+        let mut asm = MMixAssembler::new(TWO_REGION_PROGRAM, "stack.mms");
+        asm.parse().unwrap();
+
+        let main = *asm.labels.get("Main").unwrap();
+        assert_eq!(main, 0x100);
+        for addr in [0x100, 0x104, 0x108, 0x10c] {
+            let loc = asm
+                .source_loc(addr)
+                .unwrap_or_else(|| panic!("no source_loc at 0x{addr:x}"));
+            assert_eq!(loc.line, 8, "0x{addr:x} is inside line 8's SETI");
+        }
+        assert_eq!(asm.source_loc(0x110).map(|loc| loc.line), Some(9));
+
+        // One tetra past the TRAP that ends the text region, and far below
+        // the data region.
+        assert_eq!(asm.source_loc(0x140), None);
+    }
+
+    /// The data region keeps its own lines; the text region above it does
+    /// not bleed into the gap, nor the data region below.
+    #[test]
+    fn test_source_loc_maps_the_data_region_independently() {
+        let mut asm = MMixAssembler::new(TWO_REGION_PROGRAM, "stack.mms");
+        asm.parse().unwrap();
+
+        let cells = *asm.labels.get("Cells").unwrap();
+        assert!(cells >= 0x2000_0000_0000_0000);
+        assert_eq!(asm.source_loc(cells).map(|loc| loc.line), Some(2));
+        assert_eq!(asm.source_loc(cells + 7).map(|loc| loc.line), Some(2));
+        assert_eq!(asm.source_loc(cells + 8).map(|loc| loc.line), Some(3));
+        assert_eq!(asm.source_loc(cells + 24), None);
     }
 
     /// Duplicate-name translation units: reverse lookups (`addr_for_line`,
