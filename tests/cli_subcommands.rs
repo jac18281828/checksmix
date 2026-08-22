@@ -202,9 +202,7 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
 // ── an input contributing no source: diagnostic, not a panic ─────────────────
 //
 // resolve_includes trims away a blank segment; an input made entirely of
-// such segments collects zero translation units. Covers all three failing
-// rows of the empty/whitespace/INCLUDE-to-nothing predicate, across all
-// three binaries.
+// such segments collects zero translation units.
 
 #[test]
 fn check_empty_file_exits_one() {
@@ -382,7 +380,7 @@ fn check_defs_only_file_exits_zero() {
 }
 
 #[test]
-fn build_defs_only_file_fails_on_instruction_count_not_the_new_guard() {
+fn build_defs_only_file_fails_on_instruction_count_not_the_source_guard() {
     let out = checksmix()
         .args(["build"])
         .arg(fixture("defs_only.mms"))
