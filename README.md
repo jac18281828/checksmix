@@ -98,10 +98,11 @@ set (i.e. when run from Emacs's `gud-mode`).
 
 | Command | Forms | Semantics |
 |---|---|---|
-| step (into) | `s`, `step` | Execute exactly one instruction, following into calls/branches. |
-| next (over) | `n`, `next` | Execute one instruction; if it entered a call, keep stepping until it returns. |
+| step (into) | `s`, `step` | Execute one source line, following into calls/branches. |
+| next (over) | `n`, `next` | Execute one source line, stepping over any call it makes. |
+| stepi | `si`, `stepi` | Execute exactly one instruction, following into calls/branches. |
 | continue | `c`, `continue` | Resume, single-stepping until a breakpoint or halt. |
-| run/reset | `r`, `run` | Reset to the freshly-loaded image, then behave like `continue`. |
+| run/reset | `r`, `run` | Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires. |
 | break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
 | print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or memory octa (`0x...`/`#...`). |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
@@ -109,9 +110,23 @@ set (i.e. when run from Emacs's `gud-mode`).
 | help | `h`, `help`, `?` | Show this help. |
 | quit | `q`, `quit`, `exit` | Exit the debugger. |
 
-Blank input repeats the last command -- most debugging is stepping.
+Blank input repeats the last command -- most debugging is stepping. Once the
+program has exited, `step`, `stepi`, `next` and `continue` are refused; `run`
+restarts it.
 
-Emacs users: see `contrib/mmixdb.el` for `M-x mmixdb` under `gud-mode`.
+Emacs users: `contrib/mmixdb.el` provides `M-x mmixdb` under `gud-mode`. Put
+`contrib/` on `load-path` and require it:
+
+```elisp
+(add-to-list 'load-path "/path/to/checksmix/contrib")
+(require 'mmixdb)
+```
+
+or autoload it instead:
+
+```elisp
+(autoload 'mmixdb "mmixdb" "Run mmixdb under gud-mode." t)
+```
 
 ## Legacy MIX support
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.

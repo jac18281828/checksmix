@@ -28,12 +28,37 @@ does.
 .TP
 .BR \-\-fullname , \ \-\-emacs
 Emit Emacs GUD stop markers on every stop, for use as the debugger under
-.B M-x gud-mmixdb
+.B M-x mmixdb
 or equivalent. Automatically enabled when the environment variable
 .B INSIDE_EMACS
-is set, so an Emacs session need not pass the flag explicitly. See
+is set, so an Emacs session need not pass the flag explicitly. The marker
+has gdb\(aqs
+.B \-\-fullname
+shape, so Emacs\(aq own gdb marker filter parses it unchanged.
+.PP
 .I contrib/mmixdb.el
-for the Emacs integration.
+provides
+.BR "M-x mmixdb" .
+Put
+.I contrib
+on
+.B load-path
+and require it:
+.PP
+.RS
+.nf
+(add-to-list \(aqload-path "/path/to/checksmix/contrib")
+(require \(aqmmixdb)
+.fi
+.RE
+.PP
+or autoload it instead:
+.PP
+.RS
+.nf
+(autoload \(aqmmixdb "mmixdb" "Run mmixdb under gud-mode." t)
+.fi
+.RE
 .SH COMMANDS
 At the
 .B (mmixdb)
@@ -41,12 +66,20 @@ prompt, most commands accept both a short letter and a long word; Emacs GUD
 sends the long words. Blank input repeats the last command.
 .TP
 .BR s ", " step
-Execute exactly one instruction, following into calls and branches.
+Execute one source line, following into calls and branches. Stops at the
+first address on a different line, or at a breakpoint or a halt reached
+first. Also stops, distinguishably, if an internal step budget is exhausted
+first.
 .TP
 .BR n ", " next
-Execute one instruction; if it entered a call, keep stepping until it
-returns. Also stops, distinguishably, if an internal step budget is
-exhausted first.
+Execute one source line, stepping over any call it makes: the new line
+counts only once the call depth is back at or below where it started. Also
+stops, distinguishably, if an internal step budget is exhausted first.
+.TP
+.BR si ", " stepi
+Execute exactly one instruction, following into calls and branches. Inside a
+multi-tetra expansion the stop names the enclosing source line with the
+address in front.
 .TP
 .BR c ", " continue
 Resume, single-stepping until a subsequent breakpoint or a halt. A
@@ -55,8 +88,13 @@ first. Also stops, distinguishably, if an internal step budget is exhausted
 first.
 .TP
 .BR r ", " run
-Reset to the freshly-loaded image, then behave like
-.BR continue .
+Reset to the freshly-loaded image, then run on to a breakpoint or a halt.
+Unlike
+.BR continue ,
+a breakpoint on the entry point fires: the reset means nothing has executed
+yet.
+.B run
+is the one resume command that works after the program has exited.
 .TP
 .BR "b " \fILINE\fR|\fILABEL\fR ", " "break " \fILINE\fR|\fILABEL\fR
 Set a breakpoint at a decimal source line number in the current file, or
@@ -78,6 +116,23 @@ Show the command summary.
 .TP
 .BR q ", " quit ", " exit
 Exit the debugger.
+.PP
+Once the program has exited,
+.BR step ,
+.BR stepi ,
+.B next
+and
+.B continue
+are refused with
+.RB \(lq "The program is not being run." \(rq;
+.B run
+restarts it.
+.BR print ,
+.B state
+and
+.B list
+keep answering, since the register file is what the program was run to
+show.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG

@@ -611,10 +611,11 @@ impl Debugger {
     /// -- there is no shared source between the two.
     fn do_help(&self) -> Vec<String> {
         const HELP_TEXT: &str = "\
-step (into)   s, step                          Execute exactly one instruction, following into calls/branches.
-next (over)   n, next                          Execute one instruction; if it entered a call, keep stepping until it returns.
+step (into)   s, step                          Execute one source line, following into calls/branches.
+next (over)   n, next                          Execute one source line, stepping over any call it makes.
+stepi         si, stepi                        Execute exactly one instruction, following into calls/branches.
 continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
-run/reset     r, run                           Reset to the freshly-loaded image, then behave like continue.
+run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or memory octa.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
@@ -622,7 +623,8 @@ list          l, list                          Print source lines around the cur
 help          h, help, ?                       Show this help.
 quit          q, quit, exit                    Exit the debugger.
 
-Blank input repeats the last command.";
+Blank input repeats the last command. Once the program has exited, step,
+stepi, next and continue are refused; run restarts it.";
         HELP_TEXT.lines().map(str::to_string).collect()
     }
 }
@@ -781,6 +783,7 @@ Text\tBYTE\t\"Hi\",0
         let output = dbg.execute(Command::Help);
         let joined = output.join("\n");
         assert!(joined.contains("step"));
+        assert!(joined.contains("stepi"));
         assert!(joined.contains("break"));
         assert!(joined.contains("print"));
         assert!(joined.contains("quit"));
