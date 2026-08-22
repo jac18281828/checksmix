@@ -17,16 +17,22 @@ use std::path::{Path, PathBuf};
 /// the first instruction address below this boundary.
 const SEGMENT_BOUNDARY: u64 = 0x2000000000000000;
 
-/// Per-instruction cap on `do_continue`'s and `do_next`'s step loops, so a
-/// subroutine or program that never returns/halts can't hang the debugger.
-/// Not configurable from the public API.
+/// Per-instruction cap on every multi-instruction step loop (`do_step`,
+/// `do_next`, `do_continue`), so a subroutine or program that never
+/// returns/halts can't hang the debugger. Not configurable from the public
+/// API.
 const STEP_BUDGET: usize = 1_000_000;
 
 /// A parsed debugger command. One variant per command in the command table;
 /// `Repeat` represents blank input, which re-runs the last executed command.
+///
+/// Non-exhaustive: a new command is an additive change here, not a breaking
+/// one, so match on it with a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Command {
     Step,
+    Stepi,
     Next,
     Continue,
     Run,
@@ -55,6 +61,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
     };
     match head {
         "s" | "step" => Ok(Command::Step),
+        "si" | "stepi" => Ok(Command::Stepi),
         "n" | "next" => Ok(Command::Next),
         "c" | "continue" => Ok(Command::Continue),
         "r" | "run" => Ok(Command::Run),
@@ -272,6 +279,7 @@ impl Debugger {
         };
         let output = match &resolved {
             Command::Step => self.do_step(),
+            Command::Stepi => self.do_stepi(),
             Command::Next => self.do_next(),
             Command::Continue => self.do_continue(),
             Command::Run => self.do_run(),
@@ -293,39 +301,90 @@ impl Debugger {
         self.mmix.set_pc(self.entry);
     }
 
-    fn do_step(&mut self) -> Vec<String> {
+    /// `stepi`: execute exactly one instruction, following into calls and
+    /// branches. The stop lands wherever the instruction left the PC, which
+    /// for a pseudo-op is usually mid-expansion.
+    fn do_stepi(&mut self) -> Vec<String> {
         let running = self.mmix.execute_instruction();
-        self.report(!running)
+        self.report_stop(!running, false)
     }
 
-    /// `next`: execute one instruction; if it entered a call (call depth
-    /// increased -- PUSHJ/PUSHGO push a frame; GO does not), keep
-    /// single-stepping until the depth returns to the pre-call level, a
-    /// breakpoint is hit, the program halts, or `STEP_BUDGET` is reached (a
-    /// callee that never returns can't hang this). Otherwise stop after the
-    /// one instruction, same as `step`.
-    fn do_next(&mut self) -> Vec<String> {
-        let d0 = self.mmix.call_depth();
-        let mut halted = !self.mmix.execute_instruction();
+    /// `step`: run until the PC reaches an address on a different source
+    /// line, following into calls. Also stops on a breakpoint, a halt, or
+    /// `STEP_BUDGET` (a line that never ends can't hang this). An address
+    /// with no source location is not a new line.
+    fn do_step(&mut self) -> Vec<String> {
+        let origin = self.origin_line();
+        let mut halted = false;
         let mut budget_exhausted = false;
-        if !halted {
-            let mut steps = 0usize;
-            while self.mmix.call_depth() > d0 {
-                if steps >= STEP_BUDGET {
-                    budget_exhausted = true;
-                    break;
-                }
-                if self.breakpoints.contains(&self.mmix.get_pc()) {
-                    break;
-                }
-                if !self.mmix.execute_instruction() {
-                    halted = true;
-                    break;
-                }
-                steps += 1;
+        let mut steps = 0usize;
+        loop {
+            if steps >= STEP_BUDGET {
+                budget_exhausted = true;
+                break;
+            }
+            if !self.mmix.execute_instruction() {
+                halted = true;
+                break;
+            }
+            steps += 1;
+            if self.breakpoints.contains(&self.mmix.get_pc()) || self.reached_new_line(&origin) {
+                break;
             }
         }
         self.report_stop(halted, budget_exhausted)
+    }
+
+    /// `next`: like `step`, but stepping over calls. The new line only
+    /// counts once the call depth is back at or below where it started
+    /// (PUSHJ/PUSHGO push a frame; GO does not) -- a callee's first
+    /// instruction is on a different source line, so testing the line alone
+    /// would stop inside the call.
+    fn do_next(&mut self) -> Vec<String> {
+        let origin = self.origin_line();
+        let depth = self.mmix.call_depth();
+        let mut halted = false;
+        let mut budget_exhausted = false;
+        let mut steps = 0usize;
+        loop {
+            if steps >= STEP_BUDGET {
+                budget_exhausted = true;
+                break;
+            }
+            if !self.mmix.execute_instruction() {
+                halted = true;
+                break;
+            }
+            steps += 1;
+            if self.breakpoints.contains(&self.mmix.get_pc()) {
+                break;
+            }
+            if self.mmix.call_depth() <= depth && self.reached_new_line(&origin) {
+                break;
+            }
+        }
+        self.report_stop(halted, budget_exhausted)
+    }
+
+    /// The source line the PC sits on, owned so a stepping loop can keep it
+    /// across the machine mutations it makes.
+    fn origin_line(&self) -> Option<(String, usize)> {
+        self.assembler
+            .source_loc(self.mmix.get_pc())
+            .map(|loc| (loc.file.clone(), loc.line))
+    }
+
+    /// Whether the PC has reached a source line other than `origin`. An
+    /// address with no source location answers false: it is inside no line,
+    /// so it is not a new one.
+    fn reached_new_line(&self, origin: &Option<(String, usize)>) -> bool {
+        let Some(loc) = self.assembler.source_loc(self.mmix.get_pc()) else {
+            return false;
+        };
+        match origin {
+            Some((file, line)) => loc.line != *line || loc.file != *file,
+            None => true,
+        }
     }
 
     /// `continue`: single-step from the current PC until a breakpoint
@@ -470,7 +529,7 @@ impl Debugger {
     }
 
     /// [`Debugger::report`], with one line appended when `STEP_BUDGET` —
-    /// not a halt or a breakpoint — is what stopped `do_continue`/`do_next`.
+    /// not a halt or a breakpoint — is what stopped the step loop.
     /// Appending rather than replacing keeps `report`'s shape intact for
     /// every other stop reason.
     fn report_stop(&self, halted: bool, budget_exhausted: bool) -> Vec<String> {
@@ -571,6 +630,29 @@ Sub\tSETI\t$0,3
 \tPOP\t0,0
 ";
 
+    /// A stack program whose every statement is a pseudo-op or a plain
+    /// instruction, so `SETI`'s four-tetra expansion sits between two
+    /// single-tetra lines. `Main` is line 8 at 0x100; line 9 begins at 0x110.
+    const STACK_PROGRAM: &str = "\
+        LOC     Data_Segment
+Cells   OCTA    0
+        OCTA    0
+        OCTA    0
+Sp      GREG    Cells
+
+        LOC     #100
+Main    SETI    $1,7
+        STOI    $1,Sp,0
+        ADDUI   Sp,Sp,8
+        SETI    $1,35
+        STOI    $1,Sp,0
+        LDOI    $2,Sp,0
+        SUBUI   Sp,Sp,8
+        LDOI    $3,Sp,0
+        ADDU    $255,$2,$3
+        TRAP    0,Halt,0
+";
+
     /// Writes `Hi` to fd 1, then halts.
     ///
     /// Uses the literal 1 rather than the `StdOut` symbol: `StdOut` resolves
@@ -624,6 +706,8 @@ Text\tBYTE\t\"Hi\",0
     fn parse_command_maps_all_forms() {
         assert_eq!(parse_command("s"), Ok(Command::Step));
         assert_eq!(parse_command("step"), Ok(Command::Step));
+        assert_eq!(parse_command("si"), Ok(Command::Stepi));
+        assert_eq!(parse_command("stepi"), Ok(Command::Stepi));
         assert_eq!(parse_command("n"), Ok(Command::Next));
         assert_eq!(parse_command("next"), Ok(Command::Next));
         assert_eq!(parse_command("c"), Ok(Command::Continue));
@@ -668,6 +752,39 @@ Text\tBYTE\t\"Hi\",0
         assert!(joined.contains("print"));
         assert!(joined.contains("quit"));
         assert!(joined.contains("help"));
+    }
+
+    /// `next` lands on the head of the next source line every time, never
+    /// mid-expansion: line 8's `SETI` occupies four tetras, and one `next`
+    /// crosses all of them.
+    #[test]
+    fn next_advances_one_source_line_across_an_expansion() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let stops: Vec<String> = (0..5)
+            .map(|_| dbg.execute(Command::Next).join("\n"))
+            .collect();
+
+        for (taken, stop) in stops.iter().enumerate() {
+            let line = 9 + taken;
+            assert!(
+                stop.starts_with(&format!("stack.mms:{line}\t")),
+                "next #{} must stop at the head of line {line}, got {stop:?}",
+                taken + 1
+            );
+        }
+    }
+
+    /// `stepi` advances one instruction and still names the line it is
+    /// inside, with the address in front.
+    #[test]
+    fn stepi_advances_one_instruction_inside_a_line() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let stop = dbg.execute(Command::Stepi);
+        assert_eq!(dbg.mmix.get_pc(), 0x104);
+        assert_eq!(
+            stop,
+            vec!["0x0000000000000104\tstack.mms:8\tMain    SETI    $1,7".to_string()]
+        );
     }
 
     #[test]
@@ -773,7 +890,7 @@ Text\tBYTE\t\"Hi\",0
         // SET $3,42 assembles to 4 real instructions (SETH/SETMH/SETML/SETL);
         // step through all of them.
         for _ in 0..4 {
-            dbg.execute(Command::Step);
+            dbg.execute(Command::Stepi);
         }
         assert_eq!(dbg.do_print("$3"), "42");
         assert_eq!(dbg.do_print("Main"), format_value(main_addr, dbg.format));
@@ -801,7 +918,7 @@ Text\tBYTE\t\"Hi\",0
         let asm = assemble(source, "repeat.mms");
         let mut dbg = Debugger::load(asm);
         let pc0 = dbg.mmix.get_pc();
-        dbg.execute(Command::Step);
+        dbg.execute(Command::Stepi);
         let pc1 = dbg.mmix.get_pc();
         assert_ne!(pc0, pc1, "first step must advance the PC");
         dbg.execute(Command::Repeat);
