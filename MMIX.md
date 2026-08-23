@@ -393,18 +393,22 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
 | `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
 | `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline |
-| `PRELD` | `PRELD X, $Y, $Z` | Prefetch data into cache |
-| `PRELDI` | `PRELD X, $Y, Z` | Prefetch data (immediate) |
-| `PREGO` | `PREGO X, $Y, $Z` | Prefetch for execution |
-| `PREGOI` | `PREGO X, $Y, Z` | Prefetch for execution (immediate) |
-| `PREST` | `PREST X, $Y, $Z` | Prestore data |
-| `PRESTI` | `PREST X, $Y, Z` | Prestore data (immediate) |
-| `SYNCD` | `SYNCD X, $Y, $Z` | Synchronize data cache |
-| `SYNCDI` | `SYNCD X, $Y, Z` | Synchronize data cache (immediate) |
-| `SYNCID` | `SYNCID X, $Y, $Z` | Synchronize instruction and data cache |
-| `SYNCIDI` | `SYNCID X, $Y, Z` | Synchronize instruction and data cache (immediate) |
+| `PRELD` | `PRELD $X, $Y, $Z` | Prefetch data into cache |
+| `PRELDI` | `PRELD $X, $Y, Z` | Prefetch data (immediate) |
+| `PREGO` | `PREGO $X, $Y, $Z` | Prefetch for execution |
+| `PREGOI` | `PREGO $X, $Y, Z` | Prefetch for execution (immediate) |
+| `PREST` | `PREST $X, $Y, $Z` | Prestore data |
+| `PRESTI` | `PREST $X, $Y, Z` | Prestore data (immediate) |
+| `SYNCD` | `SYNCD $X, $Y, $Z` | Synchronize data cache |
+| `SYNCDI` | `SYNCD $X, $Y, Z` | Synchronize data cache (immediate) |
+| `SYNCID` | `SYNCID $X, $Y, $Z` | Synchronize instruction and data cache |
+| `SYNCIDI` | `SYNCID $X, $Y, Z` | Synchronize instruction and data cache (immediate) |
 | `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
+
+checksmix parses the `X` operand of `PRELD`, `PREGO`, `PREST`, `SYNCD` and
+`SYNCID` as a register. Knuth specifies an immediate byte count there, so
+source written to the specification does not assemble.
 
 `GETA`'s `addr` must be 4-byte aligned relative to the current instruction and
 within ±131068 bytes (a signed 16-bit quotient of the byte delta). `GETAB`'s
