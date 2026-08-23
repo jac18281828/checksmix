@@ -2907,7 +2907,7 @@ impl MMix {
                     self.set_register(x, 1); // Success
                 } else {
                     // Values don't match: give the caller the current value to
-                    // retry with, per Knuth's rP <- M8[$Y+$Z] on failure.
+                    // retry with, per Knuth's rP <- M8[$Y+Z] on failure.
                     self.set_special(SpecialReg::RP, mem_value);
                     self.set_register(x, 0); // Failure
                 }

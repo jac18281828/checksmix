@@ -3640,10 +3640,10 @@ TestFail        SETI $255,FailMsg
 % ========================================
 % Local data for GETA test (must be in code segment, near the code)
 % ========================================
-        % The location counter here sits at 4 mod 8 because directive_octa
-        % does not implement MMIXAL's automatic data alignment (checksmix
-        % assembler gap, out of scope for this corpus). This TETRA pad, not
-        % the OCTA pads below, is what realigns the octa labels that follow.
+        % The location counter here sits at 4 mod 8 because the assembler
+        % does not implement MMIXAL's automatic data alignment. This TETRA
+        % pad realigns it to 8 for the OCTA labels that follow; removing it
+        % misaligns every octa below.
         TETRA   0
         OCTA    0
 LocalData

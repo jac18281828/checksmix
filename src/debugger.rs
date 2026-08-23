@@ -432,7 +432,7 @@ impl Debugger {
 
     /// `print <arg>` resolution, in priority order: `$N`/bare `N` (general
     /// register), a special-register name, a label, an IS/GREG symbol, a hex
-    /// address (memory octa), else an error.
+    /// address (the memory octa at its aligned 8-byte base), else an error.
     fn do_print(&self, arg: &str) -> String {
         let arg = arg.trim();
         if let Some(value) = self.print_register(arg) {

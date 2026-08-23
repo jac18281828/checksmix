@@ -104,7 +104,7 @@ set (i.e. when run from Emacs's `gud-mode`).
 | continue | `c`, `continue` | Resume, single-stepping until a breakpoint or halt. |
 | run/reset | `r`, `run` | Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires. |
 | break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
-| print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or memory octa (`0x...`/`#...`). |
+| print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or the memory octa at a hex address's aligned 8-byte base (`0x...`/`#...`). |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
 | list | `l`, `list` | Print source lines around the current PC. |
 | help | `h`, `help`, `?` | Show this help. |
