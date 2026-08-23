@@ -188,8 +188,8 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
 | `CSWAP` | `CSWAP $X, $Y, $Z` | Compare and swap |
 | `CSWAPI` | `CSWAP $X, $Y, Z` | Compare and swap (immediate) |
-| `LDA` | `LDA $X, $Y, $Z` | Load address (ADDU alias) |
-| `LDAI` | `LDA $X, $Y, Z` | Load address (immediate) |
+| `LDA` | `LDA $X, $Y, $Z` | Load address of `$Y + $Z` — the `ADDU $X, $Y, $Z` alias |
+| `LDAI` | `LDA $X, $Y, Z` | Load address of `$Y + Z` — the `ADDU $X, $Y, Z` alias |
 | `STB` | `STB $X, $Y, $Z` | Store byte signed |
 | `STBI` | `STB $X, $Y, Z` | Store byte signed (immediate) |
 | `STBU` | `STBU $X, $Y, $Z` | Store byte unsigned |
@@ -258,13 +258,13 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `FIX` | `FIX $X, $Y, $Z` | Convert float → signed integer (honors rA rounding) |
 | `FIXU` | `FIXU $X, $Y, $Z` | Convert float → unsigned integer (honors rA rounding) |
 | `FLOT` | `FLOT $X, $Y, $Z` | Convert signed integer → float (honors rA rounding) |
-| `FLOTI` | `FLOTI $X, $Y, Z` | Convert signed integer → float immediate |
+| `FLOTI` | `FLOT $X, $Y, Z` | Convert signed integer → float immediate |
 | `FLOTU` | `FLOTU $X, $Y, $Z` | Convert unsigned integer → float (honors rA rounding) |
-| `FLOTUI` | `FLOTUI $X, $Y, Z` | Convert unsigned integer → float immediate |
+| `FLOTUI` | `FLOTU $X, $Y, Z` | Convert unsigned integer → float immediate |
 | `SFLOT` | `SFLOT $X, $Y, $Z` | Convert signed integer → short float (honors rA rounding) |
-| `SFLOTI` | `SFLOTI $X, $Y, Z` | Convert signed integer → short float immediate |
+| `SFLOTI` | `SFLOT $X, $Y, Z` | Convert signed integer → short float immediate |
 | `SFLOTU` | `SFLOTU $X, $Y, $Z` | Convert unsigned integer → short float (honors rA rounding) |
-| `SFLOTUI` | `SFLOTUI $X, $Y, Z` | Convert unsigned integer → short float immediate |
+| `SFLOTUI` | `SFLOTU $X, $Y, Z` | Convert unsigned integer → short float immediate |
 | `CMP` | `CMP $X, $Y, $Z` | Compare signed: `$X` = −1/0/+1 |
 | `CMPI` | `CMP $X, $Y, Z` | Compare signed immediate |
 | `CMPU` | `CMPU $X, $Y, $Z` | Compare unsigned: `$X` = −1/0/+1 |
@@ -310,6 +310,7 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `SRU` | `SRU $X, $Y, $Z` | Shift right unsigned (logical) |
 | `SRUI` | `SRU $X, $Y, Z` | Shift right unsigned immediate |
 | `JMP` | `JMP addr` | Unconditional jump (24-bit relative offset) |
+| `JMPB` | `JMPB addr` | Unconditional jump, backward target required |
 | `BN` | `BN $X, addr` | Branch if `$X < 0` |
 | `BNB` | `BNB $X, addr` | Branch if `$X < 0` (backward hint) |
 | `BZ` | `BZ $X, addr` | Branch if `$X == 0` |
@@ -377,15 +378,15 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `PUSHJ` | `PUSHJ $X, addr` | Push registers and jump; return address in `rJ` |
 | `PUSHJB` | `PUSHJB $X, addr` | Push registers and jump (backward hint) |
 | `PUSHGO` | `PUSHGO $X, $Y, $Z` | Push registers and jump to `$Y + $Z` |
-| `PUSHGOI` | `PUSHGOI $X, $Y, Z` | Push registers and jump to `$Y + Z` |
+| `PUSHGOI` | `PUSHGO $X, $Y, Z` | Push registers and jump to `$Y + Z` |
 | `POP` | `POP X, YZ` | Pop registers and return; X values returned |
 | `GO` | `GO $X, $Y, $Z` | Jump to `$Y + $Z`; save next PC in `$X` |
-| `GOI` | `GOI $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
+| `GOI` | `GO $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
 | `GETA` | `GETA $X, addr` | Get relative address into `$X` |
 | `GETAB` | `GETAB $X, addr` | Get relative address (backward hint) |
 | `GET` | `GET $X, Z` | Read special register Z into `$X` |
 | `PUT` | `PUT X, $Z` | Write `$Z` into special register X |
-| `PUTI` | `PUTI X, Z` | Write immediate Z into special register X |
+| `PUTI` | `PUT X, Z` | Write immediate Z into special register X |
 | `SAVE` | `SAVE $X, 0` | Save register stack to memory |
 | `UNSAVE` | `UNSAVE 0, $Z` | Restore register stack from memory |
 | `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
@@ -393,15 +394,15 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
 | `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline |
 | `PRELD` | `PRELD X, $Y, $Z` | Prefetch data into cache |
-| `PRELDI` | `PRELDI X, $Y, Z` | Prefetch data (immediate) |
+| `PRELDI` | `PRELD X, $Y, Z` | Prefetch data (immediate) |
 | `PREGO` | `PREGO X, $Y, $Z` | Prefetch for execution |
-| `PREGOI` | `PREGOI X, $Y, Z` | Prefetch for execution (immediate) |
+| `PREGOI` | `PREGO X, $Y, Z` | Prefetch for execution (immediate) |
 | `PREST` | `PREST X, $Y, $Z` | Prestore data |
-| `PRESTI` | `PRESTI X, $Y, Z` | Prestore data (immediate) |
+| `PRESTI` | `PREST X, $Y, Z` | Prestore data (immediate) |
 | `SYNCD` | `SYNCD X, $Y, $Z` | Synchronize data cache |
-| `SYNCDI` | `SYNCDI X, $Y, Z` | Synchronize data cache (immediate) |
+| `SYNCDI` | `SYNCD X, $Y, Z` | Synchronize data cache (immediate) |
 | `SYNCID` | `SYNCID X, $Y, $Z` | Synchronize instruction and data cache |
-| `SYNCIDI` | `SYNCIDI X, $Y, Z` | Synchronize instruction and data cache (immediate) |
+| `SYNCIDI` | `SYNCID X, $Y, Z` | Synchronize instruction and data cache (immediate) |
 | `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
 

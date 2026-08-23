@@ -330,6 +330,7 @@ mnemonic_bn = @{ ^"BN" ~ word_end }
 mnemonic_bz = @{ ^"BZ" ~ word_end }
 mnemonic_bp = @{ ^"BP" ~ word_end }
 mnemonic_jne = @{ ^"JNE" ~ word_end }
+mnemonic_jmpb = @{ ^"JMPB" ~ word_end }
 mnemonic_jmp = @{ ^"JMP" ~ word_end }
 mnemonic_je = @{ ^"JE" ~ word_end }
 mnemonic_jl = @{ ^"JL" ~ word_end }
@@ -437,10 +438,14 @@ inst_load_store_auto = {
      mnemonic_ldwu | mnemonic_ldw |
      mnemonic_ldtu | mnemonic_ldt |
      mnemonic_ldou | mnemonic_ldo |
+     mnemonic_ldunc | mnemonic_ldvts |
+     mnemonic_ldht | mnemonic_ldsf |
      mnemonic_stbu | mnemonic_stb |
      mnemonic_stwu | mnemonic_stw |
      mnemonic_sttu | mnemonic_stt |
-     mnemonic_stou | mnemonic_sto) ~
+     mnemonic_stou | mnemonic_sto |
+     mnemonic_stunc | mnemonic_stht |
+     mnemonic_stsf | mnemonic_cswap) ~
     operand_reg_reg_z
 }
 
@@ -452,8 +457,10 @@ inst_load_store_rri = {
     operand_reg_reg_imm
 }
 
-// LDA can take 2 or 3 operands: LDA $X,Label or LDA $X,$Y,Z
-inst_lda_rri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_reg_imm }
+// LDA aliases ADDU, so its Z auto-selects the register or immediate opcode.
+// The two-operand form LDA $X,Label loads a full address.
+inst_lda_auto = { mnemonic_lda ~ operand_reg_reg_z }
+inst_lda_rri = { mnemonic_ldai ~ operand_reg_reg_imm }
 inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
 
 // Arithmetic (3 operands) - base mnemonics auto-select RRR/RRI by Z.
@@ -473,10 +480,10 @@ inst_arith_rri = {
     operand_reg_reg_imm
 }
 
-// NEG is special: NEG $X, Y, $Z (Y is immediate/literal) - ordered longest first
-inst_neg_rrr = {
-    (mnemonic_negui | mnemonic_negi | mnemonic_negu | mnemonic_neg) ~
-    register ~ comma ~ expr_value ~ comma ~ register
+// NEG is special: Y is an immediate byte, and Z auto-selects RRR/RRI.
+inst_neg_auto = {
+    (mnemonic_negu | mnemonic_neg) ~
+    register ~ comma ~ expr_value ~ comma ~ (register | expr_value)
 }
 
 inst_neg_rri = {
@@ -490,10 +497,15 @@ inst_float_rrr = {
      mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
      mnemonic_fadd | mnemonic_fsub | mnemonic_fmul | mnemonic_fdiv |
      mnemonic_frem | mnemonic_fsqrt | mnemonic_fint |
-     mnemonic_fixu | mnemonic_fix |
-     mnemonic_sflotu | mnemonic_sflot |
-     mnemonic_flotu | mnemonic_flot) ~
+     mnemonic_fixu | mnemonic_fix) ~
     operand_reg_reg_reg
+}
+
+// Fixed-to-float conversions, the only float ops taking an immediate Z.
+inst_flot_auto = {
+    (mnemonic_sflotu | mnemonic_sflot |
+     mnemonic_flotu | mnemonic_flot) ~
+    operand_reg_reg_z
 }
 
 inst_float_rri = {
@@ -586,7 +598,7 @@ inst_pbranch = {
     operand_reg_imm
 }
 
-inst_jmp = { mnemonic_jmp ~ operand_imm }
+inst_jmp = { (mnemonic_jmpb | mnemonic_jmp) ~ operand_imm }
 
 // TRAP instruction: TRAP X, Y, Z (where X, Y, Z can be numbers or identifiers)
 inst_trap = { mnemonic_trap ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
@@ -598,15 +610,14 @@ inst_getab = { mnemonic_getab ~ operand_reg_imm }
 // Subroutine instructions
 inst_pushj = { mnemonic_pushj ~ operand_reg_imm }
 inst_pushjb = { mnemonic_pushjb ~ operand_reg_imm }
-inst_pushgo_rrr = { mnemonic_pushgo ~ operand_reg_reg_reg }
+inst_go_auto = { (mnemonic_pushgo | mnemonic_go) ~ operand_reg_reg_z }
 inst_pushgo_rri = { mnemonic_pushgoi ~ operand_reg_reg_imm }
 inst_pop = { mnemonic_pop ~ expr_value ~ comma ~ expr_value }
-inst_go_rrr = { mnemonic_go ~ operand_reg_reg_reg }
 inst_go_rri = { mnemonic_goi ~ operand_reg_reg_imm }
 
 // Special register access
 inst_get = { mnemonic_get ~ register ~ comma ~ expr_value }
-inst_put = { mnemonic_put ~ expr_value ~ comma ~ register }
+inst_put_auto = { mnemonic_put ~ expr_value ~ comma ~ (register | expr_value) }
 inst_puti = { mnemonic_puti ~ expr_value ~ comma ~ expr_value }
 
 // Context management
@@ -614,35 +625,29 @@ inst_save = { mnemonic_save ~ register ~ comma ~ expr_value }
 inst_unsave = { mnemonic_unsave ~ expr_value ~ comma ~ register }
 
 // Prefetch and cache control
-inst_preld_rrr = { mnemonic_preld ~ operand_reg_reg_reg }
+inst_cache_auto = {
+    (mnemonic_preld | mnemonic_prego | mnemonic_prest |
+     mnemonic_syncid | mnemonic_syncd) ~
+    operand_reg_reg_z
+}
 inst_preld_rri = { mnemonic_preldi ~ operand_reg_reg_imm }
-inst_prego_rrr = { mnemonic_prego ~ operand_reg_reg_reg }
 inst_prego_rri = { mnemonic_pregoi ~ operand_reg_reg_imm }
-inst_prest_rrr = { mnemonic_prest ~ operand_reg_reg_reg }
 inst_prest_rri = { mnemonic_presti ~ operand_reg_reg_imm }
-inst_syncd_rrr = { mnemonic_syncd ~ operand_reg_reg_reg }
 inst_syncd_rri = { mnemonic_syncdi ~ operand_reg_reg_imm }
-inst_syncid_rrr = { mnemonic_syncid ~ operand_reg_reg_reg }
 inst_syncid_rri = { mnemonic_syncidi ~ operand_reg_reg_imm }
 
 // Additional load/store 
-inst_ldunc_rrr = { mnemonic_ldunc ~ operand_reg_reg_reg }
 inst_ldunc_rri = { mnemonic_ldunci ~ operand_reg_reg_imm }
-inst_stunc_rrr = { mnemonic_stunc ~ operand_reg_reg_reg }
 inst_stunc_rri = { mnemonic_stunci ~ operand_reg_reg_imm }
-inst_ldht_rrr = { mnemonic_ldht ~ operand_reg_reg_reg }
 inst_ldht_rri = { mnemonic_ldhti ~ operand_reg_reg_imm }
-inst_stht_rrr = { mnemonic_stht ~ operand_reg_reg_reg }
 inst_stht_rri = { mnemonic_sthti ~ operand_reg_reg_imm }
-inst_ldsf_rrr = { mnemonic_ldsf ~ operand_reg_reg_reg }
 inst_ldsf_rri = { mnemonic_ldsfi ~ operand_reg_reg_imm }
-inst_stsf_rrr = { mnemonic_stsf ~ operand_reg_reg_reg }
 inst_stsf_rri = { mnemonic_stsfi ~ operand_reg_reg_imm }
-inst_ldvts_rrr = { mnemonic_ldvts ~ operand_reg_reg_reg }
 inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_reg_reg_imm }
-inst_cswap_rrr = { mnemonic_cswap ~ operand_reg_reg_reg }
 inst_cswap_rri = { mnemonic_cswapi ~ operand_reg_reg_imm }
-inst_stco_rrr = { mnemonic_stco ~ expr_value ~ comma ~ register ~ comma ~ register }
+
+// STCO's X is an immediate byte, never a register; only Z auto-selects.
+inst_stco_auto = { mnemonic_stco ~ expr_value ~ comma ~ register ~ comma ~ (register | expr_value) }
 inst_stco_rri = { mnemonic_stcoi ~ expr_value ~ comma ~ register ~ comma ~ expr_value }
 
 // System instructions  
@@ -665,27 +670,27 @@ instruction = {
     inst_orh_ri | inst_ormh_ri | inst_orml_ri | inst_orl_ri |
     inst_andnh_ri | inst_andnmh_ri | inst_andnml_ri | inst_andnl_ri |
     inst_load_store_auto | inst_load_store_rri |
-    inst_ldunc_rrr | inst_ldunc_rri | inst_stunc_rrr | inst_stunc_rri |
-    inst_ldht_rrr | inst_ldht_rri | inst_stht_rrr | inst_stht_rri |
-    inst_ldsf_rrr | inst_ldsf_rri | inst_stsf_rrr | inst_stsf_rri |
-    inst_ldvts_rrr | inst_ldvts_rri | inst_cswap_rrr | inst_cswap_rri |
-    inst_stco_rrr | inst_stco_rri |
-    inst_lda_rri | inst_lda_ri |
+    inst_ldunc_rri | inst_stunc_rri |
+    inst_ldht_rri | inst_stht_rri |
+    inst_ldsf_rri | inst_stsf_rri |
+    inst_ldvts_rri | inst_cswap_rri |
+    inst_stco_auto | inst_stco_rri |
+    inst_lda_auto | inst_lda_rri | inst_lda_ri |
     inst_arith_auto | inst_arith_rri |
-    inst_float_rrr | inst_float_rri |
-    inst_neg_rrr | inst_neg_rri |
+    inst_flot_auto | inst_float_rrr | inst_float_rri |
+    inst_neg_auto | inst_neg_rri |
     inst_bitwise_auto | inst_bitwise_rri |
     inst_bitfiddle_auto | inst_bitfiddle_rri |
     inst_shift_auto | inst_shift_rri |
     inst_conditional_set_auto | inst_conditional_set_rri |
     inst_zero_or_set_auto | inst_zero_or_set_rri |
     inst_pbranch | inst_branch | inst_jmp |
-    inst_pushj | inst_pushjb | inst_pushgo_rrr | inst_pushgo_rri | inst_pop |
-    inst_go_rrr | inst_go_rri |
-    inst_preld_rrr | inst_preld_rri | inst_prego_rrr | inst_prego_rri |
-    inst_prest_rrr | inst_prest_rri |
-    inst_syncd_rrr | inst_syncd_rri | inst_syncid_rrr | inst_syncid_rri |
-    inst_get | inst_put | inst_puti |
+    inst_pushj | inst_pushjb | inst_pop |
+    inst_go_auto | inst_pushgo_rri | inst_go_rri |
+    inst_cache_auto |
+    inst_preld_rri | inst_prego_rri | inst_prest_rri |
+    inst_syncd_rri | inst_syncid_rri |
+    inst_get | inst_put_auto | inst_puti |
     inst_save | inst_unsave |
     inst_geta | inst_getab |
     inst_resume | inst_trip | inst_swym | inst_sync |

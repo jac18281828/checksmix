@@ -1722,13 +1722,15 @@ impl MMixAssembler {
             Rule::inst_andnl_ri => self.parse_inst_andnl(inner),
             Rule::inst_load_store_auto => self.parse_inst_load_store_auto(inner),
             Rule::inst_load_store_rri => self.parse_inst_load_store_rri(inner),
+            Rule::inst_lda_auto => self.parse_inst_lda_auto(inner),
             Rule::inst_lda_rri => self.parse_inst_lda_rri(inner),
             Rule::inst_lda_ri => self.parse_inst_lda_ri(inner),
             Rule::inst_arith_auto => self.parse_inst_arith_auto(inner),
             Rule::inst_arith_rri => self.parse_inst_arith_rri(inner),
+            Rule::inst_flot_auto => self.parse_inst_flot_auto(inner),
             Rule::inst_float_rrr => self.parse_inst_float_rrr(inner),
             Rule::inst_float_rri => self.parse_inst_float_rri(inner),
-            Rule::inst_neg_rrr => self.parse_inst_neg_rrr(inner),
+            Rule::inst_neg_auto => self.parse_inst_neg_auto(inner),
             Rule::inst_neg_rri => self.parse_inst_neg_rri(inner),
             Rule::inst_bitwise_auto => self.parse_inst_bitwise_auto(inner),
             Rule::inst_bitwise_rri => self.parse_inst_bitwise_rri(inner),
@@ -1747,43 +1749,30 @@ impl MMixAssembler {
             Rule::inst_getab => self.parse_inst_getab(inner),
             Rule::inst_pushj => self.parse_inst_pushj(inner),
             Rule::inst_pushjb => self.parse_inst_pushjb(inner),
-            Rule::inst_pushgo_rrr => self.parse_inst_pushgo_rrr(inner),
+            Rule::inst_go_auto => self.parse_inst_go_auto(inner),
             Rule::inst_pushgo_rri => self.parse_inst_pushgo_rri(inner),
             Rule::inst_pop => self.parse_inst_pop(inner),
-            Rule::inst_go_rrr => self.parse_inst_go_rrr(inner),
             Rule::inst_go_rri => self.parse_inst_go_rri(inner),
             Rule::inst_get => self.parse_inst_get(inner),
-            Rule::inst_put => self.parse_inst_put(inner),
+            Rule::inst_put_auto => self.parse_inst_put_auto(inner),
             Rule::inst_puti => self.parse_inst_puti(inner),
             Rule::inst_save => self.parse_inst_save(inner),
             Rule::inst_unsave => self.parse_inst_unsave(inner),
-            Rule::inst_ldunc_rrr => self.parse_inst_ldunc_rrr(inner),
             Rule::inst_ldunc_rri => self.parse_inst_ldunc_rri(inner),
-            Rule::inst_stunc_rrr => self.parse_inst_stunc_rrr(inner),
             Rule::inst_stunc_rri => self.parse_inst_stunc_rri(inner),
-            Rule::inst_ldht_rrr => self.parse_inst_ldht_rrr(inner),
             Rule::inst_ldht_rri => self.parse_inst_ldht_rri(inner),
-            Rule::inst_stht_rrr => self.parse_inst_stht_rrr(inner),
             Rule::inst_stht_rri => self.parse_inst_stht_rri(inner),
-            Rule::inst_ldsf_rrr => self.parse_inst_ldsf_rrr(inner),
             Rule::inst_ldsf_rri => self.parse_inst_ldsf_rri(inner),
-            Rule::inst_stsf_rrr => self.parse_inst_stsf_rrr(inner),
             Rule::inst_stsf_rri => self.parse_inst_stsf_rri(inner),
-            Rule::inst_ldvts_rrr => self.parse_inst_ldvts_rrr(inner),
             Rule::inst_ldvts_rri => self.parse_inst_ldvts_rri(inner),
-            Rule::inst_cswap_rrr => self.parse_inst_cswap_rrr(inner),
             Rule::inst_cswap_rri => self.parse_inst_cswap_rri(inner),
-            Rule::inst_stco_rrr => self.parse_inst_stco_rrr(inner),
+            Rule::inst_stco_auto => self.parse_inst_stco_auto(inner),
             Rule::inst_stco_rri => self.parse_inst_stco_rri(inner),
-            Rule::inst_preld_rrr => self.parse_inst_preld_rrr(inner),
+            Rule::inst_cache_auto => self.parse_inst_cache_auto(inner),
             Rule::inst_preld_rri => self.parse_inst_preld_rri(inner),
-            Rule::inst_prego_rrr => self.parse_inst_prego_rrr(inner),
             Rule::inst_prego_rri => self.parse_inst_prego_rri(inner),
-            Rule::inst_prest_rrr => self.parse_inst_prest_rrr(inner),
             Rule::inst_prest_rri => self.parse_inst_prest_rri(inner),
-            Rule::inst_syncd_rrr => self.parse_inst_syncd_rrr(inner),
             Rule::inst_syncd_rri => self.parse_inst_syncd_rri(inner),
-            Rule::inst_syncid_rrr => self.parse_inst_syncid_rrr(inner),
             Rule::inst_syncid_rri => self.parse_inst_syncid_rri(inner),
             Rule::inst_resume => self.parse_inst_resume(inner),
             Rule::inst_trip => self.parse_inst_trip(inner),
@@ -2116,6 +2105,22 @@ impl MMixAssembler {
             ("STO", ZForm::Imm(z)) => Ok(MMixInstruction::STOI(x, y, z)),
             ("STOU", ZForm::Reg(z)) => Ok(MMixInstruction::STOU(x, y, z)),
             ("STOU", ZForm::Imm(z)) => Ok(MMixInstruction::STOUI(x, y, z)),
+            ("LDUNC", ZForm::Reg(z)) => Ok(MMixInstruction::LDUNC(x, y, z)),
+            ("LDUNC", ZForm::Imm(z)) => Ok(MMixInstruction::LDUNCI(x, y, z)),
+            ("STUNC", ZForm::Reg(z)) => Ok(MMixInstruction::STUNC(x, y, z)),
+            ("STUNC", ZForm::Imm(z)) => Ok(MMixInstruction::STUNCI(x, y, z)),
+            ("LDHT", ZForm::Reg(z)) => Ok(MMixInstruction::LDHT(x, y, z)),
+            ("LDHT", ZForm::Imm(z)) => Ok(MMixInstruction::LDHTI(x, y, z)),
+            ("STHT", ZForm::Reg(z)) => Ok(MMixInstruction::STHT(x, y, z)),
+            ("STHT", ZForm::Imm(z)) => Ok(MMixInstruction::STHTI(x, y, z)),
+            ("LDSF", ZForm::Reg(z)) => Ok(MMixInstruction::LDSF(x, y, z)),
+            ("LDSF", ZForm::Imm(z)) => Ok(MMixInstruction::LDSFI(x, y, z)),
+            ("STSF", ZForm::Reg(z)) => Ok(MMixInstruction::STSF(x, y, z)),
+            ("STSF", ZForm::Imm(z)) => Ok(MMixInstruction::STSFI(x, y, z)),
+            ("LDVTS", ZForm::Reg(z)) => Ok(MMixInstruction::LDVTS(x, y, z)),
+            ("LDVTS", ZForm::Imm(z)) => Ok(MMixInstruction::LDVTSI(x, y, z)),
+            ("CSWAP", ZForm::Reg(z)) => Ok(MMixInstruction::CSWAP(x, y, z)),
+            ("CSWAP", ZForm::Imm(z)) => Ok(MMixInstruction::CSWAPI(x, y, z)),
             _ => Err(format!("Unknown load/store instruction: {}", mnem)),
         }
     }
@@ -2153,23 +2158,30 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_lda_rri(
+    /// `LDA $X,$Y,$Z` is `ADDU $X,$Y,$Z` and `LDA $X,$Y,Z` is `ADDU $X,$Y,Z`,
+    /// so Z selects the same pair of opcodes ADDU selects.
+    fn parse_inst_lda_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "LDA" => Ok(MMixInstruction::LDA(x, y, z)),
-            "LDAI" => Ok(MMixInstruction::LDAI(x, y, z)),
-            _ => Err(format!("Unknown LDA instruction: {}", mnem.as_str())),
+        match self.lower_z_operand(ops.next().unwrap(), "LDA")? {
+            ZForm::Reg(z) => Ok(MMixInstruction::LDA(x, y, z)),
+            ZForm::Imm(z) => Ok(MMixInstruction::LDAI(x, y, z)),
         }
+    }
+
+    fn parse_inst_lda_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        self.parse_rri(pair, MMixInstruction::LDAI)
     }
 
     fn parse_inst_lda_ri(
@@ -2285,21 +2297,23 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_neg_rrr(
+    fn parse_inst_neg_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        // No operand wrapper for inst_neg_rrr - operands are directly in the rule
+        let mnem = parts.next().unwrap().as_str().to_uppercase();
+        // No operand wrapper for inst_neg_auto - operands are directly in the rule
         let x = self.parse_register(parts.next().unwrap())?;
         let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_register(parts.next().unwrap())?;
+        let z = self.lower_z_operand(parts.next().unwrap(), &mnem)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
-            "NEG" => Ok(MMixInstruction::NEG(x, y, z)),
-            "NEGU" => Ok(MMixInstruction::NEGU(x, y, z)),
-            _ => Err(format!("Unknown NEG instruction: {}", mnem.as_str())),
+        match (mnem.as_str(), z) {
+            ("NEG", ZForm::Reg(z)) => Ok(MMixInstruction::NEG(x, y, z)),
+            ("NEG", ZForm::Imm(z)) => Ok(MMixInstruction::NEGI(x, y, z)),
+            ("NEGU", ZForm::Reg(z)) => Ok(MMixInstruction::NEGU(x, y, z)),
+            ("NEGU", ZForm::Imm(z)) => Ok(MMixInstruction::NEGUI(x, y, z)),
+            _ => Err(format!("Unknown NEG instruction: {}", mnem)),
         }
     }
 
@@ -2349,14 +2363,35 @@ impl MMixAssembler {
             "FINT" => Ok(MMixInstruction::FINT(x, y, z)),
             "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
             "FIXU" => Ok(MMixInstruction::FIXU(x, y, z)),
-            "FLOT" => Ok(MMixInstruction::FLOT(x, y, z)),
-            "FLOTU" => Ok(MMixInstruction::FLOTU(x, y, z)),
-            "SFLOT" => Ok(MMixInstruction::SFLOT(x, y, z)),
-            "SFLOTU" => Ok(MMixInstruction::SFLOTU(x, y, z)),
             _ => Err(format!(
                 "Unknown floating point instruction: {}",
                 mnem.as_str()
             )),
+        }
+    }
+
+    fn parse_inst_flot_auto(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap().as_str().to_uppercase();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+
+        match (mnem.as_str(), z) {
+            ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, y, z)),
+            ("FLOT", ZForm::Imm(z)) => Ok(MMixInstruction::FLOTI(x, y, z)),
+            ("FLOTU", ZForm::Reg(z)) => Ok(MMixInstruction::FLOTU(x, y, z)),
+            ("FLOTU", ZForm::Imm(z)) => Ok(MMixInstruction::FLOTUI(x, y, z)),
+            ("SFLOT", ZForm::Reg(z)) => Ok(MMixInstruction::SFLOT(x, y, z)),
+            ("SFLOT", ZForm::Imm(z)) => Ok(MMixInstruction::SFLOTI(x, y, z)),
+            ("SFLOTU", ZForm::Reg(z)) => Ok(MMixInstruction::SFLOTU(x, y, z)),
+            ("SFLOTU", ZForm::Imm(z)) => Ok(MMixInstruction::SFLOTUI(x, y, z)),
+            _ => Err(format!("Unknown float conversion instruction: {}", mnem)),
         }
     }
 
@@ -2926,25 +2961,6 @@ impl MMixAssembler {
         Ok(MMixInstruction::TRAP(x, y, z))
     }
 
-    // Helper: parse instruction with format (reg, reg, reg)
-    fn parse_rrr<F>(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-        f: F,
-    ) -> Result<MMixInstruction, String>
-    where
-        F: FnOnce(u8, u8, u8) -> MMixInstruction,
-    {
-        let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
-        Ok(f(x, y, z))
-    }
-
     // Helper: parse instruction with format (reg, reg, imm)
     fn parse_rri<F>(
         &self,
@@ -3003,11 +3019,25 @@ impl MMixAssembler {
         Ok(MMixInstruction::PUSHJB(x, y, z))
     }
 
-    fn parse_inst_pushgo_rrr(
+    fn parse_inst_go_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::PUSHGO)
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap().as_str().to_uppercase();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+
+        match (mnem.as_str(), z) {
+            ("GO", ZForm::Reg(z)) => Ok(MMixInstruction::GO(x, y, z)),
+            ("GO", ZForm::Imm(z)) => Ok(MMixInstruction::GOI(x, y, z)),
+            ("PUSHGO", ZForm::Reg(z)) => Ok(MMixInstruction::PUSHGO(x, y, z)),
+            ("PUSHGO", ZForm::Imm(z)) => Ok(MMixInstruction::PUSHGOI(x, y, z)),
+            _ => Err(format!("Unknown GO instruction: {}", mnem)),
+        }
     }
 
     fn parse_inst_pushgo_rri(
@@ -3027,13 +3057,6 @@ impl MMixAssembler {
         Ok(MMixInstruction::POP(x, y, z))
     }
 
-    fn parse_inst_go_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::GO)
-    }
-
     fn parse_inst_go_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -3050,13 +3073,18 @@ impl MMixAssembler {
         Ok(MMixInstruction::GET(x, z))
     }
 
-    fn parse_inst_put(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
+    fn parse_inst_put_auto(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let x = self.parse_number(parts.next().unwrap())? as u8;
         // comma is silent in grammar, not in parts
-        let z = self.parse_register(parts.next().unwrap())?;
-        Ok(MMixInstruction::PUT(x, z))
+        match self.lower_z_operand(parts.next().unwrap(), "PUT")? {
+            ZForm::Reg(z) => Ok(MMixInstruction::PUT(x, z)),
+            ZForm::Imm(z) => Ok(MMixInstruction::PUTI(x, z)),
+        }
     }
 
     fn parse_inst_puti(
@@ -3097,25 +3125,11 @@ impl MMixAssembler {
         Ok(MMixInstruction::UNSAVE(x, z))
     }
 
-    fn parse_inst_ldunc_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::LDUNC)
-    }
-
     fn parse_inst_ldunc_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::LDUNCI)
-    }
-
-    fn parse_inst_stunc_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::STUNC)
     }
 
     fn parse_inst_stunc_rri(
@@ -3125,25 +3139,11 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::STUNCI)
     }
 
-    fn parse_inst_ldht_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::LDHT)
-    }
-
     fn parse_inst_ldht_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::LDHTI)
-    }
-
-    fn parse_inst_stht_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::STHT)
     }
 
     fn parse_inst_stht_rri(
@@ -3153,25 +3153,11 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::STHTI)
     }
 
-    fn parse_inst_ldsf_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::LDSF)
-    }
-
     fn parse_inst_ldsf_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::LDSFI)
-    }
-
-    fn parse_inst_stsf_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::STSF)
     }
 
     fn parse_inst_stsf_rri(
@@ -3181,25 +3167,11 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::STSFI)
     }
 
-    fn parse_inst_ldvts_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::LDVTS)
-    }
-
     fn parse_inst_ldvts_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::LDVTSI)
-    }
-
-    fn parse_inst_cswap_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::CSWAP)
     }
 
     fn parse_inst_cswap_rri(
@@ -3209,7 +3181,7 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::CSWAPI)
     }
 
-    fn parse_inst_stco_rrr(
+    fn parse_inst_stco_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
@@ -3218,8 +3190,10 @@ impl MMixAssembler {
         let x = self.parse_number(parts.next().unwrap())? as u8;
         // comma is silent in grammar, not in parts
         let y = self.parse_register(parts.next().unwrap())?;
-        let z = self.parse_register(parts.next().unwrap())?;
-        Ok(MMixInstruction::STCO(x, y, z))
+        match self.lower_z_operand(parts.next().unwrap(), "STCO")? {
+            ZForm::Reg(z) => Ok(MMixInstruction::STCO(x, y, z)),
+            ZForm::Imm(z) => Ok(MMixInstruction::STCOI(x, y, z)),
+        }
     }
 
     fn parse_inst_stco_rri(
@@ -3235,11 +3209,31 @@ impl MMixAssembler {
         Ok(MMixInstruction::STCOI(x, y, z))
     }
 
-    fn parse_inst_preld_rrr(
+    fn parse_inst_cache_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::PRELD)
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap().as_str().to_uppercase();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+
+        match (mnem.as_str(), z) {
+            ("PRELD", ZForm::Reg(z)) => Ok(MMixInstruction::PRELD(x, y, z)),
+            ("PRELD", ZForm::Imm(z)) => Ok(MMixInstruction::PRELDI(x, y, z)),
+            ("PREGO", ZForm::Reg(z)) => Ok(MMixInstruction::PREGO(x, y, z)),
+            ("PREGO", ZForm::Imm(z)) => Ok(MMixInstruction::PREGOI(x, y, z)),
+            ("PREST", ZForm::Reg(z)) => Ok(MMixInstruction::PREST(x, y, z)),
+            ("PREST", ZForm::Imm(z)) => Ok(MMixInstruction::PRESTI(x, y, z)),
+            ("SYNCD", ZForm::Reg(z)) => Ok(MMixInstruction::SYNCD(x, y, z)),
+            ("SYNCD", ZForm::Imm(z)) => Ok(MMixInstruction::SYNCDI(x, y, z)),
+            ("SYNCID", ZForm::Reg(z)) => Ok(MMixInstruction::SYNCID(x, y, z)),
+            ("SYNCID", ZForm::Imm(z)) => Ok(MMixInstruction::SYNCIDI(x, y, z)),
+            _ => Err(format!("Unknown cache control instruction: {}", mnem)),
+        }
     }
 
     fn parse_inst_preld_rri(
@@ -3249,25 +3243,11 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::PRELDI)
     }
 
-    fn parse_inst_prego_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::PREGO)
-    }
-
     fn parse_inst_prego_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::PREGOI)
-    }
-
-    fn parse_inst_prest_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::PREST)
     }
 
     fn parse_inst_prest_rri(
@@ -3277,25 +3257,11 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::PRESTI)
     }
 
-    fn parse_inst_syncd_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::SYNCD)
-    }
-
     fn parse_inst_syncd_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         self.parse_rri(pair, MMixInstruction::SYNCDI)
-    }
-
-    fn parse_inst_syncid_rrr(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<MMixInstruction, String> {
-        self.parse_rrr(pair, MMixInstruction::SYNCID)
     }
 
     fn parse_inst_syncid_rri(
@@ -5278,6 +5244,254 @@ ZSEVI $7,$8,128
         }
     }
 
+    // ---- Canonical spellings for the remaining families -------------
+    // MMIXAL picks the immediate opcode from the operand, so a base
+    // mnemonic with an immediate Z emits what its *I spelling emits. The
+    // *I spellings stay accepted as a legacy surface.
+
+    fn first_instruction(src: &str) -> MMixInstruction {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e}"));
+        asm.instructions
+            .first()
+            .unwrap_or_else(|| panic!("no instructions produced for {src:?}"))
+            .1
+            .clone()
+    }
+
+    #[test]
+    fn test_auto_extended_load_store_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("LDUNC $1,$2,$3", MMixInstruction::LDUNC(1, 2, 3)),
+            ("LDUNC $1,$2,5", MMixInstruction::LDUNCI(1, 2, 5)),
+            ("STUNC $1,$2,$3", MMixInstruction::STUNC(1, 2, 3)),
+            ("STUNC $1,$2,5", MMixInstruction::STUNCI(1, 2, 5)),
+            ("LDHT $1,$2,$3", MMixInstruction::LDHT(1, 2, 3)),
+            ("LDHT $1,$2,5", MMixInstruction::LDHTI(1, 2, 5)),
+            ("STHT $1,$2,$3", MMixInstruction::STHT(1, 2, 3)),
+            ("STHT $1,$2,5", MMixInstruction::STHTI(1, 2, 5)),
+            ("LDSF $1,$2,$3", MMixInstruction::LDSF(1, 2, 3)),
+            ("LDSF $1,$2,5", MMixInstruction::LDSFI(1, 2, 5)),
+            ("STSF $1,$2,$3", MMixInstruction::STSF(1, 2, 3)),
+            ("STSF $1,$2,5", MMixInstruction::STSFI(1, 2, 5)),
+            ("LDVTS $1,$2,$3", MMixInstruction::LDVTS(1, 2, 3)),
+            ("LDVTS $1,$2,5", MMixInstruction::LDVTSI(1, 2, 5)),
+            ("CSWAP $1,$2,$3", MMixInstruction::CSWAP(1, 2, 3)),
+            ("CSWAP $1,$2,5", MMixInstruction::CSWAPI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_cache_and_go_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("PRELD $1,$2,$3", MMixInstruction::PRELD(1, 2, 3)),
+            ("PRELD $1,$2,5", MMixInstruction::PRELDI(1, 2, 5)),
+            ("PREGO $1,$2,$3", MMixInstruction::PREGO(1, 2, 3)),
+            ("PREGO $1,$2,5", MMixInstruction::PREGOI(1, 2, 5)),
+            ("PREST $1,$2,$3", MMixInstruction::PREST(1, 2, 3)),
+            ("PREST $1,$2,5", MMixInstruction::PRESTI(1, 2, 5)),
+            ("SYNCD $1,$2,$3", MMixInstruction::SYNCD(1, 2, 3)),
+            ("SYNCD $1,$2,5", MMixInstruction::SYNCDI(1, 2, 5)),
+            ("SYNCID $1,$2,$3", MMixInstruction::SYNCID(1, 2, 3)),
+            ("SYNCID $1,$2,5", MMixInstruction::SYNCIDI(1, 2, 5)),
+            ("GO $1,$2,$3", MMixInstruction::GO(1, 2, 3)),
+            ("GO $1,$2,5", MMixInstruction::GOI(1, 2, 5)),
+            ("PUSHGO $1,$2,$3", MMixInstruction::PUSHGO(1, 2, 3)),
+            ("PUSHGO $1,$2,5", MMixInstruction::PUSHGOI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_float_conversion_full_coverage() {
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("FLOT $1,$2,$3", MMixInstruction::FLOT(1, 2, 3)),
+            ("FLOT $1,$2,5", MMixInstruction::FLOTI(1, 2, 5)),
+            ("FLOTU $1,$2,$3", MMixInstruction::FLOTU(1, 2, 3)),
+            ("FLOTU $1,$2,5", MMixInstruction::FLOTUI(1, 2, 5)),
+            ("SFLOT $1,$2,$3", MMixInstruction::SFLOT(1, 2, 3)),
+            ("SFLOT $1,$2,5", MMixInstruction::SFLOTI(1, 2, 5)),
+            ("SFLOTU $1,$2,$3", MMixInstruction::SFLOTU(1, 2, 3)),
+            ("SFLOTU $1,$2,5", MMixInstruction::SFLOTUI(1, 2, 5)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_auto_irregular_operand_shapes_full_coverage() {
+        // STCO's X and NEG's Y stay immediate bytes; only Z auto-selects.
+        let cases: &[(&str, MMixInstruction)] = &[
+            ("STCO 5,$2,$3", MMixInstruction::STCO(5, 2, 3)),
+            ("STCO 5,$2,7", MMixInstruction::STCOI(5, 2, 7)),
+            ("NEG $1,0,$3", MMixInstruction::NEG(1, 0, 3)),
+            ("NEG $1,0,7", MMixInstruction::NEGI(1, 0, 7)),
+            ("NEGU $1,0,$3", MMixInstruction::NEGU(1, 0, 3)),
+            ("NEGU $1,0,7", MMixInstruction::NEGUI(1, 0, 7)),
+            ("PUT rA,$1", MMixInstruction::PUT(21, 1)),
+            ("PUT rA,7", MMixInstruction::PUTI(21, 7)),
+        ];
+        for (src, expected) in cases {
+            assert_first_instruction(src, expected.clone());
+        }
+    }
+
+    #[test]
+    fn test_base_spelling_agrees_with_legacy_immediate_spelling() {
+        let pairs: &[(&str, &str)] = &[
+            ("LDHT $1,$2,5", "LDHTI $1,$2,5"),
+            ("LDSF $1,$2,5", "LDSFI $1,$2,5"),
+            ("LDUNC $1,$2,5", "LDUNCI $1,$2,5"),
+            ("LDVTS $1,$2,5", "LDVTSI $1,$2,5"),
+            ("STHT $1,$2,5", "STHTI $1,$2,5"),
+            ("STSF $1,$2,5", "STSFI $1,$2,5"),
+            ("STUNC $1,$2,5", "STUNCI $1,$2,5"),
+            ("CSWAP $1,$2,5", "CSWAPI $1,$2,5"),
+            ("PREGO $1,$2,5", "PREGOI $1,$2,5"),
+            ("PRELD $1,$2,5", "PRELDI $1,$2,5"),
+            ("PREST $1,$2,5", "PRESTI $1,$2,5"),
+            ("SYNCD $1,$2,5", "SYNCDI $1,$2,5"),
+            ("SYNCID $1,$2,5", "SYNCIDI $1,$2,5"),
+            ("GO $1,$2,5", "GOI $1,$2,5"),
+            ("PUSHGO $1,$2,5", "PUSHGOI $1,$2,5"),
+            ("FLOT $1,$2,5", "FLOTI $1,$2,5"),
+            ("FLOTU $1,$2,5", "FLOTUI $1,$2,5"),
+            ("SFLOT $1,$2,5", "SFLOTI $1,$2,5"),
+            ("SFLOTU $1,$2,5", "SFLOTUI $1,$2,5"),
+            ("STCO 5,$2,7", "STCOI 5,$2,7"),
+            ("NEG $1,0,7", "NEGI $1,0,7"),
+            ("NEGU $1,0,7", "NEGUI $1,0,7"),
+            ("PUT rA,7", "PUTI rA,7"),
+        ];
+        for (base, legacy) in pairs {
+            assert_eq!(
+                first_instruction(base),
+                first_instruction(legacy),
+                "{base:?} must emit what {legacy:?} emits"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_previously_accepted_operand_form_narrowed() {
+        // Every spelling these families accepted before their base
+        // mnemonics auto-selected. Widening must displace none of them.
+        let forms: &[&str] = &[
+            "LDHT $1,$2,$3",
+            "LDHTI $1,$2,5",
+            "LDSF $1,$2,$3",
+            "LDSFI $1,$2,5",
+            "LDUNC $1,$2,$3",
+            "LDUNCI $1,$2,5",
+            "LDVTS $1,$2,$3",
+            "LDVTSI $1,$2,5",
+            "STHT $1,$2,$3",
+            "STHTI $1,$2,5",
+            "STSF $1,$2,$3",
+            "STSFI $1,$2,5",
+            "STUNC $1,$2,$3",
+            "STUNCI $1,$2,5",
+            "CSWAP $1,$2,$3",
+            "CSWAPI $1,$2,5",
+            "PREGO $1,$2,$3",
+            "PREGOI $1,$2,5",
+            "PRELD $1,$2,$3",
+            "PRELDI $1,$2,5",
+            "PREST $1,$2,$3",
+            "PRESTI $1,$2,5",
+            "SYNCD $1,$2,$3",
+            "SYNCDI $1,$2,5",
+            "SYNCID $1,$2,$3",
+            "SYNCIDI $1,$2,5",
+            "GO $1,$2,$3",
+            "GOI $1,$2,5",
+            "PUSHGO $1,$2,$3",
+            "PUSHGOI $1,$2,5",
+            "FLOT $1,$2,$3",
+            "FLOTI $1,$2,5",
+            "FLOTU $1,$2,$3",
+            "FLOTUI $1,$2,5",
+            "SFLOT $1,$2,$3",
+            "SFLOTI $1,$2,5",
+            "SFLOTU $1,$2,$3",
+            "SFLOTUI $1,$2,5",
+            "STCO 5,$2,$3",
+            "STCOI 5,$2,7",
+            "NEG $1,0,$3",
+            "NEGI $1,0,7",
+            "NEGU $1,0,$3",
+            "NEGUI $1,0,7",
+            "PUT rA,$1",
+            "PUTI rA,7",
+            "LDA $1,$2,3",
+            "LDAI $1,$2,3",
+        ];
+        for src in forms {
+            let mut asm = MMixAssembler::new(src, "<test>");
+            asm.parse()
+                .unwrap_or_else(|e| panic!("{src:?} no longer assembles: {e}"));
+        }
+    }
+
+    #[test]
+    fn test_lda_selects_addus_two_opcodes() {
+        assert_first_instruction("LDA $1,$2,$3", MMixInstruction::LDA(1, 2, 3));
+        assert_first_instruction("LDA $1,$2,3", MMixInstruction::LDAI(1, 2, 3));
+        assert_first_instruction("LDAI $1,$2,3", MMixInstruction::LDAI(1, 2, 3));
+    }
+
+    #[test]
+    fn test_lda_emits_the_same_bytes_as_addu() {
+        // LDA carries no opcode of its own: it is ADDU under another name,
+        // in both the register and the immediate operand form.
+        let asm = MMixAssembler::new("", "<test>");
+        for (lda, addu) in [
+            ("LDA $1,$2,$3", "ADDU $1,$2,$3"),
+            ("LDA $1,$2,3", "ADDU $1,$2,3"),
+        ] {
+            assert_eq!(
+                asm.encode_instruction_bytes(&first_instruction(lda)),
+                asm.encode_instruction_bytes(&first_instruction(addu)),
+                "{lda:?} must emit the same bytes as {addu:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stco_rejects_a_register_x_operand() {
+        // STCO stores an immediate byte; X is that byte, never a register.
+        let mut asm = MMixAssembler::new("STCO $1,$2,$3", "<test>");
+        assert!(asm.parse().is_err(), "STCO's X operand is not a register");
+    }
+
+    #[test]
+    fn test_jmpb_backward_target_encodes_knuth_field() {
+        // JMPB sits at 0x104 (BACK's HALT is 4 bytes), target 0x100:
+        // magnitude = 1 tetra, field = 2^24 - 1.
+        let source = "LOC #100\nBACK: HALT\nJMPB BACK";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(0xFFFFFF));
+    }
+
+    #[test]
+    fn test_jmpb_forward_target_errors() {
+        let source = "JMPB LABEL\nLOC #100\nLABEL: HALT";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().expect_err("JMPB encodes only backward targets");
+        assert!(
+            err.contains("use JMP instead"),
+            "error should name JMP as the forward form, got: {err}"
+        );
+    }
+
     // ---- Mnemonic prefix-collision tests ----------------------------
     // These pin down PEG backtracking for prefix-overlapping mnemonics
     // (ADD vs ADDU vs ADDUI; AND vs ANDN vs ANDNI; CSN vs CSNN; etc.).
@@ -5435,8 +5649,10 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_prefix_robust_lda() {
-        // LDA must not steal LDAI's longer literal.
-        assert_first_instruction("LDA $1,$2,5", MMixInstruction::LDA(1, 2, 5));
+        // LDA must not steal LDAI's longer literal. Both spellings select
+        // the immediate opcode here; only LDA's register form selects 0x22.
+        assert_first_instruction("LDA $1,$2,$3", MMixInstruction::LDA(1, 2, 3));
+        assert_first_instruction("LDA $1,$2,5", MMixInstruction::LDAI(1, 2, 5));
         assert_first_instruction("LDAI $1,$2,5", MMixInstruction::LDAI(1, 2, 5));
     }
 

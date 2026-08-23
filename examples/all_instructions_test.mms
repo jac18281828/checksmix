@@ -2775,21 +2775,24 @@ Test220 ADDUI   TestNum,TestNum,1
         JMP     TestFail
 
 % ========================================
-% Test 221: LDA - Load address, 3-operand form (register,register,imm)
+% Test 221: LDA - Load address, both 3-operand forms
 % ========================================
-% LDA's 3-operand form always assembles to the LDA-encoded opcode (0x22),
-% which has no distinct VM handler and decodes exactly like ADDU register
-% form (settled decision 11): the Z field, though written here as an
-% assembler-level immediate, is read at execution time as a REGISTER
-% INDEX, not a literal. $12's runtime value (not the literal "12") is what
-% gets added to $11. This is real coverage of LDA's actual assembler+VM
-% path, not "textbook" LDA semantics.
+% LDA is an alias of ADDU: LDA $X,$Y,$Z adds the value held in $Z, and
+% LDA $X,$Y,Z adds the literal Z. The two forms select ADDU's register
+% and immediate opcodes respectively, so the same Z text must mean a
+% register in the first and a literal in the second.
 % ========================================
 Test221 ADDUI   TestNum,TestNum,1
         SETI $11,100
-        SETI $12,23             % Z field is "12" below -> reads $12's value
-        LDA     Result,$11,12
+        SETI $12,23
+        LDA     Result,$11,$12  % register form: adds $12's value, 23
         SETI Expect,123
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test221b
+        JMP     TestFail
+
+Test221b LDA    Result,$11,12   % immediate form: adds the literal 12
+        SETI Expect,112
         CMP     Temp,Result,Expect
         PBZ     Temp,Test222
         JMP     TestFail
