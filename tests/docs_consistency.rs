@@ -135,9 +135,7 @@ fn declared_opcode_names(manifest_dir: &str) -> Vec<String> {
         .find("pub enum Opcode {")
         .expect("could not find `pub enum Opcode` in src/mmixal.rs");
     let body = &source[start..];
-    let end = body
-        .find('}')
-        .expect("`pub enum Opcode` has no closing brace");
+    let end = enum_body_end(body).expect("`pub enum Opcode` has no closing brace");
 
     body[..end]
         .lines()
@@ -149,6 +147,38 @@ fn declared_opcode_names(manifest_dir: &str) -> Vec<String> {
             line.split('=').next().map(|name| name.trim().to_string())
         })
         .collect()
+}
+
+/// Index in `body` of the `}` that closes the brace `body` opens with,
+/// skipping `//` comments so a brace inside one cannot pass for the enum's
+/// own closing brace.
+fn enum_body_end(body: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_comment = false;
+    let mut chars = body.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if in_comment {
+            if c == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+        if c == '/' && chars.peek().map(|&(_, next)| next) == Some('/') {
+            in_comment = true;
+            continue;
+        }
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// How many times each backticked Mnemonic-column entry appears in
