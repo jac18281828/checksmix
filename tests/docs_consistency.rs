@@ -48,6 +48,36 @@ fn man_page_exists_for_every_declared_binary() {
     }
 }
 
+#[test]
+fn every_opcode_appears_once_in_the_instruction_table() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let opcodes = declared_opcode_names(manifest_dir);
+    assert!(
+        !opcodes.is_empty(),
+        "could not find any `Opcode` variants in src/mmixal.rs -- parsing may be broken"
+    );
+
+    let mnemonic_counts = instruction_table_mnemonic_counts(manifest_dir);
+
+    let missing: Vec<&String> = opcodes
+        .iter()
+        .filter(|op| !mnemonic_counts.contains_key(*op))
+        .collect();
+    let duplicated: Vec<(&String, usize)> = opcodes
+        .iter()
+        .filter_map(|op| {
+            let count = *mnemonic_counts.get(op).unwrap_or(&0);
+            if count > 1 { Some((op, count)) } else { None }
+        })
+        .collect();
+
+    assert!(
+        missing.is_empty() && duplicated.is_empty(),
+        "MMIX.md's instruction table Mnemonic column diverges from `Opcode`: \
+         missing {missing:?}, duplicated {duplicated:?}"
+    );
+}
+
 /// Every `.1` file directly under `man/`, sorted for deterministic failure
 /// messages.
 fn discover_man_pages(manifest_dir: &str) -> Vec<std::path::PathBuf> {
@@ -91,6 +121,69 @@ fn declared_bin_names(manifest_dir: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// Every variant name declared in `pub enum Opcode` in `src/mmixal.rs`, hand-
+/// parsed the same way `declared_bin_names` reads `Cargo.toml` -- `Opcode`
+/// has no reflection, and text-parsing its one enum block is the route
+/// available without adding a dependency or an `Opcode::ALL`.
+fn declared_opcode_names(manifest_dir: &str) -> Vec<String> {
+    let source = std::fs::read_to_string(format!("{manifest_dir}/src/mmixal.rs"))
+        .expect("Could not read src/mmixal.rs");
+
+    let start = source
+        .find("pub enum Opcode {")
+        .expect("could not find `pub enum Opcode` in src/mmixal.rs");
+    let body = &source[start..];
+    let end = body
+        .find('}')
+        .expect("`pub enum Opcode` has no closing brace");
+
+    body[..end]
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.starts_with("//") || !line.contains('=') {
+                return None;
+            }
+            line.split('=').next().map(|name| name.trim().to_string())
+        })
+        .collect()
+}
+
+/// How many times each backticked Mnemonic-column entry appears in
+/// `MMIX.md`'s `## Instruction table` section. Scoped to that section alone:
+/// opcode names also appear backticked in prose and in the skeleton code
+/// block, and a whole-file scan would report duplicates that are not
+/// duplicates.
+fn instruction_table_mnemonic_counts(
+    manifest_dir: &str,
+) -> std::collections::HashMap<String, usize> {
+    let doc =
+        std::fs::read_to_string(format!("{manifest_dir}/MMIX.md")).expect("Could not read MMIX.md");
+
+    let mut in_section = false;
+    let mut counts = std::collections::HashMap::new();
+    for line in doc.lines() {
+        if line.trim() == "## Instruction table" {
+            in_section = true;
+            continue;
+        }
+        if in_section && line.starts_with("## ") {
+            break;
+        }
+        if !in_section {
+            continue;
+        }
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("| `") {
+            let Some(mnemonic) = rest.split('`').next() else {
+                continue;
+            };
+            *counts.entry(mnemonic.to_string()).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 /// Extract version string from man page .TH line

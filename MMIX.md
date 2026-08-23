@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, octal (`#`-prefixed hex or `0`-prefixed octal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
+MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed), octal (`0`-prefixed — a checksmix extension; Knuth reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
 
 ## Minimal assembly skeleton
 
@@ -20,10 +20,14 @@ Main    SETL    $0,42       % your code here
 | `IS` | `Name IS expr` | Define a numeric or register alias constant |
 | `PREFIX` | `PREFIX str` | Qualify subsequent unqualified names as `str<name>`; names beginning with `:` opt out |
 | `BYTE` | `BYTE expr,...` | Emit one byte per operand |
-| `WYDE` | `WYDE expr,...` | Emit one 16-bit wyde per operand |
-| `TETRA` | `TETRA expr,...` | Emit one 32-bit tetra per operand |
-| `OCTA` | `OCTA expr,...` | Emit one 64-bit octa per operand |
+| `WYDE` | `WYDE expr` | Emit one 16-bit wyde |
+| `TETRA` | `TETRA expr` | Emit one 32-bit tetra |
+| `OCTA` | `OCTA expr` | Emit one 64-bit octa |
 | `INCLUDE` | `INCLUDE file` | Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error |
+
+`WYDE`, `TETRA` and `OCTA` take exactly one operand. This is a known gap
+against Knuth, whose MMIXAL takes a comma-separated list for all four data
+directives, `BYTE` included.
 
 ### INCLUDE
 
@@ -154,9 +158,9 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `SETMH` | `SETMH $X, YZ` | Set medium-high wyde; the other 48 bits become zero |
 | `SETML` | `SETML $X, YZ` | Set medium-low wyde; the other 48 bits become zero |
 | `INCH` | `INCH $X, YZ` | Add into the high wyde; the other 48 bits are preserved |
-| `INCMH` | `INCMH $X, YZ` | Add into the medium-high wyde; the other 48 bits are preserved |
-| `INCML` | `INCML $X, YZ` | Add into the medium-low wyde; the other 48 bits are preserved |
-| `INCL` | `INCL $X, YZ` | Add into the low wyde, unsigned wrapping; the other 48 bits are preserved |
+| `INCMH` | `INCMH $X, YZ` | Add into the medium-high wyde; a carry propagates into the high wyde |
+| `INCML` | `INCML $X, YZ` | Add into the medium-low wyde; a carry propagates into the higher wydes |
+| `INCL` | `INCL $X, YZ` | Add into the low wyde, unsigned wrapping; a carry propagates into the higher wydes |
 | `ORH` | `ORH $X, YZ` | Set bits in the high wyde; the other 48 bits are preserved |
 | `ORMH` | `ORMH $X, YZ` | Set bits in the medium-high wyde; the other 48 bits are preserved |
 | `ORML` | `ORML $X, YZ` | Set bits in the medium-low wyde; the other 48 bits are preserved |
@@ -191,8 +195,8 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
 | `CSWAP` | `CSWAP $X, $Y, $Z` | Compare and swap |
 | `CSWAPI` | `CSWAP $X, $Y, Z` | Compare and swap (immediate) |
-| `LDA` | `LDA $X, $Y, $Z` | Load address of `$Y + $Z` — the `ADDU $X, $Y, $Z` alias |
-| `LDAI` | `LDA $X, $Y, Z` | Load address of `$Y + Z` — the `ADDU $X, $Y, Z` alias |
+| `LDA` | `LDA $X, $Y, $Z` / `LDA $X, addr` | Load address of `$Y + $Z` — the `ADDU $X, $Y, $Z` alias; two-operand form described below the table |
+| `LDAI` | `LDA $X, $Y, Z` / `LDAI $X, addr` | Load address of `$Y + Z` — the `ADDU $X, $Y, Z` alias; two-operand form described below the table |
 | `STB` | `STB $X, $Y, $Z` | Store byte signed |
 | `STBI` | `STB $X, $Y, Z` | Store byte signed (immediate) |
 | `STBU` | `STBU $X, $Y, $Z` | Store byte unsigned |
@@ -330,6 +334,10 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `BNPB` | `BNPB $X, addr` | Branch if `$X <= 0` (backward hint) |
 | `BEV` | `BEV $X, addr` | Branch if `$X` is even |
 | `BEVB` | `BEVB $X, addr` | Branch if `$X` is even (backward hint) |
+| `JE` | `JE $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X == 0`; encodes as `BZ`/`BZB` |
+| `JNE` | `JNE $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X != 0`; encodes as `BNZ`/`BNZB` |
+| `JL` | `JL $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X < 0`; encodes as `BN`/`BNB` |
+| `JG` | `JG $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X > 0`; encodes as `BP`/`BPB` |
 | `PBN` | `PBN $X, Y, Z` | Probable branch if negative |
 | `PBNB` | `PBNB $X, Y, Z` | Probable branch if negative (backward) |
 | `PBZ` | `PBZ $X, Y, Z` | Probable branch if zero |
@@ -394,8 +402,10 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `UNSAVE` | `UNSAVE 0, $Z` | Restore register stack from memory |
 | `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
 | `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
+| `HALT` | `HALT` | checksmix extension, no Knuth counterpart — encodes as `TRAP 0,Halt,0` |
 | `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
 | `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline |
+| `SWYM` | `SWYM` / `SWYM X, Y, Z` | Sympathize with your machinery (no-op); operands optional, default to zero |
 | `PRELD` | `PRELD $X, $Y, $Z` | Prefetch data into cache |
 | `PRELDI` | `PRELD $X, $Y, Z` | Prefetch data (immediate) |
 | `PREGO` | `PREGO $X, $Y, $Z` | Prefetch for execution |
@@ -406,17 +416,30 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `SYNCDI` | `SYNCD $X, $Y, Z` | Synchronize data cache (immediate) |
 | `SYNCID` | `SYNCID $X, $Y, $Z` | Synchronize instruction and data cache |
 | `SYNCIDI` | `SYNCID $X, $Y, Z` | Synchronize instruction and data cache (immediate) |
-| `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
-| `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
 
 checksmix parses the `X` operand of `PRELD`, `PREGO`, `PREST`, `SYNCD` and
 `SYNCID` as a register. Knuth specifies an immediate byte count there, so
 source written to the specification does not assemble.
 
-`GETA`'s `addr` must be 4-byte aligned relative to the current instruction and
-within ±131068 bytes (a signed 16-bit quotient of the byte delta). `GETAB`'s
-`addr` must be behind the current instruction, 4-byte aligned, and within
-0..262140 bytes backward (an unsigned 16-bit magnitude that the VM always
-subtracts from `pc`). Targets that are out of range, misaligned, or (for
-`GETAB`) not behind the current instruction are a hard assembly-time error;
-use `LDA` for addresses that don't fit either field.
+`LDA`/`LDAI $X, addr` resolve at assemble time by whether `addr` fits a byte.
+An `addr` of 0 to 255 assembles to a single tetra: `LDAI` correctly emits a
+register-immediate `ADDUI $X, $0, addr`, but `LDA` emits the
+register-register `ADDU $X, $0, addr` instead — the address ends up in the Z
+*register* field, so the assembled instruction adds whatever register `addr`
+names rather than the literal value. Both forms also assume register `$0`
+holds zero, which nothing in checksmix enforces. This is a known gap against
+the code's own intent; it is a code change and out of scope here. An `addr`
+above 255 expands to a four-tetra `SETH`/`INCMH`/`INCML`/`INCL` sequence that
+clears `$X` and loads the full 64-bit value, correct for both forms.
+
+`GETA`'s `addr` must be 4-byte aligned relative to the current instruction. A
+forward target reaches 0 to 262140 bytes ahead (an unsigned count of 0 to
+65535 tetras); a backward target is accepted too and is encoded as `GETAB`
+automatically, reaching up to 262144 bytes behind (an unsigned count of 1 to
+65536 tetras). The two directions don't mirror: a forward delta of zero
+tetras takes the field's first value, so `GETAB`'s all-backward field has one
+more tetra of reach than `GETA`'s forward-only side. `GETAB` written
+directly enforces the same backward-only range and rejects a forward target
+outright. Targets that are out of range, misaligned, or (for `GETAB`) not
+behind the current instruction are a hard assembly-time error naming the
+byte figure; use `LDA` for addresses that don't fit either field.
