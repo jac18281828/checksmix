@@ -2323,12 +2323,15 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
+        let name = mnem.as_str().to_uppercase();
         // No operand wrapper for inst_neg_rri - operands are directly in the rule
         let x = self.parse_register(parts.next().unwrap())?;
         let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let z_operand = parts.next().unwrap();
+        let (line, col) = z_operand.line_col();
+        let z = self.imm_byte(self.parse_number(z_operand)?, &name, line, col)?;
 
-        match mnem.as_str().to_uppercase().as_str() {
+        match name.as_str() {
             "NEGI" => Ok(MMixInstruction::NEGI(x, y, z)),
             "NEGUI" => Ok(MMixInstruction::NEGUI(x, y, z)),
             _ => Err(format!("Unknown NEG instruction: {}", mnem.as_str())),
@@ -3477,16 +3480,21 @@ impl MMixAssembler {
         }
     }
 
-    /// Range-check a resolved Z value as an 8-bit immediate (0..=255).
-    fn imm_in_range(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<ZForm, String> {
+    /// Range-check a resolved value as an 8-bit immediate operand (0..=255).
+    fn imm_byte(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<u8, String> {
         if v <= 0xFF {
-            Ok(ZForm::Imm(v as u8))
+            Ok(v as u8)
         } else {
             Err(format!(
                 "{}:{}:{}: immediate operand {} out of range 0..255 for {}",
                 self.current_filename, line, col, v, mnem
             ))
         }
+    }
+
+    /// Range-check a resolved Z value as an 8-bit immediate (0..=255).
+    fn imm_in_range(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<ZForm, String> {
+        self.imm_byte(v, mnem, line, col).map(ZForm::Imm)
     }
 
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
@@ -5970,6 +5978,23 @@ ZSEVI $7,$8,128
     fn test_symbol_z_constant_out_of_range() {
         assert_parse_error_contains("K IS 256\nADD $1,$2,K", "out of range 0..255");
         assert_parse_error_contains("K IS 1000\nAND $1,$2,K", "out of range 0..255");
+    }
+
+    #[test]
+    // NEG's immediate spellings carry Z as an 8-bit field: an operand above
+    // 255 is an error rather than a silent truncation, whether it is written
+    // as a literal or resolved from a symbol.
+    fn test_neg_immediate_spelling_range_checks_its_z() {
+        assert_parse_error_contains("NEGI $1,0,#300", "out of range 0..255");
+        assert_parse_error_contains("NEGUI $1,0,#300", "out of range 0..255");
+        assert_parse_error_contains("BigC IS #300\nNEGI $1,0,BigC", "out of range 0..255");
+        assert_parse_error_contains("BigC IS #300\nNEGUI $1,0,BigC", "out of range 0..255");
+        assert_first_instruction("NEGI $1,0,5", MMixInstruction::NEGI(1, 0, 5));
+        assert_first_instruction("NEGUI $1,0,5", MMixInstruction::NEGUI(1, 0, 5));
+        assert_first_instruction(
+            "SmallC IS 5\nNEGI $1,0,SmallC",
+            MMixInstruction::NEGI(1, 0, 5),
+        );
     }
 
     #[test]
