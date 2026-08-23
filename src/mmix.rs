@@ -134,14 +134,13 @@ macro_rules! mul_rr {
         let b = $cpu.get_register($z) as i64;
         let product = (a as i128) * (b as i128);
         $cpu.set_register($x, product as u64);
-        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
         let sign_ext = if (product as u64) as i64 >= 0 {
             0i64
         } else {
             -1i64
         };
         if (product >> 64) as i64 != sign_ext {
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
         }
         $cpu.advance_pc();
         true
@@ -155,14 +154,13 @@ macro_rules! mul_ri {
         let b = $z as i64;
         let product = (a as i128) * (b as i128);
         $cpu.set_register($x, product as u64);
-        $cpu.set_special(SpecialReg::RH, (product >> 64) as u64);
         let sign_ext = if (product as u64) as i64 >= 0 {
             0i64
         } else {
             -1i64
         };
         if (product >> 64) as i64 != sign_ext {
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
         }
         $cpu.advance_pc();
         true
@@ -203,9 +201,21 @@ macro_rules! div_rr {
         if divisor == 0 {
             $cpu.set_register($x, 0);
             $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_D);
+        } else if dividend == i64::MIN && divisor == -1 {
+            // The only quotient outside the signed range; it wraps to itself.
+            $cpu.set_register($x, i64::MIN as u64);
+            $cpu.set_special(SpecialReg::RR, 0);
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
         } else {
-            let quotient = dividend / divisor;
-            let remainder = dividend % divisor;
+            // MMIX floors the quotient, so the remainder takes the divisor's
+            // sign; Rust truncates toward zero.
+            let mut quotient = dividend / divisor;
+            let mut remainder = dividend % divisor;
+            if remainder != 0 && (remainder < 0) != (divisor < 0) {
+                quotient -= 1;
+                remainder += divisor;
+            }
             $cpu.set_register($x, quotient as u64);
             $cpu.set_special(SpecialReg::RR, remainder as u64);
         }
@@ -222,9 +232,21 @@ macro_rules! div_ri {
         if divisor == 0 {
             $cpu.set_register($x, 0);
             $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_D);
+        } else if dividend == i64::MIN && divisor == -1 {
+            // The only quotient outside the signed range; it wraps to itself.
+            $cpu.set_register($x, i64::MIN as u64);
+            $cpu.set_special(SpecialReg::RR, 0);
+            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
         } else {
-            let quotient = dividend / divisor;
-            let remainder = dividend % divisor;
+            // MMIX floors the quotient, so the remainder takes the divisor's
+            // sign; Rust truncates toward zero.
+            let mut quotient = dividend / divisor;
+            let mut remainder = dividend % divisor;
+            if remainder != 0 && (remainder < 0) != (divisor < 0) {
+                quotient -= 1;
+                remainder += divisor;
+            }
             $cpu.set_register($x, quotient as u64);
             $cpu.set_special(SpecialReg::RR, remainder as u64);
         }
@@ -240,8 +262,11 @@ macro_rules! divu_rr {
         let dividend_high = $cpu.get_special(SpecialReg::RD);
         let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
         let divisor = $cpu.get_register($z) as u128;
-        if divisor == 0 {
-            $cpu.set_register($x, 0);
+        // The quotient is defined only when u($Z) > u(rD); otherwise it would
+        // not fit an octabyte. Divide by zero is that case, and is not an
+        // event: rD is a definition, not a divide check.
+        if divisor <= dividend_high as u128 {
+            $cpu.set_register($x, dividend_high);
             $cpu.set_special(SpecialReg::RR, dividend_low);
         } else {
             let quotient = dividend / divisor;
@@ -261,8 +286,11 @@ macro_rules! divu_ri {
         let dividend_high = $cpu.get_special(SpecialReg::RD);
         let dividend = ((dividend_high as u128) << 64) | (dividend_low as u128);
         let divisor = $z as u128;
-        if divisor == 0 {
-            $cpu.set_register($x, 0);
+        // The quotient is defined only when u($Z) > u(rD); otherwise it would
+        // not fit an octabyte. Divide by zero is that case, and is not an
+        // event: rD is a definition, not a divide check.
+        if divisor <= dividend_high as u128 {
+            $cpu.set_register($x, dividend_high);
             $cpu.set_special(SpecialReg::RR, dividend_low);
         } else {
             let quotient = dividend / divisor;
@@ -286,7 +314,7 @@ macro_rules! add_rr {
             }
             None => {
                 $cpu.set_register($x, a.wrapping_add(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
             }
         }
         $cpu.advance_pc();
@@ -305,7 +333,7 @@ macro_rules! add_ri {
             }
             None => {
                 $cpu.set_register($x, a.wrapping_add(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
             }
         }
         $cpu.advance_pc();
@@ -324,7 +352,7 @@ macro_rules! sub_rr {
             }
             None => {
                 $cpu.set_register($x, a.wrapping_sub(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
             }
         }
         $cpu.advance_pc();
@@ -343,7 +371,7 @@ macro_rules! sub_ri {
             }
             None => {
                 $cpu.set_register($x, a.wrapping_sub(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | 0x04);
+                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
             }
         }
         $cpu.advance_pc();
@@ -351,17 +379,26 @@ macro_rules! sub_ri {
     }};
 }
 
-/// rA event-flag bit positions per the MMIXware specification.
-/// Layout (low → high): W V X I Z O U D.
-/// Tests in this codebase historically asserted integer-overflow on bit 0x04 (X);
-/// the FP code below uses the spec-correct bits.
-pub const RA_W: u64 = 0x01; // float-to-fix overflow
-pub const RA_X: u64 = 0x04; // floating inexact
-pub const RA_I: u64 = 0x08; // floating invalid
-pub const RA_Z: u64 = 0x10; // floating divide by zero
-pub const RA_O: u64 = 0x20; // floating overflow
-pub const RA_U: u64 = 0x40; // floating underflow
-pub const RA_D: u64 = 0x80; // floating denormalized number
+/// rA event-flag bits, matching Knuth's predefined symbols `D_BIT` through
+/// `X_BIT` (MMIXAL §69). Layout (low → high): X Z U O I W V D.
+///
+/// `V` and `D` are the integer events; the other six are floating-point.
+/// MMIX has no denormalized-operand event — a subnormal operand raises
+/// nothing, and `D` means divide check.
+pub const RA_X: u64 = 0x01; // floating inexact
+pub const RA_Z: u64 = 0x02; // floating divide by zero
+pub const RA_U: u64 = 0x04; // floating underflow
+pub const RA_O: u64 = 0x08; // floating overflow
+pub const RA_I: u64 = 0x10; // floating invalid operation
+pub const RA_W: u64 = 0x20; // float-to-fix overflow
+pub const RA_V: u64 = 0x40; // integer overflow
+pub const RA_D: u64 = 0x80; // integer divide check
+
+/// Bit position of rA's two-bit rounding-mode field, the top of the register.
+pub const RA_ROUND_SHIFT: u32 = 16;
+
+/// Widest value `PUT` may write to rA: the register holds 18 bits.
+pub const RA_MAX: u64 = 0x3FFFF;
 
 /// TRAP code identifiers for MMIX.
 /// These codes are used in TRAP instructions to invoke system calls.
@@ -1089,6 +1126,16 @@ impl MMix {
         self.special_regs[reg as usize] = value;
     }
 
+    /// Apply a `PUT` write. rA holds 18 bits and Knuth rejects any wider value;
+    /// he treats the attempt as an error, while `PUT` here has no fault channel,
+    /// so the write is dropped and execution continues.
+    fn put_special(&mut self, reg: SpecialReg, value: u64) {
+        if reg == SpecialReg::RA && value > RA_MAX {
+            return;
+        }
+        self.set_special(reg, value);
+    }
+
     /// Read a byte from memory at the given address.
     /// Uninitialized memory reads as zero.
     #[instrument(skip(self), level = "trace")]
@@ -1377,9 +1424,6 @@ impl MMix {
         if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
             flags |= RA_I;
         }
-        if a.is_subnormal() || b.is_subnormal() {
-            flags |= RA_D;
-        }
         if !a.is_nan() && !b.is_nan() && result.is_nan() {
             flags |= RA_I;
         } else if a.is_finite() && b.is_finite() && result.is_infinite() {
@@ -1460,15 +1504,12 @@ impl MMix {
     /// Finalize a binary FP op given the round-to-nearest-even result `r_near`
     /// and an exact residual `err` (`sign(err) == sign(true - r_near)`, `err==0`
     /// means exact). Returns `(adjusted_result, flags)`. Centralizes sNaN
-    /// quieting, overflow clamping per rA mode, X / I / O / U / D / W detection.
+    /// quieting, overflow clamping per rA mode, X / I / O / U / W detection.
     fn finalize_fp_binop(&self, a: f64, b: f64, r_near: f64, err: f64) -> (f64, u64) {
-        let mode = self.get_special(SpecialReg::RA) & 0x3;
+        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
         let mut flags = 0u64;
         if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
             flags |= RA_I;
-        }
-        if a.is_subnormal() || b.is_subnormal() {
-            flags |= RA_D;
         }
         let result = if r_near.is_nan() {
             if !a.is_nan() && !b.is_nan() {
@@ -1500,13 +1541,10 @@ impl MMix {
 
     /// Finalize a unary FP op (FSQRT). Same shape as `finalize_fp_binop`.
     fn finalize_fp_unop(&self, a: f64, r_near: f64, err: f64) -> (f64, u64) {
-        let mode = self.get_special(SpecialReg::RA) & 0x3;
+        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
         let mut flags = 0u64;
         if Self::is_signaling_nan(a) {
             flags |= RA_I;
-        }
-        if a.is_subnormal() {
-            flags |= RA_D;
         }
         let result = if r_near.is_nan() {
             if !a.is_nan() {
@@ -1546,7 +1584,7 @@ impl MMix {
         a - n * b
     }
 
-    /// MMIX rounding mode (rA mod 4): 0=NEAR (default), 1=OFF (trunc), 2=UP
+    /// MMIX rounding mode (rA bits 17-16): 0=NEAR (default), 1=OFF (trunc), 2=UP
     /// (ceil toward +∞), 3=DOWN (floor toward −∞). Applies to FINT and to the
     /// f64→f32 conversion in SFLOT/STSF.
     #[inline]
@@ -1564,7 +1602,7 @@ impl MMix {
     /// Returns `(narrowed_as_f64, flags)`.
     #[inline]
     fn f64_to_f32_rounded(&self, value: f64) -> (f64, u64) {
-        let mode = self.get_special(SpecialReg::RA) & 0x3;
+        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
         let near = value as f32; // hardware default: round-to-nearest-even
         let narrowed = if !value.is_finite() || (near as f64) == value {
             near
@@ -1597,9 +1635,6 @@ impl MMix {
         };
         let result = narrowed as f64;
         let mut flags = 0u64;
-        if value.is_subnormal() {
-            flags |= RA_D;
-        }
         if !value.is_nan() && narrowed.is_nan() {
             flags |= RA_I;
         }
@@ -2275,12 +2310,9 @@ impl MMix {
                 // FIX $X, $Z - Convert floating to fixed (signed). Raises X on
                 // inexact and W when the value is out of i64 range or NaN/Inf.
                 let f = Self::u64_to_f64(self.get_register(z));
-                let mode = self.get_special(SpecialReg::RA) & 0x3;
+                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
-                if f.is_subnormal() {
-                    flags |= RA_D;
-                }
                 let value = if !f.is_finite() {
                     flags |= RA_W;
                     if f.is_nan() {
@@ -2315,12 +2347,9 @@ impl MMix {
             Opcode::FIXU => {
                 // FIXU $X, $Z - Convert floating to fixed unsigned
                 let f = Self::u64_to_f64(self.get_register(z));
-                let mode = self.get_special(SpecialReg::RA) & 0x3;
+                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
-                if f.is_subnormal() {
-                    flags |= RA_D;
-                }
                 let value = if !f.is_finite() {
                     flags |= RA_W;
                     if f.is_nan() {
@@ -2488,18 +2517,15 @@ impl MMix {
             }
             Opcode::FINT => {
                 // FINT $X, $Y, $Z — Integerize using the rA rounding mode.
-                // Mode (low 2 bits of rA): 0=NEAR, 1=OFF (trunc), 2=UP, 3=DOWN.
+                // Mode (rA bits 17-16): 0=NEAR, 1=OFF (trunc), 2=UP, 3=DOWN.
                 let v = Self::u64_to_f64(self.get_register(z));
-                let mode = self.get_special(SpecialReg::RA) & 0x3;
+                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let r = if v.is_finite() {
                     Self::round_with_mode(v, mode)
                 } else {
                     v
                 };
                 let mut flags = 0u64;
-                if v.is_subnormal() {
-                    flags |= RA_D;
-                }
                 if v.is_nan() {
                     flags |= RA_I;
                 } else if v.is_finite() && r != v {
@@ -2943,8 +2969,7 @@ impl MMix {
                 // Check if value fits in signed byte range [-128, 127]
                 let signed_value = value as i64;
                 if !(-128..=127).contains(&signed_value) {
-                    // Set overflow bit in rA (not fully implemented yet)
-                    // For now, just store the byte
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_byte(addr, value as u8);
                 self.advance_pc();
@@ -2956,7 +2981,7 @@ impl MMix {
                 let value = self.get_register(x);
                 let signed_value = value as i64;
                 if !(-128..=127).contains(&signed_value) {
-                    // Set overflow bit in rA
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_byte(addr, value as u8);
                 self.advance_pc();
@@ -2984,7 +3009,7 @@ impl MMix {
                 let value = self.get_register(x);
                 let signed_value = value as i64;
                 if !(-32768..=32767).contains(&signed_value) {
-                    // Set overflow bit in rA
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_wyde(addr, value as u16);
                 self.advance_pc();
@@ -2996,7 +3021,7 @@ impl MMix {
                 let value = self.get_register(x);
                 let signed_value = value as i64;
                 if !(-32768..=32767).contains(&signed_value) {
-                    // Set overflow bit in rA
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_wyde(addr, value as u16);
                 self.advance_pc();
@@ -3024,7 +3049,7 @@ impl MMix {
                 let value = self.get_register(x);
                 let signed_value = value as i64;
                 if !(-2147483648..=2147483647).contains(&signed_value) {
-                    // Set overflow bit in rA
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_tetra(addr, value as u32);
                 self.advance_pc();
@@ -3036,7 +3061,7 @@ impl MMix {
                 let value = self.get_register(x);
                 let signed_value = value as i64;
                 if !(-2147483648..=2147483647).contains(&signed_value) {
-                    // Set overflow bit in rA
+                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                 }
                 self.write_tetra(addr, value as u32);
                 self.advance_pc();
@@ -3319,8 +3344,8 @@ impl MMix {
                         self.set_register(x, result as u64);
                     }
                     None => {
-                        // Overflow occurred (e.g., 0 - (-2^63))
                         self.set_register(x, a.wrapping_sub(b) as u64);
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                 }
                 self.advance_pc();
@@ -3336,8 +3361,8 @@ impl MMix {
                         self.set_register(x, result as u64);
                     }
                     None => {
-                        // Overflow occurred
                         self.set_register(x, a.wrapping_sub(b) as u64);
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                 }
                 self.advance_pc();
@@ -3367,18 +3392,15 @@ impl MMix {
                 if shift >= 64 {
                     // Shift by 64 or more: result is 0, overflow unless Y was 0
                     if val_y != 0 {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04); // Integer overflow
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                     self.set_register(x, 0);
                 } else {
                     let result = (val_y as u64) << shift;
-                    // Check for overflow: did we shift out any non-sign bits?
-                    let sign_bit = val_y < 0;
-                    let expected_high = if sign_bit { !0u64 } else { 0 };
-                    let actual_high = result >> (64 - shift);
-                    let mask = (1u64 << shift) - 1;
-                    if shift > 0 && (actual_high & mask) != (expected_high & mask) {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
+                    // Overflow exactly when s($Y)·2^u($Z) leaves the signed
+                    // range, which is when shifting back does not restore $Y.
+                    if ((result as i64) >> shift) != val_y {
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                     self.set_register(x, result);
                 }
@@ -3391,17 +3413,13 @@ impl MMix {
                 let shift = z as u64;
                 if shift >= 64 {
                     if val_y != 0 {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                     self.set_register(x, 0);
                 } else {
                     let result = (val_y as u64) << shift;
-                    let sign_bit = val_y < 0;
-                    let expected_high = if sign_bit { !0u64 } else { 0 };
-                    let actual_high = result >> (64 - shift);
-                    let mask = (1u64 << shift) - 1;
-                    if shift > 0 && (actual_high & mask) != (expected_high & mask) {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | 0x04);
+                    if ((result as i64) >> shift) != val_y {
+                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
                     }
                     self.set_register(x, result);
                 }
@@ -4192,7 +4210,7 @@ impl MMix {
                 let value = self.get_register(z);
                 // Map register number to SpecialReg enum
                 if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
-                    self.set_special(special_reg, value);
+                    self.put_special(special_reg, value);
                 }
                 self.advance_pc();
                 true
@@ -4202,7 +4220,7 @@ impl MMix {
                 let special_reg_num = x;
                 let value = ((y as u64) << 8) | (z as u64);
                 if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
-                    self.set_special(special_reg, value);
+                    self.put_special(special_reg, value);
                 }
                 self.advance_pc();
                 true
@@ -6683,7 +6701,7 @@ mod tests {
         mmix.write_tetra(0, 0x38030102); // SL $3,$1,$2
         assert!(mmix.execute_instruction());
         // Check that overflow bit is set in rA
-        assert!((mmix.get_special(SpecialReg::RA) & 0x04) != 0);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_V) != 0);
     }
 
     #[test]
@@ -8082,7 +8100,7 @@ Main\tSETI\t$1,100
     fn test_fix_trunc_mode() {
         let mut mmix = MMix::new();
         // rA mode 1 = ROUND_OFF (toward zero): 42.9 → 42.
-        mmix.set_special(SpecialReg::RA, 1);
+        mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT);
         mmix.set_register(3, 42.9f64.to_bits());
         mmix.write_tetra(0, 0x05010003);
         assert!(mmix.execute_instruction());
@@ -8230,7 +8248,7 @@ Main\tSETI\t$1,100
     fn test_fint_round_near() {
         let mut mmix = MMix::new();
         // FINT $1, $0, $3 - Integerize with ROUND_NEAR mode
-        mmix.set_special(SpecialReg::RA, 0); // Round mode 0 = ROUND_NEAR
+        mmix.set_special(SpecialReg::RA, 0 << RA_ROUND_SHIFT); // Round mode 0 = ROUND_NEAR
         mmix.set_register(3, 3.7f64.to_bits());
         mmix.write_tetra(0, 0x17010003); // FINT $1,$0,$3
         assert!(mmix.execute_instruction());
@@ -8242,7 +8260,7 @@ Main\tSETI\t$1,100
     fn test_fint_round_off() {
         let mut mmix = MMix::new();
         // Mode 1 = ROUND_OFF (toward zero / truncate).
-        mmix.set_special(SpecialReg::RA, 1);
+        mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT);
         mmix.set_register(3, 3.7f64.to_bits());
         mmix.write_tetra(0, 0x17010003); // FINT $1,$0,$3
         assert!(mmix.execute_instruction());
@@ -8254,7 +8272,7 @@ Main\tSETI\t$1,100
     fn test_fint_round_up() {
         let mut mmix = MMix::new();
         // Mode 2 = ROUND_UP (toward +∞).
-        mmix.set_special(SpecialReg::RA, 2);
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT);
         mmix.set_register(3, 3.2f64.to_bits());
         mmix.write_tetra(0, 0x17010003); // FINT $1,$0,$3
         assert!(mmix.execute_instruction());
@@ -8266,7 +8284,7 @@ Main\tSETI\t$1,100
     fn test_fint_round_down() {
         let mut mmix = MMix::new();
         // Mode 3 = ROUND_DOWN (toward -∞).
-        mmix.set_special(SpecialReg::RA, 3);
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT);
         mmix.set_register(3, 3.9f64.to_bits());
         mmix.write_tetra(0, 0x17010003); // FINT $1,$0,$3
         assert!(mmix.execute_instruction());
@@ -8278,7 +8296,7 @@ Main\tSETI\t$1,100
     fn test_fint_round_down_negative() {
         let mut mmix = MMix::new();
         // Mode 3 floors -3.2 → -4.0 (toward -∞).
-        mmix.set_special(SpecialReg::RA, 3);
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT);
         mmix.set_register(3, (-3.2f64).to_bits());
         mmix.write_tetra(0, 0x17010003);
         assert!(mmix.execute_instruction());
@@ -8289,7 +8307,7 @@ Main\tSETI\t$1,100
     #[test]
     fn test_fint_inexact_flag() {
         let mut mmix = MMix::new();
-        mmix.set_special(SpecialReg::RA, 0);
+        mmix.set_special(SpecialReg::RA, 0 << RA_ROUND_SHIFT);
         mmix.set_register(3, 3.5f64.to_bits());
         mmix.write_tetra(0, 0x17010003);
         assert!(mmix.execute_instruction());
@@ -9415,7 +9433,7 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::new();
         // Pick a value strictly between two adjacent f32 values.
         let v: f64 = 1.0f64 + (f32::EPSILON as f64) * 0.25;
-        mmix.set_special(SpecialReg::RA, 2); // ROUND_UP
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // ROUND_UP
         mmix.set_register(1, v.to_bits());
         mmix.set_register(2, 0x100);
         mmix.set_register(3, 0);
@@ -9432,7 +9450,7 @@ Main\tSETI\t$1,100
     fn test_stsf_rounding_down_mode() {
         let mut mmix = MMix::new();
         let v: f64 = 1.0f64 + (f32::EPSILON as f64) * 0.25;
-        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // ROUND_DOWN
         mmix.set_register(1, v.to_bits());
         mmix.set_register(2, 0x100);
         mmix.set_register(3, 0);
@@ -9594,7 +9612,7 @@ Main\tSETI\t$1,100
         let (a, b) = one_plus_half_ulp();
         mmix.set_register(2, a.to_bits());
         mmix.set_register(3, b.to_bits());
-        mmix.set_special(SpecialReg::RA, 2); // ROUND_UP
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // ROUND_UP
         mmix.write_tetra(0, 0x04010203);
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
@@ -9608,7 +9626,7 @@ Main\tSETI\t$1,100
         let (a, b) = one_plus_half_ulp();
         mmix.set_register(2, a.to_bits());
         mmix.set_register(3, b.to_bits());
-        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // ROUND_DOWN
         mmix.write_tetra(0, 0x04010203);
         assert!(mmix.execute_instruction());
         assert_eq!(f64::from_bits(mmix.get_register(1)), 1.0);
@@ -9622,7 +9640,7 @@ Main\tSETI\t$1,100
         let (a, b) = one_plus_half_ulp();
         mmix.set_register(2, (-a).to_bits());
         mmix.set_register(3, (-b).to_bits());
-        mmix.set_special(SpecialReg::RA, 1); // ROUND_OFF
+        mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT); // ROUND_OFF
         mmix.write_tetra(0, 0x04010203);
         assert!(mmix.execute_instruction());
         assert_eq!(f64::from_bits(mmix.get_register(1)), -1.0);
@@ -9646,7 +9664,7 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::new();
         mmix.set_register(2, third.to_bits());
         mmix.set_register(3, 3.0f64.to_bits());
-        mmix.set_special(SpecialReg::RA, 3);
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT);
         mmix.write_tetra(0, 0x10010203);
         assert!(mmix.execute_instruction());
         let down_result = f64::from_bits(mmix.get_register(1));
@@ -9669,7 +9687,7 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::new();
         mmix.set_register(2, 1.0f64.to_bits());
         mmix.set_register(3, 3.0f64.to_bits());
-        mmix.set_special(SpecialReg::RA, 2); // ROUND_UP
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // ROUND_UP
         mmix.write_tetra(0, 0x14010203);
         assert!(mmix.execute_instruction());
         let up = f64::from_bits(mmix.get_register(1));
@@ -9683,7 +9701,7 @@ Main\tSETI\t$1,100
         // 1.0 / -3.0 — verify sign-of-divisor handling in residual.
         mmix.set_register(2, 1.0f64.to_bits());
         mmix.set_register(3, (-3.0f64).to_bits());
-        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // ROUND_DOWN
         mmix.write_tetra(0, 0x14010203);
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
@@ -9703,14 +9721,14 @@ Main\tSETI\t$1,100
 
         let mut mmix = MMix::new();
         mmix.set_register(3, 2.0f64.to_bits());
-        mmix.set_special(SpecialReg::RA, 2); // UP
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // UP
         mmix.write_tetra(0, 0x15010003);
         assert!(mmix.execute_instruction());
         let up = f64::from_bits(mmix.get_register(1));
 
         let mut mmix = MMix::new();
         mmix.set_register(3, 2.0f64.to_bits());
-        mmix.set_special(SpecialReg::RA, 3); // DOWN
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // DOWN
         mmix.write_tetra(0, 0x15010003);
         assert!(mmix.execute_instruction());
         let down = f64::from_bits(mmix.get_register(1));
@@ -9754,24 +9772,23 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_special(SpecialReg::RA) & RA_X, 0);
     }
 
-    // ==================== D flag scope ====================
+    // ============== Subnormal operands and results ==============
 
     #[test]
-    fn test_d_flag_only_on_subnormal_operand() {
+    fn test_subnormal_operand_raises_no_divide_check() {
         let mut mmix = MMix::new();
-        // Subnormal operand → D set.
-        mmix.set_register(2, f64::MIN_POSITIVE.to_bits() >> 4); // shifts into subnormal
+        // MMIX has no denormalized-operand event; D is the integer divide check.
+        mmix.set_register(2, f64::MIN_POSITIVE.to_bits() >> 4); // subnormal
         mmix.set_register(3, 1.0f64.to_bits());
-        mmix.write_tetra(0, 0x04010203);
+        mmix.write_tetra(0, 0x04010203); // FADD
         assert!(mmix.execute_instruction());
-        assert!((mmix.get_special(SpecialReg::RA) & RA_D) != 0);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_D, 0);
     }
 
     #[test]
-    fn test_d_flag_clear_when_only_result_subnormal() {
+    fn test_subnormal_result_raises_underflow() {
         let mut mmix = MMix::new();
-        // MIN_POSITIVE / 2.0 underflows to a subnormal, but operands are
-        // normal — D must NOT be raised (U covers it).
+        // MIN_POSITIVE / 2.0 underflows to a subnormal; U reports it.
         mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
         mmix.set_register(3, 2.0f64.to_bits());
         mmix.write_tetra(0, 0x14010203); // FDIV
@@ -9779,11 +9796,6 @@ Main\tSETI\t$1,100
         let ra = mmix.get_special(SpecialReg::RA);
         let r = f64::from_bits(mmix.get_register(1));
         assert!(r.is_subnormal(), "expected subnormal result, got {}", r);
-        assert_eq!(
-            ra & RA_D,
-            0,
-            "D should be clear when only result is subnormal"
-        );
         assert!((ra & RA_U) != 0, "U should be set on underflow");
     }
 
@@ -9794,7 +9806,7 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::new();
         mmix.set_register(2, f64::MAX.to_bits());
         mmix.set_register(3, f64::MAX.to_bits());
-        mmix.set_special(SpecialReg::RA, 1); // ROUND_OFF (toward 0)
+        mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT); // ROUND_OFF (toward 0)
         mmix.write_tetra(0, 0x04010203); // FADD
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
@@ -9807,7 +9819,7 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::new();
         mmix.set_register(2, f64::MIN.to_bits()); // most-negative finite
         mmix.set_register(3, f64::MIN.to_bits());
-        mmix.set_special(SpecialReg::RA, 3); // ROUND_DOWN (toward -∞)
+        mmix.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // ROUND_DOWN (toward -∞)
         mmix.write_tetra(0, 0x04010203);
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
@@ -10034,5 +10046,300 @@ Sub\tSETI\t$0,3
                 "expected `{line}` in the dump, got:\n{dump}"
             );
         }
+    }
+    // ============== Knuth's rA layout and the integer events ==============
+
+    #[test]
+    fn test_ra_bits_match_knuth_predefs() {
+        // MMIXAL §69: D_BIT=#80 V_BIT=#40 W_BIT=#20 I_BIT=#10
+        //             O_BIT=#08 U_BIT=#04 Z_BIT=#02 X_BIT=#01
+        assert_eq!(RA_D, 0x80);
+        assert_eq!(RA_V, 0x40);
+        assert_eq!(RA_W, 0x20);
+        assert_eq!(RA_I, 0x10);
+        assert_eq!(RA_O, 0x08);
+        assert_eq!(RA_U, 0x04);
+        assert_eq!(RA_Z, 0x02);
+        assert_eq!(RA_X, 0x01);
+        assert_eq!(RA_ROUND_SHIFT, 16);
+        assert_eq!(RA_MAX, 0x3FFFF);
+    }
+
+    /// Run `DIV $3,$1,$2` on the given operands, returning quotient, remainder
+    /// and rA.
+    fn run_div(dividend: i64, divisor: i64) -> (i64, i64, u64) {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, dividend as u64);
+        mmix.set_register(2, divisor as u64);
+        mmix.write_tetra(0, 0x1C030102);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 4, "DIV must advance the PC");
+        (
+            mmix.get_register(3) as i64,
+            mmix.get_special(SpecialReg::RR) as i64,
+            mmix.get_special(SpecialReg::RA),
+        )
+    }
+
+    #[test]
+    fn test_div_floors_toward_negative_infinity() {
+        // Truncation would give (-3, -1), (-3, 1) and (3, 1).
+        assert_eq!(run_div(-7, 2), (-4, 1, 0));
+        assert_eq!(run_div(7, -2), (-4, -1, 0));
+        assert_eq!(run_div(-7, -2), (3, -1, 0));
+        // Exact division is unaffected by the floor adjustment.
+        assert_eq!(run_div(-8, 2), (-4, 0, 0));
+        assert_eq!(run_div(7, 2), (3, 1, 0));
+    }
+
+    #[test]
+    fn test_div_min_by_minus_one_wraps_and_raises_v() {
+        let (quotient, remainder, ra) = run_div(i64::MIN, -1);
+        assert_eq!(quotient as u64, 0x8000000000000000);
+        assert_eq!(remainder, 0);
+        assert_eq!(ra & RA_V, RA_V);
+    }
+
+    #[test]
+    fn test_signed_divide_by_zero_raises_divide_check() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 42);
+        mmix.set_register(2, 0);
+        mmix.write_tetra(0, 0x1C030102); // DIV $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RR), 42);
+        let ra = mmix.get_special(SpecialReg::RA);
+        assert_eq!(ra & RA_D, RA_D, "D is the integer divide check");
+        assert_eq!(ra & RA_V, 0, "divide by zero is not an overflow");
+    }
+
+    #[test]
+    fn test_divu_uses_rd_when_divisor_is_not_greater() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 5);
+        mmix.set_register(1, 0x1234);
+        mmix.set_register(2, 3);
+        mmix.write_tetra(0, 0x1E030102); // DIVU $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 5);
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0x1234);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+    }
+
+    #[test]
+    fn test_divu_by_zero_is_the_rd_rule_and_raises_nothing() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 7);
+        mmix.set_register(1, 0xABCD);
+        mmix.set_register(2, 0);
+        mmix.write_tetra(0, 0x1E030102); // DIVU $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 7);
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0xABCD);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0, "DIVU has no D");
+    }
+
+    #[test]
+    fn test_divu_divides_the_full_128_bit_dividend() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 1);
+        mmix.set_register(1, 0);
+        mmix.set_register(2, 2);
+        mmix.write_tetra(0, 0x1E030102); // DIVU $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0x8000000000000000); // 2^64 / 2
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0);
+    }
+
+    #[test]
+    fn test_mul_leaves_rh_to_mulu() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 1 << 32);
+        mmix.set_register(2, 1 << 32);
+        mmix.write_tetra(0, 0x1A030102); // MULU $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RH), 1);
+
+        mmix.set_register(5, 6);
+        mmix.set_register(6, 7);
+        mmix.write_tetra(4, 0x18040506); // MUL $4,$5,$6
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(4), 42);
+        assert_eq!(mmix.get_special(SpecialReg::RH), 1, "rH is MULU's output");
+    }
+
+    #[test]
+    fn test_mul_overflow_raises_v() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, i64::MAX as u64);
+        mmix.set_register(2, 2);
+        mmix.write_tetra(0, 0x18030102); // MUL $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_V, RA_V);
+        assert_eq!(mmix.get_special(SpecialReg::RH), 0);
+    }
+
+    #[test]
+    fn test_add_overflow_raises_v_not_u() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, i64::MAX as u64);
+        mmix.set_register(2, 1);
+        mmix.write_tetra(0, 0x20030102); // ADD $3,$1,$2
+        assert!(mmix.execute_instruction());
+        let ra = mmix.get_special(SpecialReg::RA);
+        assert_eq!(ra & RA_V, RA_V, "integer overflow is V");
+        assert_eq!(ra & RA_U, 0, "U is floating underflow");
+    }
+
+    /// Run `SL $3,$1,$2` and return the result and rA.
+    fn run_sl(value: u64, shift: u64) -> (u64, u64) {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, value);
+        mmix.set_register(2, shift);
+        mmix.write_tetra(0, 0x38030102);
+        assert!(mmix.execute_instruction());
+        (mmix.get_register(3), mmix.get_special(SpecialReg::RA))
+    }
+
+    #[test]
+    fn test_sl_overflows_when_the_product_leaves_the_signed_range() {
+        // A set bit leaves the top: 2^62 · 4 = 2^64.
+        let (result, ra) = run_sl(1 << 62, 2);
+        assert_eq!(result, 0);
+        assert_eq!(ra & RA_V, RA_V);
+
+        // Nothing is shifted out, yet 2^62 · 2 = 2^63 exceeds the signed range.
+        let (result, ra) = run_sl(0x4000000000000000, 1);
+        assert_eq!(result, 0x8000000000000000);
+        assert_eq!(ra & RA_V, RA_V, "the sign flip is an overflow");
+
+        // 2^60 · 4 = 2^62 fits, so nothing is raised.
+        let (result, ra) = run_sl(1 << 60, 2);
+        assert_eq!(result, 1 << 62);
+        assert_eq!(ra, 0, "a representable product raises nothing");
+
+        // -1 · 2^63 = -2^63 is the most negative octabyte, and fits.
+        let (result, ra) = run_sl(u64::MAX, 63);
+        assert_eq!(result, 0x8000000000000000);
+        assert_eq!(ra, 0);
+    }
+
+    #[test]
+    fn test_slu_never_overflows() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 0x4000000000000000);
+        mmix.set_register(2, 1);
+        mmix.write_tetra(0, 0x3A030102); // SLU $3,$1,$2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0x8000000000000000);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+    }
+
+    #[test]
+    fn test_neg_overflow_raises_v() {
+        // NEG $3,Y,$1 computes Y - s($1); every such overflow reports V.
+        for y in [0u32, 5, 255] {
+            let mut mmix = MMix::new();
+            mmix.set_register(1, i64::MIN as u64);
+            mmix.write_tetra(0, 0x34030001 | (y << 8)); // NEG $3,y,$1
+            assert!(mmix.execute_instruction());
+            assert_eq!(
+                mmix.get_special(SpecialReg::RA) & RA_V,
+                RA_V,
+                "NEG $3,{y},$1 overflows"
+            );
+            assert_eq!(
+                mmix.get_register(3),
+                (y as i64).wrapping_sub(i64::MIN) as u64
+            );
+        }
+    }
+
+    #[test]
+    fn test_negu_has_no_overflow() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, i64::MIN as u64);
+        mmix.write_tetra(0, 0x36030001); // NEGU $3,0,$1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0x8000000000000000);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+    }
+
+    /// Store `value` from $1 to address 0 with the given store opcode word,
+    /// returning rA.
+    fn run_store(word: u32, value: u64) -> u64 {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, value);
+        mmix.write_tetra(0, word);
+        assert!(mmix.execute_instruction());
+        mmix.get_special(SpecialReg::RA)
+    }
+
+    #[test]
+    fn test_signed_stores_raise_v_when_the_value_does_not_fit() {
+        // Register form: ST* $1,$2,$3 with $2 = $3 = 0. Immediate form: Z = 0.
+        for (word, wide, narrow) in [
+            (0xA0010203u32, 200u64, 127u64),   // STB
+            (0xA1010200, 200, 127),            // STBI
+            (0xA4010203, 40000, 32767),        // STW
+            (0xA5010200, 40000, 32767),        // STWI
+            (0xA8010203, 1 << 32, 0x7FFFFFFF), // STT
+            (0xA9010200, 1 << 32, 0x7FFFFFFF), // STTI
+        ] {
+            assert_eq!(run_store(word, wide) & RA_V, RA_V, "{word:#010X} overflows");
+            assert_eq!(run_store(word, narrow), 0, "{word:#010X} in range");
+        }
+    }
+
+    #[test]
+    fn test_put_ra_writes_the_rounding_mode_at_bits_17_16() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 1 << RA_ROUND_SHIFT); // ROUND_OFF
+        mmix.write_tetra(0, 0xF6150001); // PUT rA,$1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA), 1 << RA_ROUND_SHIFT);
+
+        // The mode is read from those bits: ROUND_OFF truncates 42.9 to 42.
+        mmix.set_register(3, 42.9f64.to_bits());
+        mmix.write_tetra(4, 0x05020003); // FIX $2,$0,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(2), 42);
+
+        // Raising an event leaves the mode field alone.
+        let ra = mmix.get_special(SpecialReg::RA);
+        assert_eq!(ra & RA_X, RA_X, "the conversion was inexact");
+        assert_eq!(ra >> RA_ROUND_SHIFT, 1, "the mode survives an event");
+    }
+
+    #[test]
+    fn test_put_ra_rejects_a_value_wider_than_18_bits() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT);
+        mmix.set_register(1, RA_MAX + 1);
+        mmix.write_tetra(0, 0xF6150001); // PUT rA,$1
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RA),
+            2 << RA_ROUND_SHIFT,
+            "a rejected write leaves rA unchanged"
+        );
+        assert_eq!(mmix.get_pc(), 4, "execution continues");
+
+        // The widest accepted value is #3FFFF itself.
+        mmix.set_register(1, RA_MAX);
+        mmix.write_tetra(4, 0xF6150001);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RA), RA_MAX);
+    }
+
+    #[test]
+    fn test_put_other_specials_is_not_capped() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, u64::MAX);
+        mmix.write_tetra(0, 0xF6010001); // PUT rD,$1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RD), u64::MAX);
     }
 }

@@ -2403,7 +2403,8 @@ Test190 ADDUI   TestNum,TestNum,1
         LDOI    $11,$13,0              % 2^-53 from data
         PUTI    rA,0                   % ROUND_NEAR
         FADD    $12,$10,$11            % 1.0 (rounds to even)
-        PUTI    rA,2                   % ROUND_UP
+        SETI    $15,#20000             % ROUND_UP: mode 2 at rA bits 17-16
+        PUT     rA,$15
         FADD    $14,$10,$11            % next_up(1.0)
         FEQL    Result,$12,$14         % expect 0 (different)
         SETI    Expect,0
@@ -2413,7 +2414,7 @@ Test190 ADDUI   TestNum,TestNum,1
         JMP     TestFail
 
 % ========================================
-% Test 191: signaling NaN raises rA.I (#08)
+% Test 191: signaling NaN raises rA.I (#10)
 % ========================================
 Test191 ADDUI   TestNum,TestNum,1
         PUTI    rA,0                   % clear flags
@@ -2422,16 +2423,16 @@ Test191 ADDUI   TestNum,TestNum,1
         FLOTI   $11,Zero,1             % 1.0
         FADD    $12,$10,$11            % NaN, raises I
         GET     Result,rA
-        SETI    $15,#08                % I bit
+        SETI    $15,#10                % I bit
         AND     Result,Result,$15
-        SETI    Expect,#08
+        SETI    Expect,#10
         CMP     Temp,Result,Expect
         PBZ     Temp,Test192
         PUTI    rA,0
         JMP     TestFail
 
 % ========================================
-% Test 192: inexact (X = #04) flag on 1.0 / 3.0
+% Test 192: inexact (X = #01) flag on 1.0 / 3.0
 % ========================================
 Test192 ADDUI   TestNum,TestNum,1
         PUTI    rA,0                   % clear flags
@@ -2439,9 +2440,9 @@ Test192 ADDUI   TestNum,TestNum,1
         FLOTI   $11,Zero,3
         FDIV    $12,$10,$11            % 1/3 inexact
         GET     Result,rA
-        SETI    $15,#04                % X bit
+        SETI    $15,#01                % X bit
         AND     Result,Result,$15
-        SETI    Expect,#04
+        SETI    Expect,#01
         CMP     Temp,Result,Expect
         PBZ     Temp,Test193
         PUTI    rA,0
