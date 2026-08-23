@@ -39,6 +39,21 @@ These guidelines apply to all AI-assisted code changes in this repository.
 - Integration tests may access external files.
 - Add or update tests for every behavior change.
 
+## MMIX source
+
+- Write new `.mms` source in the canonical MMIXAL spelling: the base mnemonic,
+  letting the assembler select the immediate opcode from the operand. One never
+  writes `ADDI` or `JMPB` in source input to MMIXAL.
+- Prefer `SET $X,imm` over `SETI $X,imm`. For a non-negative operand below
+  `#10000` the two leave the same register state, and `SET` does it in one tetra
+  instead of four. Reach for `SETI` only for a wider constant; `SET` rejects one.
+  A negative literal is not interchangeable — `SET $X,-1` wraps into the low
+  wyde, `SETI $X,-1` builds the full 64-bit value.
+- Leave existing `SETI` and `*I` spellings alone. They assemble unchanged, and
+  rewriting them churns the regression corpus and shifts every later address.
+- Every mnemonic the assembler accepts belongs in
+  `examples/all_instructions_test.mms`, in both operand forms where both exist.
+
 ## Completion Gates
 
 Before marking work complete, run and report:
