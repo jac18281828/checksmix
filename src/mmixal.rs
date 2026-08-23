@@ -5989,6 +5989,8 @@ ZSEVI $7,$8,128
         assert_parse_error_contains("NEGUI $1,0,#300", "out of range 0..255");
         assert_parse_error_contains("BigC IS #300\nNEGI $1,0,BigC", "out of range 0..255");
         assert_parse_error_contains("BigC IS #300\nNEGUI $1,0,BigC", "out of range 0..255");
+        assert_parse_error_contains("NEGI $1,0,-1", "out of range 0..255");
+        assert_parse_error_contains("NEGUI $1,0,-1", "out of range 0..255");
         assert_first_instruction("NEGI $1,0,5", MMixInstruction::NEGI(1, 0, 5));
         assert_first_instruction("NEGUI $1,0,5", MMixInstruction::NEGUI(1, 0, 5));
         assert_first_instruction(
@@ -6185,10 +6187,12 @@ ZSP  $3,$4,2
         }
     }
 
-    // ---- Sanity: explicit *I path stays unchanged for negatives -----
+    // ---- Sanity: these *I spellings stay unchanged for negatives -----
     // Lock in that `test_parse_negative_literal_8bit_wrap`'s policy
-    // (silent wrap of -1 to 0xFF on the *I path) is preserved while
-    // the auto path rejects the same input.
+    // (silent wrap of -1 to 0xFF) is preserved for the spellings named
+    // below while the auto path rejects the same input. `NEGI`/`NEGUI`
+    // range-check their Z and are the exception, pinned in
+    // `test_neg_immediate_spelling_range_checks_its_z`.
     #[test]
     fn test_explicit_i_negative_still_wraps() {
         assert_first_instruction("ADDI $1,$2,-1", MMixInstruction::ADDI(1, 2, 0xFF));

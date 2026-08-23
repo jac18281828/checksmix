@@ -3347,12 +3347,248 @@ Test260Second
         JMP     TestFail          % unreachable: skipped by POP's yz=1
         SETI    Expect,888
         CMP     Temp,$7,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test261
         JMP     TestFail
 Test260Pgi
         SETI    $0,888
         POP     1,1
         JMP     TestFail          % only reached if POP fails to return
+
+
+% ========================================
+% Tests 261-270: the canonical base spellings
+% ========================================
+% MMIXAL selects the immediate opcode from the operand shape, so the base
+% spelling of each family must emit what its *I spelling emits. Unit tests
+% pin that mapping inside the assembler; these pin the composition -- that
+% the VM executes what the base spelling produces. Where both spellings
+% yield a value, the two are run on identical operands and compared.
+%
+% New source here uses SET rather than SETI: for a non-negative operand
+% below #10000 the two leave the same register state, and SET does it in
+% one tetra instead of four.
+% ========================================
+Test261 ADDUI   TestNum,TestNum,1
+        GETA    $10,UncachedData
+        LDUNC   $11,$10,8       % base spelling, immediate Z
+        LDUNCI  $12,$10,8
+        CMP     Temp,$11,$12
+        PBZ     Temp,Test262
+        JMP     TestFail
+
+% ========================================
+% Test 262: STUNC and STCO with an immediate Z
+% ========================================
+Test262 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SET     $11,#5150
+        STUNC   $11,$10,128     % base spelling, immediate Z
+        LDOI    Result,$10,128
+        CMP     Temp,Result,$11
+        PBZ     Temp,Test262b
+        JMP     TestFail
+Test262b STCO   77,$10,136      % base spelling, immediate Z
+        LDOI    Result,$10,136
+        SET     Expect,77
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test263
+        JMP     TestFail
+
+% ========================================
+% Test 263: the fixed-to-float conversions with an immediate Z
+% ========================================
+Test263 ADDUI   TestNum,TestNum,1
+        FLOT    $10,Zero,100    % base spelling, immediate Z
+        FLOTI   $11,Zero,100
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test263b
+        JMP     TestFail
+Test263b FLOTU  $10,Zero,42
+        FLOTUI  $11,Zero,42
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test263c
+        JMP     TestFail
+Test263c SFLOT  $10,Zero,7
+        SFLOTI  $11,Zero,7
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test263d
+        JMP     TestFail
+Test263d SFLOTU $10,Zero,9
+        SFLOTUI $11,Zero,9
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test264
+        JMP     TestFail
+
+% ========================================
+% Test 264: NEG and NEGU with an immediate Z
+% ========================================
+Test264 ADDUI   TestNum,TestNum,1
+        NEG     $10,0,5         % base spelling, immediate Z
+        NEGI    $11,0,5
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test264b
+        JMP     TestFail
+Test264b NEGU   $10,0,5
+        NEGUI   $11,0,5
+        CMP     Temp,$10,$11
+        PBZ     Temp,Test265
+        JMP     TestFail
+
+% ========================================
+% Test 265: PUT with an immediate Z
+% ========================================
+Test265 ADDUI   TestNum,TestNum,1
+        PUT     rD,3            % base spelling, immediate Z
+        GET     $10,rD
+        SET     Expect,3
+        CMP     Temp,$10,Expect
+        PBZ     Temp,Test266
+        JMP     TestFail
+
+% ========================================
+% Test 266: LDHT and STHT with an immediate Z
+% ========================================
+Test266 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SET     $11,#ABCD
+        STHT    $11,$10,144     % base spelling, immediate Z
+        LDHT    $12,$10,144     % base spelling, immediate Z
+        STHTI   $11,$10,152
+        LDHTI   $13,$10,152
+        CMP     Temp,$12,$13
+        PBZ     Temp,Test267
+        JMP     TestFail
+
+% ========================================
+% Test 267: LDSF and STSF with an immediate Z
+% ========================================
+Test267 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        FLOT    $11,Zero,25
+        STSF    $11,$10,160     % base spelling, immediate Z
+        LDSF    $12,$10,160     % base spelling, immediate Z
+        STSFI   $11,$10,168
+        LDSFI   $13,$10,168
+        CMP     Temp,$12,$13
+        PBZ     Temp,Test268
+        JMP     TestFail
+
+% ========================================
+% Test 268: LDVTS with an immediate Z
+% ========================================
+Test268 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        LDVTS   $11,$10,176     % base spelling, immediate Z
+        LDVTSI  $12,$10,176
+        CMP     Temp,$11,$12
+        PBZ     Temp,Test269
+        JMP     TestFail
+
+% ========================================
+% Test 269: CSWAP with an immediate Z
+% ========================================
+Test269 ADDUI   TestNum,TestNum,1
+        GETA    $10,SaveArea
+        SET     $13,#3333
+        STOI    $13,$10,184       % seed memory with the "old" value
+        PUT     rP,$13            % compare register matches the seed
+        SET     $14,#4444
+        CSWAP   $14,$10,184       % base spelling, immediate Z
+        SET     Expect,1          % mem == rP, so the swap succeeds
+        CMP     Temp,$14,Expect
+        PBZ     Temp,Test269b
+        JMP     TestFail
+Test269b LDOI   Result,$10,184    % the new value must now be in memory
+        SET     Expect,#4444
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test270
+        JMP     TestFail
+
+% ========================================
+% Test 270: PRELD, PREGO and PREST with an immediate Z
+% ========================================
+% These three are cache hints and no-ops in simulation, so no comparison
+% against their *I spelling can be non-vacuous. What is verified is that
+% the base spelling assembles with an immediate Z and executes without
+% disturbing anything -- the same bar Test 177 sets for the register form.
+% ========================================
+Test270 ADDUI   TestNum,TestNum,1
+        GETA    $10,PreloadData
+        SET     $12,0
+        PRELD   $12,$10,8       % base spelling, immediate Z
+        PREGO   $12,$10,8       % base spelling, immediate Z
+        PREST   $12,$10,8       % base spelling, immediate Z
+        SET     Result,1
+        SET     Expect,1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test271
+        JMP     TestFail
+
+% ========================================
+% Test 271: GO with an immediate Z
+% ========================================
+Test271 ADDUI   TestNum,TestNum,1
+        GETA    $10,Test271Go
+        GO      $6,$10,0        % base spelling, immediate Z
+        JMP     TestFail          % unreachable: GO transferred control
+Test271Go
+        SET     Result,555
+        SET     Expect,555
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test272
+        JMP     TestFail
+
+% ========================================
+% Test 272: PUSHGO with an immediate Z
+% ========================================
+Test272 ADDUI   TestNum,TestNum,1
+        GETA    $10,Test272Pg
+        PUSHGO  $7,$10,0        % base spelling, immediate Z
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SET     Expect,777
+        CMP     Temp,$7,Expect
+        PBZ     Temp,Test273
+        JMP     TestFail
+Test272Pg
+        SET     $0,777
+        POP     1,1
+        JMP     TestFail          % only reached if POP fails to return
+
+% ========================================
+% Test 273: SET, both operand forms
+% ========================================
+% SET is MMIXAL's alias operation: SET $X,$Y is OR $X,$Y,0, and SET $X,imm
+% for a non-register operand is SETL $X,imm -- one tetra, low wyde, the
+% other 48 bits cleared.
+% ========================================
+Test273 ADDUI   TestNum,TestNum,1
+        SETI    $10,#FFFFFFFFFFFFFFFF   % dirty every wyde first
+        SET     $10,#1234               % immediate form must clear the rest
+        SET     Expect,#1234
+        CMP     Temp,$10,Expect
+        PBZ     Temp,Test273b
+        JMP     TestFail
+Test273b SET    $11,$10                 % register form: copy
+        CMP     Temp,$11,$10
+        PBZ     Temp,Test274
+        JMP     TestFail
+
+% ========================================
+% Test 274: JMPB - backward unconditional jump
+% ========================================
+Test274 ADDUI   TestNum,TestNum,1
+        JMP     Test274Fwd
+Test274Back
+        SET     Result,#B00
+        JMP     Test274Done
+Test274Fwd
+        JMPB    Test274Back     % backward target
+        JMP     TestFail          % unreachable
+Test274Done
+        SET     Expect,#B00
+        CMP     Temp,Result,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
 
 % ========================================
 % Intentional coverage exceptions
