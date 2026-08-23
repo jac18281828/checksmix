@@ -9348,7 +9348,7 @@ Main\tSETI\t$1,100
         mmix.write_tetra(0, 0x14010203);
         assert!(mmix.execute_instruction());
         let r = f64::from_bits(mmix.get_register(1));
-        assert!(r == 0.0 || r.is_subnormal(), "got {:?}", r);
+        assert_eq!(r, 0.0, "expected complete underflow to zero, got {:?}", r);
         assert!((mmix.get_special(SpecialReg::RA) & RA_U) != 0);
     }
 
@@ -9788,6 +9788,20 @@ Main\tSETI\t$1,100
         mmix.write_tetra(0, 0x04010203); // FADD
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_special(SpecialReg::RA) & RA_D, 0);
+    }
+
+    #[test]
+    fn test_subnormal_result_raises_underflow() {
+        let mut mmix = MMix::new();
+        // MIN_POSITIVE / 2.0 underflows to a subnormal; U reports it.
+        mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
+        mmix.set_register(3, 2.0f64.to_bits());
+        mmix.write_tetra(0, 0x14010203); // FDIV
+        assert!(mmix.execute_instruction());
+        let ra = mmix.get_special(SpecialReg::RA);
+        let r = f64::from_bits(mmix.get_register(1));
+        assert!(r.is_subnormal(), "expected subnormal result, got {}", r);
+        assert!((ra & RA_U) != 0, "U should be set on underflow");
     }
 
     // ==================== Overflow with directed rounding ====================
