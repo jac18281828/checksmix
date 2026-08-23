@@ -84,32 +84,35 @@ mmixasm         main.mms lib.mms -o prog.mmo
 
 ## Floating-point arithmetic
 
-All floating-point instructions use IEEE 754 double precision. Results honor the **rounding mode** in the low two bits of special register `rA` (register 21):
+All floating-point instructions use IEEE 754 double precision. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top and `PUT rA,$X` rejects any value above `#3FFFF`, leaving `rA` unchanged. `PUTI` cannot reach the field — its `YZ` operand is 16 bits — so selecting a mode needs the register form of `PUT`:
 
-| rA bits 1–0 | Mode | Meaning |
+| rA bits 17–16 | Mode | Meaning |
 | --- | --- | --- |
 | `0` | `ROUND_NEAR` | Round to nearest, ties to even (default) |
 | `1` | `ROUND_OFF` | Round toward zero (truncate) |
 | `2` | `ROUND_UP` | Round toward +∞ |
 | `3` | `ROUND_DOWN` | Round toward −∞ |
 
-Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FINT`, `FIX`, `FIXU`, `FLOT`, `FLOTI`, `FLOTU`, `FLOTUI`, `SFLOT`, `SFLOTI`, `SFLOTU`, `SFLOTUI`, `STSF`, `STSFI`.
+Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FINT`, `FIX`, `FIXU`, `SFLOT`, `SFLOTI`, `SFLOTU`, `SFLOTUI`, `STSF`, `STSFI`. **Known gap:** `FLOT`, `FLOTI`, `FLOTU` and `FLOTUI` always round to nearest and ignore the mode.
 
-The `FSQRT`, `FINT`, and conversion instructions use the `Y` field as an explicit rounding-mode override when non-zero (MMIX convention); the assembler accepts `FSQRT $X,$Y,$Z` but most programs pass `$Y=0` (inherit from rA).
+**Known gap:** MMIX lets `FSQRT`, `FINT` and the conversion instructions override the mode through the `Y` field. checksmix ignores `Y` on all of them and always uses `rA`.
 
 ### rA event flags
 
-Floating-point operations OR event flags into `rA`; they are never cleared automatically.
+Arithmetic operations OR event flags into `rA`; they are never cleared automatically. The bit values are Knuth's (`D_BIT` … `X_BIT`, MMIXAL §69).
 
-| Flag | rA bit | Raised when |
-| --- | --- | --- |
-| W | `0x01` | Float-to-integer conversion overflows |
-| X | `0x04` | Result is inexact (rounded) |
-| I | `0x08` | Invalid operation (NaN operand, 0/0, ∞−∞, etc.) |
-| Z | `0x10` | Division by zero |
-| O | `0x20` | Overflow |
-| U | `0x40` | Underflow |
-| D | `0x80` | Denormalized (subnormal) **operand** |
+| Flag | rA bit | Kind | Raised when |
+| --- | --- | --- | --- |
+| X | `0x01` | floating | Result is inexact (rounded) |
+| Z | `0x02` | floating | Floating division by zero |
+| U | `0x04` | floating | Underflow |
+| O | `0x08` | floating | Overflow |
+| I | `0x10` | floating | Invalid operation (NaN operand, 0/0, ∞−∞, etc.) |
+| W | `0x20` | floating | Float-to-integer conversion overflows |
+| V | `0x40` | integer | Integer overflow — `ADD`, `SUB`, `MUL`, `NEG`, `DIV` of `#8000000000000000` by −1, `SL`, and the signed stores `STB`/`STW`/`STT` |
+| D | `0x80` | integer | Divide check — signed division by zero |
+
+There is no denormalized-operand event: a subnormal operand raises nothing, and an underflow to a subnormal result raises `U`. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which includes a zero divisor — is part of its definition rather than an error.
 
 Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
