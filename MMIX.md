@@ -150,18 +150,18 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `SETH` | `SETH $X, YZ` | Set high wyde; the other 48 bits become zero |
 | `SETMH` | `SETMH $X, YZ` | Set medium-high wyde; the other 48 bits become zero |
 | `SETML` | `SETML $X, YZ` | Set medium-low wyde; the other 48 bits become zero |
-| `INCH` | `INCH $X, YZ` | Increase by high wyde |
-| `INCMH` | `INCMH $X, YZ` | Increase by medium-high wyde |
-| `INCML` | `INCML $X, YZ` | Increase by medium-low wyde |
-| `INCL` | `INCL $X, YZ` | Increase by low wyde (unsigned wrapping) |
-| `ORH` | `ORH $X, YZ` | OR high wyde |
-| `ORMH` | `ORMH $X, YZ` | OR medium-high wyde |
-| `ORML` | `ORML $X, YZ` | OR medium-low wyde |
-| `ORL` | `ORL $X, YZ` | OR low wyde |
-| `ANDNH` | `ANDNH $X, YZ` | AND-NOT high wyde |
-| `ANDNMH` | `ANDNMH $X, YZ` | AND-NOT medium-high wyde |
-| `ANDNML` | `ANDNML $X, YZ` | AND-NOT medium-low wyde |
-| `ANDNL` | `ANDNL $X, YZ` | AND-NOT low wyde |
+| `INCH` | `INCH $X, YZ` | Add into the high wyde; the other 48 bits are preserved |
+| `INCMH` | `INCMH $X, YZ` | Add into the medium-high wyde; the other 48 bits are preserved |
+| `INCML` | `INCML $X, YZ` | Add into the medium-low wyde; the other 48 bits are preserved |
+| `INCL` | `INCL $X, YZ` | Add into the low wyde, unsigned wrapping; the other 48 bits are preserved |
+| `ORH` | `ORH $X, YZ` | Set bits in the high wyde; the other 48 bits are preserved |
+| `ORMH` | `ORMH $X, YZ` | Set bits in the medium-high wyde; the other 48 bits are preserved |
+| `ORML` | `ORML $X, YZ` | Set bits in the medium-low wyde; the other 48 bits are preserved |
+| `ORL` | `ORL $X, YZ` | Set bits in the low wyde; the other 48 bits are preserved |
+| `ANDNH` | `ANDNH $X, YZ` | Clear bits in the high wyde; the other 48 bits are preserved |
+| `ANDNMH` | `ANDNMH $X, YZ` | Clear bits in the medium-high wyde; the other 48 bits are preserved |
+| `ANDNML` | `ANDNML $X, YZ` | Clear bits in the medium-low wyde; the other 48 bits are preserved |
+| `ANDNL` | `ANDNL $X, YZ` | Clear bits in the low wyde; the other 48 bits are preserved |
 | `LDB` | `LDB $X, $Y, $Z` | Load byte signed |
 | `LDBI` | `LDB $X, $Y, Z` | Load byte signed (immediate) |
 | `LDBU` | `LDBU $X, $Y, $Z` | Load byte unsigned |
