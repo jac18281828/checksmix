@@ -2,6 +2,15 @@
 
 MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; Knuth reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
 
+## Memory access
+
+MMIX has no unaligned access. A wyde, tetra, or octa access at address `A`
+resolves to `w·⌊A/w⌋` for its width `w` (2, 4, or 8) — the low `log2(w)` bits
+of `A` are ignored. `LDO $X,$Y,$Z` with an address ending in 3 loads the
+octabyte at the aligned base below it, not eight bytes straddling two
+octabytes. A misaligned address is rounded, never rejected: there is no trap
+or diagnostic. Byte access is unaffected — a byte is its own alignment.
+
 ## Minimal assembly skeleton
 
 ```
@@ -193,8 +202,8 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `LDSFI` | `LDSF $X, $Y, Z` | Load short float (immediate) |
 | `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
-| `CSWAP` | `CSWAP $X, $Y, $Z` | Compare and swap |
-| `CSWAPI` | `CSWAP $X, $Y, Z` | Compare and swap (immediate) |
+| `CSWAP` | `CSWAP $X, $Y, $Z` | Compare and swap: if `M8[$Y+$Z] = rP`, store `$X` there and set `$X ← 1`; otherwise `rP ← M8[$Y+$Z]` and `$X ← 0` |
+| `CSWAPI` | `CSWAP $X, $Y, Z` | Compare and swap (immediate): if `M8[$Y+Z] = rP`, store `$X` there and set `$X ← 1`; otherwise `rP ← M8[$Y+Z]` and `$X ← 0` |
 | `LDA` | `LDA $X, $Y, $Z` / `LDA $X, addr` | Load address of `$Y + $Z` — the `ADDU $X, $Y, $Z` alias; two-operand form described below the table |
 | `LDAI` | `LDA $X, $Y, Z` / `LDAI $X, addr` | Load address of `$Y + Z` — the `ADDU $X, $Y, Z` alias; two-operand form described below the table |
 | `STB` | `STB $X, $Y, $Z` | Store byte signed |

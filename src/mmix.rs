@@ -1221,21 +1221,27 @@ impl MMix {
         addrs
     }
 
-    /// Read a wyde (2 bytes) from memory starting at the given address.
+    /// Read a wyde (2 bytes) from memory at the address rounded down to a
+    /// multiple of 2, per Knuth's `M_2[A] = M_2[2*floor(A/2)]`.
     pub fn read_wyde(&self, addr: u64) -> u16 {
+        let addr = addr & !1;
         let b0 = self.read_byte(addr) as u16;
         let b1 = self.read_byte(addr.wrapping_add(1)) as u16;
         (b0 << 8) | b1
     }
 
-    /// Write a wyde (2 bytes) to memory starting at the given address.
+    /// Write a wyde (2 bytes) to memory at the address rounded down to a
+    /// multiple of 2, per Knuth's `M_2[A] = M_2[2*floor(A/2)]`.
     pub fn write_wyde(&mut self, addr: u64, value: u16) {
+        let addr = addr & !1;
         self.write_byte(addr, (value >> 8) as u8);
         self.write_byte(addr.wrapping_add(1), value as u8);
     }
 
-    /// Read a tetra (4 bytes) from memory starting at the given address.
+    /// Read a tetra (4 bytes) from memory at the address rounded down to a
+    /// multiple of 4, per Knuth's `M_4[A] = M_4[4*floor(A/4)]`.
     pub fn read_tetra(&self, addr: u64) -> u32 {
+        let addr = addr & !3;
         let b0 = self.read_byte(addr) as u32;
         let b1 = self.read_byte(addr.wrapping_add(1)) as u32;
         let b2 = self.read_byte(addr.wrapping_add(2)) as u32;
@@ -1243,16 +1249,20 @@ impl MMix {
         (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
     }
 
-    /// Write a tetra (4 bytes) to memory starting at the given address.
+    /// Write a tetra (4 bytes) to memory at the address rounded down to a
+    /// multiple of 4, per Knuth's `M_4[A] = M_4[4*floor(A/4)]`.
     pub fn write_tetra(&mut self, addr: u64, value: u32) {
+        let addr = addr & !3;
         self.write_byte(addr, (value >> 24) as u8);
         self.write_byte(addr.wrapping_add(1), (value >> 16) as u8);
         self.write_byte(addr.wrapping_add(2), (value >> 8) as u8);
         self.write_byte(addr.wrapping_add(3), value as u8);
     }
 
-    /// Read an octa (8 bytes) from memory starting at the given address.
+    /// Read an octa (8 bytes) from memory at the address rounded down to a
+    /// multiple of 8, per Knuth's `M_8[A] = M_8[8*floor(A/8)]`.
     pub fn read_octa(&self, addr: u64) -> u64 {
+        let addr = addr & !7;
         let b0 = self.read_byte(addr) as u64;
         let b1 = self.read_byte(addr.wrapping_add(1)) as u64;
         let b2 = self.read_byte(addr.wrapping_add(2)) as u64;
@@ -1264,8 +1274,10 @@ impl MMix {
         (b0 << 56) | (b1 << 48) | (b2 << 40) | (b3 << 32) | (b4 << 24) | (b5 << 16) | (b6 << 8) | b7
     }
 
-    /// Write an octa (8 bytes) to memory starting at the given address.
+    /// Write an octa (8 bytes) to memory at the address rounded down to a
+    /// multiple of 8, per Knuth's `M_8[A] = M_8[8*floor(A/8)]`.
     pub fn write_octa(&mut self, addr: u64, value: u64) {
+        let addr = addr & !7;
         self.write_byte(addr, (value >> 56) as u8);
         self.write_byte(addr.wrapping_add(1), (value >> 48) as u8);
         self.write_byte(addr.wrapping_add(2), (value >> 40) as u8);
@@ -2876,7 +2888,9 @@ impl MMix {
                     self.write_octa(addr, self.get_register(x));
                     self.set_register(x, 1); // Success
                 } else {
-                    // Values don't match, load current value
+                    // Values don't match: give the caller the current value to
+                    // retry with, per Knuth's rP <- M8[$Y+$Z] on failure.
+                    self.set_special(SpecialReg::RP, mem_value);
                     self.set_register(x, 0); // Failure
                 }
                 self.advance_pc();
@@ -2892,7 +2906,9 @@ impl MMix {
                     self.write_octa(addr, self.get_register(x));
                     self.set_register(x, 1); // Success
                 } else {
-                    // Values don't match, load current value
+                    // Values don't match: give the caller the current value to
+                    // retry with, per Knuth's rP <- M8[$Y+$Z] on failure.
+                    self.set_special(SpecialReg::RP, mem_value);
                     self.set_register(x, 0); // Failure
                 }
                 self.advance_pc();
@@ -8666,6 +8682,7 @@ Main\tSETI\t$1,100
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 0); // Failure
         assert_eq!(mmix.read_octa(addr), mem_value); // Memory unchanged
+        assert_eq!(mmix.get_special(SpecialReg::RP), mem_value); // rP <- M8[$Y+$Z]
     }
 
     #[test]
@@ -8685,6 +8702,135 @@ Main\tSETI\t$1,100
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 1); // Success
         assert_eq!(mmix.read_octa(addr + 16), new_value);
+    }
+
+    #[test]
+    fn test_cswapi_failure() {
+        let mut mmix = MMix::new();
+        // CSWAPI $1, $2, 16 - Compare and swap immediate (failed)
+        let addr = 2000u64;
+        let mem_value = 0x123456789ABCDEF0u64;
+        let compare_value = 0x1111111111111111u64;
+        let new_value = 0xFEDCBA9876543210u64;
+
+        mmix.write_octa(addr + 16, mem_value);
+        mmix.set_special(SpecialReg::RP, compare_value); // Different compare value
+        mmix.set_register(1, new_value);
+        mmix.set_register(2, addr);
+
+        mmix.write_tetra(0, 0x95010210); // CSWAPI $1,$2,16
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0); // Failure
+        assert_eq!(mmix.read_octa(addr + 16), mem_value); // Memory unchanged
+        assert_eq!(mmix.get_special(SpecialReg::RP), mem_value); // rP <- M8[$Y+Z]
+    }
+
+    #[test]
+    fn octa_load_reads_the_aligned_base_from_any_address_in_the_block() {
+        // LDO $1,$2,$3 with $3 sweeping the octabyte's own aligned block:
+        // every one of the 8 addresses must resolve to the same value,
+        // per Knuth's M8[A] = M8[8*floor(A/8)].
+        let base = 800u64;
+        let value = 0x1122334455667788u64;
+        for offset in 0u64..8 {
+            let mut mmix = MMix::new();
+            mmix.write_octa(base, value);
+            mmix.set_register(2, base);
+            mmix.set_register(3, offset);
+            mmix.write_tetra(0, 0x8C010203); // LDO $1,$2,$3
+            assert!(mmix.execute_instruction());
+            assert_eq!(mmix.get_register(1), value, "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn octa_store_at_misaligned_address_lands_at_aligned_base() {
+        // STO $1,$2,$3 at base+5: the write must land at the aligned base,
+        // not straddle base and base+8. Reverting write_octa's mask alone
+        // fails this, since the value would then land 5 bytes high.
+        let mut mmix = MMix::new();
+        let base = 800u64;
+        let value = 0x99AABBCCDDEEFF00u64;
+        mmix.set_register(1, value);
+        mmix.set_register(2, base);
+        mmix.set_register(3, 5);
+        mmix.write_tetra(0, 0xAC010203); // STO $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_octa(base), value);
+    }
+
+    #[test]
+    fn tetra_load_reads_the_aligned_base_from_any_address_in_the_block() {
+        // LDTU $1,$2,$3 with $3 sweeping the tetra's own aligned block.
+        let base = 400u64;
+        let value = 0x11223344u32;
+        for offset in 0u64..4 {
+            let mut mmix = MMix::new();
+            mmix.write_tetra(base, value);
+            mmix.set_register(2, base);
+            mmix.set_register(3, offset);
+            mmix.write_tetra(0, 0x8A010203); // LDTU $1,$2,$3
+            assert!(mmix.execute_instruction());
+            assert_eq!(mmix.get_register(1), value as u64, "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn tetra_store_at_misaligned_address_lands_at_aligned_base() {
+        // STT $1,$2,$3 at base+3: reverting write_tetra's mask alone fails
+        // this.
+        let mut mmix = MMix::new();
+        let base = 400u64;
+        let value = 0xAABBCCDDu32;
+        mmix.set_register(1, value as u64);
+        mmix.set_register(2, base);
+        mmix.set_register(3, 3);
+        mmix.write_tetra(0, 0xA8010203); // STT $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_tetra(base), value);
+    }
+
+    #[test]
+    fn wyde_load_reads_the_aligned_base_from_any_address_in_the_block() {
+        // LDWU $1,$2,$3 with $3 sweeping the wyde's own aligned block.
+        let base = 200u64;
+        let value = 0xBEEFu16;
+        for offset in 0u64..2 {
+            let mut mmix = MMix::new();
+            mmix.write_wyde(base, value);
+            mmix.set_register(2, base);
+            mmix.set_register(3, offset);
+            mmix.write_tetra(0, 0x86010203); // LDWU $1,$2,$3
+            assert!(mmix.execute_instruction());
+            assert_eq!(mmix.get_register(1), value as u64, "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn wyde_store_at_misaligned_address_lands_at_aligned_base() {
+        // STW $1,$2,$3 at base+1: reverting write_wyde's mask alone fails
+        // this.
+        let mut mmix = MMix::new();
+        let base = 200u64;
+        let value = 0xCAFEu16;
+        mmix.set_register(1, value as u64);
+        mmix.set_register(2, base);
+        mmix.set_register(3, 1);
+        mmix.write_tetra(0, 0xA4010203); // STW $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.read_wyde(base), value);
+    }
+
+    #[test]
+    fn byte_access_at_an_odd_address_still_reads_that_byte() {
+        // A byte is its own alignment (decision 3): read_byte/write_byte
+        // take no mask, unlike the wider accessors above. There is no fix
+        // to revert here — this guards against someone later "helpfully"
+        // masking read_byte to match its wider siblings.
+        let mut mmix = MMix::new();
+        mmix.write_byte(801, 0x42);
+        assert_eq!(mmix.read_byte(801), 0x42);
+        assert_eq!(mmix.read_byte(800), 0);
     }
 
     #[test]

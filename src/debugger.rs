@@ -581,7 +581,7 @@ stepi         si, stepi                        Execute exactly one instruction, 
 continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
 run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
-print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or memory octa.
+print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 list          l, list                          Print source lines around the current PC.
 help          h, help, ?                       Show this help.
