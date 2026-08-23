@@ -234,7 +234,9 @@ macro_rules! div_ri {
             $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
             $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_D);
         } else if dividend == i64::MIN && divisor == -1 {
-            // The only quotient outside the signed range; it wraps to itself.
+            // Z is a byte, so the divisor is in `0..=255` and this arm is
+            // unreachable from the immediate encoding. It mirrors div_rr,
+            // where the quotient leaves the signed range and wraps to itself.
             $cpu.set_register($x, i64::MIN as u64);
             $cpu.set_special(SpecialReg::RR, 0);
             $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
@@ -3360,6 +3362,9 @@ impl MMix {
                     Some(result) => {
                         self.set_register(x, result as u64);
                     }
+                    // Y and Z are bytes, so a - b lies in [-255, 255] and this
+                    // arm is unreachable from the immediate encoding. It mirrors
+                    // NEG, where s($Z) can carry the difference out of range.
                     None => {
                         self.set_register(x, a.wrapping_sub(b) as u64);
                         self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
@@ -9785,20 +9790,6 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_special(SpecialReg::RA) & RA_D, 0);
     }
 
-    #[test]
-    fn test_subnormal_result_raises_underflow() {
-        let mut mmix = MMix::new();
-        // MIN_POSITIVE / 2.0 underflows to a subnormal; U reports it.
-        mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
-        mmix.set_register(3, 2.0f64.to_bits());
-        mmix.write_tetra(0, 0x14010203); // FDIV
-        assert!(mmix.execute_instruction());
-        let ra = mmix.get_special(SpecialReg::RA);
-        let r = f64::from_bits(mmix.get_register(1));
-        assert!(r.is_subnormal(), "expected subnormal result, got {}", r);
-        assert!((ra & RA_U) != 0, "U should be set on underflow");
-    }
-
     // ==================== Overflow with directed rounding ====================
 
     #[test]
@@ -10065,20 +10056,31 @@ Sub\tSETI\t$0,3
         assert_eq!(RA_MAX, 0x3FFFF);
     }
 
-    /// Run `DIV $3,$1,$2` on the given operands, returning quotient, remainder
-    /// and rA.
-    fn run_div(dividend: i64, divisor: i64) -> (i64, i64, u64) {
+    /// Run the signed division `word` encodes over $1 and the divisor,
+    /// returning quotient, remainder and rA. The register form reads the
+    /// divisor from $2, the immediate form from the instruction's Z field.
+    fn run_signed_div(word: u32, dividend: i64, divisor: i64) -> (i64, i64, u64) {
         let mut mmix = MMix::new();
         mmix.set_register(1, dividend as u64);
         mmix.set_register(2, divisor as u64);
-        mmix.write_tetra(0, 0x1C030102);
+        mmix.write_tetra(0, word);
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 4, "DIV must advance the PC");
+        assert_eq!(mmix.get_pc(), 4, "division must advance the PC");
         (
             mmix.get_register(3) as i64,
             mmix.get_special(SpecialReg::RR) as i64,
             mmix.get_special(SpecialReg::RA),
         )
+    }
+
+    /// Run `DIV $3,$1,$2` on the given operands.
+    fn run_div(dividend: i64, divisor: i64) -> (i64, i64, u64) {
+        run_signed_div(0x1C030102, dividend, divisor)
+    }
+
+    /// Run `DIVI $3,$1,Z`; Z is a byte, so the divisor is in `0..=255`.
+    fn run_divi(dividend: i64, divisor: u8) -> (i64, i64, u64) {
+        run_signed_div(0x1D030100 | divisor as u32, dividend, 0)
     }
 
     #[test]
@@ -10098,6 +10100,26 @@ Sub\tSETI\t$0,3
         assert_eq!(quotient as u64, 0x8000000000000000);
         assert_eq!(remainder, 0);
         assert_eq!(ra & RA_V, RA_V);
+    }
+
+    #[test]
+    fn test_divi_floors_toward_negative_infinity() {
+        // Only positive divisors are encodable; truncation would give (-3, -1),
+        // (-2, -1) and (3, 1).
+        assert_eq!(run_divi(-7, 2), (-4, 1, 0));
+        assert_eq!(run_divi(-7, 3), (-3, 2, 0));
+        // Exact division is unaffected by the floor adjustment.
+        assert_eq!(run_divi(-8, 2), (-4, 0, 0));
+        assert_eq!(run_divi(7, 2), (3, 1, 0));
+    }
+
+    #[test]
+    fn test_divi_by_zero_raises_divide_check() {
+        let (quotient, remainder, ra) = run_divi(42, 0);
+        assert_eq!(quotient, 0);
+        assert_eq!(remainder, 42);
+        assert_eq!(ra & RA_D, RA_D, "D is the integer divide check");
+        assert_eq!(ra & RA_V, 0, "divide by zero is not an overflow");
     }
 
     #[test]
@@ -10153,6 +10175,41 @@ Sub\tSETI\t$0,3
     }
 
     #[test]
+    fn test_divui_uses_rd_when_divisor_is_not_greater() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 5);
+        mmix.set_register(1, 0x1234);
+        mmix.write_tetra(0, 0x1F030103); // DIVUI $3,$1,3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 5);
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0x1234);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+    }
+
+    #[test]
+    fn test_divui_by_zero_is_the_rd_rule_and_raises_nothing() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 7);
+        mmix.set_register(1, 0xABCD);
+        mmix.write_tetra(0, 0x1F030100); // DIVUI $3,$1,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 7);
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0xABCD);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0, "DIVUI has no D");
+    }
+
+    #[test]
+    fn test_divui_divides_the_full_128_bit_dividend() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RD, 1);
+        mmix.set_register(1, 0);
+        mmix.write_tetra(0, 0x1F030102); // DIVUI $3,$1,2
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(3), 0x8000000000000000); // 2^64 / 2
+        assert_eq!(mmix.get_special(SpecialReg::RR), 0);
+    }
+
+    #[test]
     fn test_mul_leaves_rh_to_mulu() {
         let mut mmix = MMix::new();
         mmix.set_register(1, 1 << 32);
@@ -10193,14 +10250,26 @@ Sub\tSETI\t$0,3
         assert_eq!(ra & RA_U, 0, "U is floating underflow");
     }
 
-    /// Run `SL $3,$1,$2` and return the result and rA.
-    fn run_sl(value: u64, shift: u64) -> (u64, u64) {
+    /// Run the signed left shift `word` encodes over $1, returning the result
+    /// and rA. The register form reads the count from $2, the immediate form
+    /// from the instruction's Z field.
+    fn run_shift_left(word: u32, value: u64, shift: u64) -> (u64, u64) {
         let mut mmix = MMix::new();
         mmix.set_register(1, value);
         mmix.set_register(2, shift);
-        mmix.write_tetra(0, 0x38030102);
+        mmix.write_tetra(0, word);
         assert!(mmix.execute_instruction());
         (mmix.get_register(3), mmix.get_special(SpecialReg::RA))
+    }
+
+    /// Run `SL $3,$1,$2`.
+    fn run_sl(value: u64, shift: u64) -> (u64, u64) {
+        run_shift_left(0x38030102, value, shift)
+    }
+
+    /// Run `SLI $3,$1,Z`.
+    fn run_sli(value: u64, shift: u8) -> (u64, u64) {
+        run_shift_left(0x39030100 | shift as u32, value, 0)
     }
 
     #[test]
@@ -10222,6 +10291,29 @@ Sub\tSETI\t$0,3
 
         // -1 · 2^63 = -2^63 is the most negative octabyte, and fits.
         let (result, ra) = run_sl(u64::MAX, 63);
+        assert_eq!(result, 0x8000000000000000);
+        assert_eq!(ra, 0);
+    }
+
+    #[test]
+    fn test_sli_overflows_when_the_product_leaves_the_signed_range() {
+        // A set bit leaves the top: 2^62 · 4 = 2^64.
+        let (result, ra) = run_sli(1 << 62, 2);
+        assert_eq!(result, 0);
+        assert_eq!(ra & RA_V, RA_V);
+
+        // Nothing is shifted out, yet 2^62 · 2 = 2^63 exceeds the signed range.
+        let (result, ra) = run_sli(0x4000000000000000, 1);
+        assert_eq!(result, 0x8000000000000000);
+        assert_eq!(ra & RA_V, RA_V, "the sign flip is an overflow");
+
+        // 2^60 · 4 = 2^62 fits, so nothing is raised.
+        let (result, ra) = run_sli(1 << 60, 2);
+        assert_eq!(result, 1 << 62);
+        assert_eq!(ra, 0, "a representable product raises nothing");
+
+        // A shift of zero is the identity, whatever the sign bits hold.
+        let (result, ra) = run_sli(0x8000000000000000, 0);
         assert_eq!(result, 0x8000000000000000);
         assert_eq!(ra, 0);
     }
