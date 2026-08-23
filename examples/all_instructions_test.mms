@@ -3505,12 +3505,14 @@ Test269b LDOI   Result,$10,184    % the new value must now be in memory
         JMP     TestFail
 
 % ========================================
-% Test 270: PRELD, PREGO and PREST with an immediate Z
+% Test 270: the cache and sync hints with an immediate Z
 % ========================================
-% These three are cache hints and no-ops in simulation, so no comparison
-% against their *I spelling can be non-vacuous. What is verified is that
-% the base spelling assembles with an immediate Z and executes without
-% disturbing anything -- the same bar Test 177 sets for the register form.
+% These five are hints and no-ops in simulation, so no comparison against
+% their *I spelling can be non-vacuous. What is verified is that the base
+% spelling assembles with an immediate Z and executes without disturbing
+% anything -- the same bar Test 177 sets for the register form. That covers
+% the routing this release changed, which is separate from the effect the
+% exception note below still records as unobservable.
 % ========================================
 Test270 ADDUI   TestNum,TestNum,1
         GETA    $10,PreloadData
@@ -3518,6 +3520,8 @@ Test270 ADDUI   TestNum,TestNum,1
         PRELD   $12,$10,8       % base spelling, immediate Z
         PREGO   $12,$10,8       % base spelling, immediate Z
         PREST   $12,$10,8       % base spelling, immediate Z
+        SYNCD   $12,$10,8       % base spelling, immediate Z
+        SYNCID  $12,$10,8       % base spelling, immediate Z
         SET     Result,1
         SET     Expect,1
         CMP     Temp,Result,Expect
@@ -3603,7 +3607,9 @@ Test274Done
 %   SYNCD, SYNCDI, SYNCID, SYNCIDI - each handler is exactly
 %             "self.advance_pc(); true" with no observable state change at
 %             all, so no operand choice can make a CMP/PBZ against them
-%             non-vacuous.
+%             non-vacuous. Test 270 still runs the base spellings with an
+%             immediate Z to cover the opcode selection; only their effect
+%             is beyond this harness.
 % HALT itself is not on this list: TestPass below now executes plain HALT
 % (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
 % skipped, which is real (if narrow) coverage of HALT's assembler path.
