@@ -164,8 +164,18 @@ fn run_mmo_bare_invocation() {
     assert!(build_status.success());
 
     // run without explicit subcommand
-    let run_status = checksmix().arg(&tmp_mmo).status().unwrap();
-    assert!(run_status.success(), "bare run of .mmo should succeed");
+    let run_output = checksmix().arg(&tmp_mmo).output().unwrap();
+    assert!(
+        run_output.status.success(),
+        "bare run of .mmo should succeed"
+    );
+
+    // The .mmo load path reports the program, never the loader's own probes.
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    assert!(
+        !stdout.contains("Debug:"),
+        "loading a .mmo emitted debug output:\n{stdout}"
+    );
 
     let _ = std::fs::remove_file(&tmp_mmo);
 }
