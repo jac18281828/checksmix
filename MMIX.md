@@ -38,6 +38,21 @@ Main    SETL    $0,42       % your code here
 against Knuth, whose MMIXAL takes a comma-separated list for all four data
 directives, `BYTE` included.
 
+The assembler aligns before it places an item: it rounds the location counter
+up to the item's natural width — 4 for an instruction, 2, 4 or 8 for `WYDE`,
+`TETRA` and `OCTA` — and the label on that line takes the rounded address. The
+skipped bytes are a gap rather than emitted padding, and load as zero. `BYTE`
+is never aligned. Alignment follows the item's kind, not the count of bytes it
+emits, so `BYTE "abcd"` is four bytes wide and still lands wherever the counter
+stands.
+
+`LOC` sets the counter exactly; it does not align, and the next instruction or
+wide datum rounds up from wherever `LOC` left it. Rounding happens when an item
+is assembled, never when a label is defined, so a label alone on its own line
+keeps the unrounded counter. A bare label followed by `OCTA` can therefore name
+an address up to seven bytes below the octabyte, and since MMIX has no
+unaligned access a load through that label rounds back down past the datum.
+
 ### INCLUDE
 
 `INCLUDE file` (also `.INCLUDE`, case-insensitive) is a **checksmix extension**,

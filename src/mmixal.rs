@@ -1441,6 +1441,7 @@ impl MMixAssembler {
                     pending_label = Some((ident.as_str().to_string(), line));
                 }
                 Rule::instruction => {
+                    self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
                     if let Some((raw, line)) = pending_label.take() {
@@ -1452,6 +1453,8 @@ impl MMixAssembler {
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
+                            let alignment = Self::data_directive_alignment(&directive_pair)?;
+                            self.align_current_addr(alignment);
                             let size = self.data_directive_size(directive_pair.clone())?;
                             if let Some((raw, line)) = pending_label.take() {
                                 self.define_label(&raw, self.current_addr, line)?;
@@ -1534,6 +1537,7 @@ impl MMixAssembler {
                     label_name = Some(ident.as_str().to_string());
                 }
                 Rule::instruction => {
+                    self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
                     if let Some(raw) = label_name.take() {
                         let qualified = self.qualify_name(&raw);
                         self.labels.insert(qualified, self.current_addr);
@@ -1544,6 +1548,8 @@ impl MMixAssembler {
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
+                            let alignment = Self::data_directive_alignment(&directive_pair)?;
+                            self.align_current_addr(alignment);
                             if let Some(raw) = label_name.take() {
                                 let qualified = self.qualify_name(&raw);
                                 self.labels.insert(qualified, self.current_addr);
@@ -1653,6 +1659,38 @@ impl MMixAssembler {
             Rule::inst_halt => Ok(MMixInstruction::HALT),
             // For all other instructions, return a standard 4-byte instruction
             _ => Ok(MMixInstruction::ADDU(0, 0, 0)),
+        }
+    }
+
+    /// Round the location counter up to `alignment`, the way MMIXAL does
+    /// before it assembles an item: a label on that line names the rounded
+    /// address, and the skipped bytes are a gap rather than emitted padding.
+    ///
+    /// Both passes round at the same point, ahead of the item's operands.
+    /// `peek_instruction_type` sizes the two-operand `LDA` from its operand's
+    /// value, so rounding on opposite sides of operand evaluation would let
+    /// the passes disagree about a forward reference with no other symptom.
+    fn align_current_addr(&mut self, alignment: u64) {
+        self.current_addr = self.current_addr.next_multiple_of(alignment);
+    }
+
+    /// Alignment of a data directive, taken from the directive's kind and
+    /// never from the number of bytes it emits. `BYTE` stays unaligned
+    /// however long its operand list; `WYDE`, `TETRA` and `OCTA` round to
+    /// their own width.
+    fn data_directive_alignment(pair: &pest::iterators::Pair<Rule>) -> Result<u64, String> {
+        let directive = pair
+            .clone()
+            .into_inner()
+            .next()
+            .ok_or("Empty data directive")?;
+
+        match directive.as_rule() {
+            Rule::directive_byte => Ok(1),
+            Rule::directive_wyde => Ok(2),
+            Rule::directive_tetra => Ok(4),
+            Rule::directive_octa => Ok(8),
+            _ => Err(format!("Unknown data directive: {:?}", directive.as_rule())),
         }
     }
 
@@ -3643,6 +3681,11 @@ impl MMixAssembler {
         }
     }
 
+    /// Every instruction occupies a tetra-aligned slot, including the
+    /// pseudo-instructions `instruction_size` reports as wider than one tetra.
+    /// Alignment is not the emitted size.
+    const INSTRUCTION_ALIGNMENT: u64 = 4;
+
     fn instruction_size(inst: &MMixInstruction) -> u64 {
         match inst {
             MMixInstruction::SET(_, _) => 16,
@@ -4069,16 +4112,132 @@ mod tests {
 
     #[test]
     fn test_byte_escape_pass1_pass2_agree() {
-        let mut asm = MMixAssembler::new("BYTE \"a\\nb\",0\nLABEL: HALT", "<test>");
+        // count_string_bytes sizes the escape in pass 1 and decode_byte_string
+        // expands it in pass 2; the two must agree. Alignment rounds a short
+        // pass-1 count back up to the follower's address, so measure the
+        // emitted bytes and read pass 1's counter through the forward JMP,
+        // which pass 2 encodes from the pass-1 label.
+        let mut asm = MMixAssembler::new("JMP LABEL\nBYTE \"a\\nb\",0\nLABEL: HALT", "<test>");
         asm.parse().unwrap();
-        assert_eq!(asm.labels.get("LABEL"), Some(&4));
+        let bytes: Vec<_> = asm.instructions[1..5]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![
+                (4, MMixInstruction::BYTE(b'a')),
+                (5, MMixInstruction::BYTE(b'\n')),
+                (6, MMixInstruction::BYTE(b'b')),
+                (7, MMixInstruction::BYTE(0)),
+            ]
+        );
+        assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(2));
     }
 
     #[test]
     fn test_byte_string_no_auto_terminator() {
-        let mut asm = MMixAssembler::new("BYTE \"Hi\"\nLABEL: HALT", "<test>");
+        // MMIXAL appends no terminator to a BYTE string: "Hi" is two bytes and
+        // nothing more.
+        let mut asm = MMixAssembler::new("BYTE \"Hi\"", "<test>");
         asm.parse().unwrap();
-        assert_eq!(asm.labels.get("LABEL"), Some(&2));
+        let bytes: Vec<_> = asm
+            .instructions
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![
+                (0, MMixInstruction::BYTE(b'H')),
+                (1, MMixInstruction::BYTE(b'i')),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_octa_label_rounds_up_after_byte() {
+        // MMIXAL rounds the counter to the item's width before assembling it,
+        // so the octabyte -- and the label on it -- lands at 8, not 1.
+        let mut asm = MMixAssembler::new("BYTE 1\nDATA: OCTA 0", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("DATA"), Some(&8));
+    }
+
+    #[test]
+    fn test_wyde_and_tetra_labels_round_to_their_widths() {
+        let mut asm = MMixAssembler::new("BYTE 1\nDATA: WYDE 0", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("DATA"), Some(&2));
+
+        let mut asm = MMixAssembler::new("BYTE 1\nDATA: TETRA 0", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("DATA"), Some(&4));
+    }
+
+    #[test]
+    fn test_instruction_label_rounds_up_after_byte() {
+        // Instructions align to 4 like any tetra-wide item.
+        let mut asm = MMixAssembler::new("BYTE 1\nCODE: HALT", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("CODE"), Some(&4));
+    }
+
+    #[test]
+    fn test_forward_reference_resolves_to_aligned_address() {
+        // Pass 2 overwrites asm.labels with its own addresses, so a pass-1 and
+        // pass-2 disagreement survives only in the operand pass 2 encoded from
+        // the stale pass-1 entry. DATA rounds to 8, four tetras past the JMP's
+        // two.
+        let mut asm = MMixAssembler::new("JMP DATA\nBYTE 1\nDATA: OCTA 0", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(2));
+    }
+
+    #[test]
+    fn test_two_debug_directives_assemble() {
+        // preprocess_debug appends one subroutine per directive, each ending in
+        // a BYTE string; the next subroutine's SAVE follows it directly. Without
+        // instruction alignment the source assembles only when the first
+        // string's length is 0 mod 4.
+        let source = "        LOC     #100\nMain    debug \"one\"\n        debug \"two\"\n        TRAP    0,Halt,0\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+    }
+
+    #[test]
+    fn test_multibyte_byte_string_is_not_aligned() {
+        // Alignment comes from the item's kind, not its size: a four-byte BYTE
+        // list is still placed wherever the counter stands. Deriving alignment
+        // from data_directive_size would put TEXT at 4.
+        let mut asm = MMixAssembler::new("BYTE 1\nTEXT: BYTE \"abcd\"", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("TEXT"), Some(&1));
+    }
+
+    #[test]
+    fn test_loc_sets_the_counter_exactly() {
+        // LOC assigns the counter; it does not align. The next aligned item
+        // rounds from wherever LOC left it.
+        let mut asm = MMixAssembler::new("LOC #101\nHERE: BYTE 0", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("HERE"), Some(&0x101));
+    }
+
+    #[test]
+    fn test_standalone_label_line_is_not_rounded() {
+        // Rounding happens when an item is assembled, not when a label is
+        // defined alone, so a bare label line names an address up to 7 bytes
+        // below the octabyte that follows it.
+        let mut asm = MMixAssembler::new("BYTE 1\nDATA\nOCTA #FF", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("DATA"), Some(&1));
+        assert_eq!(
+            asm.instructions
+                .last()
+                .map(|(addr, inst)| (*addr, inst.clone())),
+            Some((8, MMixInstruction::OCTA(0xFF)))
+        );
     }
 
     #[test]
@@ -4128,10 +4287,12 @@ mod tests {
 
     #[test]
     fn test_geta_misaligned_target_errors() {
-        // Target is 5 bytes forward, not a multiple of 4.
-        let source = "GETA $0,LABEL\nBYTE 1\nLABEL: HALT";
+        // A bare label line takes the counter unrounded, so LABEL names the
+        // byte after the BYTE -- address 5, and 5 bytes forward of the GETA.
+        let source = "GETA $0,LABEL\nBYTE 1\nLABEL\nOCTA 0";
         let mut asm = MMixAssembler::new(source, "<test>");
-        assert!(asm.parse().is_err());
+        let err = asm.parse().unwrap_err();
+        assert!(err.contains("not 4-byte aligned"), "{err}");
     }
 
     #[test]
@@ -4267,7 +4428,8 @@ mod tests {
 
     #[test]
     fn test_branch_misaligned_target_errors() {
-        let source = "BZ $1,LABEL\nBYTE 1\nLABEL: HALT";
+        // LABEL is a bare label line on data: address 5, not a multiple of 4.
+        let source = "BZ $1,LABEL\nBYTE 1\nLABEL\nOCTA 0";
         let mut asm = MMixAssembler::new(source, "<test>");
         let err = asm.parse().unwrap_err();
         assert!(err.contains("not 4-byte aligned"), "{err}");
@@ -4275,7 +4437,8 @@ mod tests {
 
     #[test]
     fn test_jmp_misaligned_target_errors() {
-        let source = "JMP LABEL\nBYTE 1\nLABEL: HALT";
+        // LABEL is a bare label line on data: address 5, not a multiple of 4.
+        let source = "JMP LABEL\nBYTE 1\nLABEL\nOCTA 0";
         let mut asm = MMixAssembler::new(source, "<test>");
         let err = asm.parse().unwrap_err();
         assert!(err.contains("not 4-byte aligned"), "{err}");
