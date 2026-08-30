@@ -526,16 +526,14 @@ impl Debugger {
             return format!("Invalid value '{value}'; expected decimal or 0x/#-prefixed hex");
         };
         if let Some(n) = register_index(target) {
-            self.mmix.set_register(n, parsed);
-            return format!("${n} = {}", format_value(parsed, self.format));
+            return self.write_register_and_report(n, parsed);
         }
         if let Some(reg) = special_reg_from_name(target) {
             self.mmix.set_special(reg, parsed);
             return format!("{target} = {}", format_value(parsed, self.format));
         }
         if let Some(SymbolType::Register(n)) = self.assembler.symbols.get(target).copied() {
-            self.mmix.set_register(n, parsed);
-            return format!("${n} = {}", format_value(parsed, self.format));
+            return self.write_register_and_report(n, parsed);
         }
         if let Some(addr) = self.parse_hex_address(target) {
             let aligned = addr & !7;
@@ -545,6 +543,11 @@ impl Debugger {
         format!(
             "No settable target \"{target}\" (register, special register, or hex memory address only)"
         )
+    }
+
+    fn write_register_and_report(&mut self, n: u8, value: u64) -> String {
+        self.mmix.set_register(n, value);
+        format!("${n} = {}", format_value(value, self.format))
     }
 
     /// Parse a `set` value: `0x`/`#`-prefixed as an unsigned hex bit
@@ -698,7 +701,7 @@ run/reset     r, run                           Reset to the freshly-loaded image
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
 delete        d, delete, d <line>, d <label>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base.
-set           set <target> <value>           Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
+set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
 list          l, list                          Print source lines around the current PC.
@@ -1491,9 +1494,50 @@ Main\tTRAP\t0,Halt,0
     #[test]
     fn set_writes_memory_at_the_aligned_base_of_an_unaligned_address() {
         let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
-        dbg.do_set("0x104".to_string(), "5".to_string());
+        let msg = dbg.do_set("0x104".to_string(), "5".to_string());
+        assert_eq!(msg, "0x100 = 5");
         assert_eq!(dbg.mmix.read_octa(0x100), 5);
-        assert_eq!(dbg.mmix.read_octa(0x104), 5);
+    }
+
+    /// `set` writes `rA` directly through `set_special`, bypassing
+    /// `put_special`'s Knuth-defined clamp at `RA_MAX` (`#3FFFF`) that the
+    /// assembled `PUT` instruction honors -- deliberate: `set` is a raw
+    /// debugger poke, not a `PUT` simulation, and this is the one target
+    /// where that distinction is actually observable.
+    #[test]
+    fn set_writes_ra_above_the_put_instructions_clamp() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        let name = SpecialReg::RA.name();
+        let above_ra_max = 0x40000u64; // RA_MAX is 0x3FFFF
+        dbg.do_set(name.to_string(), format!("0x{above_ra_max:x}"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RA), above_ra_max);
+    }
+
+    /// `set` reaches `Command::execute`'s dispatch, not just `do_set`
+    /// directly -- the two arguments must land the right way around, and
+    /// the returned success message must match the format contract.
+    #[test]
+    fn set_dispatches_through_execute_and_reports_the_success_message() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        let cmd = parse_command("set $3 42").unwrap();
+        let output = dbg.execute(cmd);
+        assert_eq!(output, vec!["$3 = 42".to_string()]);
+        assert_eq!(dbg.mmix.get_register(3), 42);
+    }
+
+    /// `IS $N` also produces a register-aliasing symbol
+    /// (`SymbolType::Register`), distinct from a `GREG` label -- both
+    /// register-aliasing forms must be settable, not just `GREG`'s.
+    #[test]
+    fn set_writes_through_an_is_register_alias_symbol_name() {
+        let source = "Zero\tIS\t$255\n\tLOC\t#100\nMain\tTRAP\t0,Halt,0\n";
+        let mut dbg = Debugger::load(assemble(source, "is.mms"));
+        assert_eq!(
+            dbg.assembler.symbols.get("Zero").copied(),
+            Some(SymbolType::Register(255))
+        );
+        dbg.do_set("Zero".to_string(), "7".to_string());
+        assert_eq!(dbg.mmix.get_register(255), 7);
     }
 
     #[test]
