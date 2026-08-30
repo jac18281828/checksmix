@@ -111,6 +111,15 @@ Print a general register (\fB$\fIN\fR or bare \fIN\fR), a special
 register, a label's address, an IS/GREG symbol or the memory octa at the
 hex address's aligned 8-byte base (MMIX has no unaligned access).
 .TP
+.BR "set " \fITARGET\fR " " \fIVALUE\fR
+Write a general register, a special register, or the memory octa at a hex
+address's aligned 8-byte base. A symbol whose type is a register alias
+(produced by \fBGREG\fR or by an \fBIS\fR bound to a register, e.g.
+\fBSp\fR) is settable the same way; a plain label and a symbol whose type
+is a constant (an \fBIS\fR bound to a non-register value) are not \(em
+neither names a storage location. \fIVALUE\fR is decimal or
+\fB0x\fR/\fB#\fR-prefixed hex.
+.TP
 .BR bt ", " backtrace ", " "info reg" ", " "info registers"
 Print the full register dump.
 .TP

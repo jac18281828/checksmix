@@ -40,6 +40,7 @@ pub enum Command {
     Breakpoints,
     Delete(Option<String>),
     Print(String),
+    Set(String, String),
     State,
     List,
     Help,
@@ -86,6 +87,12 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
                 Ok(Command::Print(rest.to_string()))
             }
         }
+        "set" => match rest.split_once(char::is_whitespace) {
+            Some((target, value)) if !target.is_empty() && !value.trim().is_empty() => {
+                Ok(Command::Set(target.to_string(), value.trim().to_string()))
+            }
+            _ => Err("set requires a target and a value".to_string()),
+        },
         "bt" | "backtrace" => Ok(Command::State),
         "info" => match rest {
             "reg" | "registers" => Ok(Command::State),
@@ -107,6 +114,14 @@ fn special_reg_from_name(name: &str) -> Option<SpecialReg> {
     (0u8..32)
         .filter_map(SpecialReg::from_u8)
         .find(|reg| reg.name() == name)
+}
+
+/// Parse a general-register argument: `$N` or bare `N`, `0 <= N <= 255`.
+/// Shared by `print_register` and `set`'s target resolution.
+fn register_index(arg: &str) -> Option<u8> {
+    let digits = arg.strip_prefix('$').unwrap_or(arg);
+    let n: u16 = digits.parse().ok()?;
+    if n > 255 { None } else { Some(n as u8) }
 }
 
 fn format_value(value: u64, format: ValueFormat) -> String {
@@ -263,6 +278,7 @@ impl Debugger {
             Command::Breakpoints => self.do_breakpoints(),
             Command::Delete(arg) => vec![self.do_delete(arg.clone())],
             Command::Print(arg) => vec![self.do_print(arg)],
+            Command::Set(target, value) => vec![self.do_set(target.clone(), value.clone())],
             Command::State => self.do_state(),
             Command::List => self.do_list(),
             Command::Help => self.do_help(),
@@ -495,13 +511,60 @@ impl Debugger {
         format!("No symbol \"{arg}\" in current context.")
     }
 
-    fn print_register(&self, arg: &str) -> Option<String> {
-        let digits = arg.strip_prefix('$').unwrap_or(arg);
-        let n: u16 = digits.parse().ok()?;
-        if n > 255 {
-            return None;
+    /// `set <target> <value>`: writes a general register, a special
+    /// register, or the memory octa at a hex address. The value is parsed
+    /// first -- an invalid value on an unresolvable target reports the
+    /// value error, not the target error. Target resolution, in priority
+    /// order: `$N`/bare `N`, a special-register name, a register-aliasing
+    /// symbol (a `GREG` or register-valued `IS` label), a hex address.
+    /// A plain label and a constant-valued `IS` symbol are not settable --
+    /// neither names a storage location.
+    fn do_set(&mut self, target: String, value: String) -> String {
+        let target = target.trim();
+        let value = value.trim();
+        let Some(parsed) = self.parse_set_value(value) else {
+            return format!("Invalid value '{value}'; expected decimal or 0x/#-prefixed hex");
+        };
+        if let Some(n) = register_index(target) {
+            self.mmix.set_register(n, parsed);
+            return format!("${n} = {}", format_value(parsed, self.format));
         }
-        Some(format_value(self.mmix.get_register(n as u8), self.format))
+        if let Some(reg) = special_reg_from_name(target) {
+            self.mmix.set_special(reg, parsed);
+            return format!("{target} = {}", format_value(parsed, self.format));
+        }
+        if let Some(SymbolType::Register(n)) = self.assembler.symbols.get(target).copied() {
+            self.mmix.set_register(n, parsed);
+            return format!("${n} = {}", format_value(parsed, self.format));
+        }
+        if let Some(addr) = self.parse_hex_address(target) {
+            let aligned = addr & !7;
+            self.mmix.write_octa(addr, parsed);
+            return format!("0x{aligned:x} = {}", format_value(parsed, self.format));
+        }
+        format!(
+            "No settable target \"{target}\" (register, special register, or hex memory address only)"
+        )
+    }
+
+    /// Parse a `set` value: `0x`/`#`-prefixed as an unsigned hex bit
+    /// pattern, else decimal -- signed if it fits `i64` (so a negative
+    /// literal stores its two's-complement pattern), else the raw `u64` for
+    /// a literal in the upper half of the range `i64` cannot reach.
+    fn parse_set_value(&self, value: &str) -> Option<u64> {
+        if let Some(addr) = self.parse_hex_address(value) {
+            return Some(addr);
+        }
+        value
+            .parse::<i64>()
+            .map(|v| v as u64)
+            .or_else(|_| value.parse::<u64>())
+            .ok()
+    }
+
+    fn print_register(&self, arg: &str) -> Option<String> {
+        let n = register_index(arg)?;
+        Some(format_value(self.mmix.get_register(n), self.format))
     }
 
     fn parse_hex_address(&self, arg: &str) -> Option<u64> {
@@ -635,6 +698,7 @@ run/reset     r, run                           Reset to the freshly-loaded image
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
 delete        d, delete, d <line>, d <label>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base.
+set           set <target> <value>           Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
 list          l, list                          Print source lines around the current PC.
@@ -777,6 +841,16 @@ Text\tBYTE\t\"Hi\",0
             parse_command("print rJ"),
             Ok(Command::Print("rJ".to_string()))
         );
+        assert_eq!(
+            parse_command("set $0 42"),
+            Ok(Command::Set("$0".to_string(), "42".to_string()))
+        );
+        assert_eq!(
+            parse_command("set rJ 0x10"),
+            Ok(Command::Set("rJ".to_string(), "0x10".to_string()))
+        );
+        assert!(parse_command("set").is_err());
+        assert!(parse_command("set $0").is_err());
         assert_eq!(parse_command("bt"), Ok(Command::State));
         assert_eq!(parse_command("backtrace"), Ok(Command::State));
         assert_eq!(parse_command("info reg"), Ok(Command::State));
@@ -820,6 +894,7 @@ Text\tBYTE\t\"Hi\",0
         assert!(joined.contains("help"));
         assert!(joined.contains("delete"));
         assert!(joined.contains("info break"));
+        assert!(joined.lines().any(|l| l.starts_with("set")));
     }
 
     /// `next` lands on the head of the next source line every time, never
@@ -1347,5 +1422,139 @@ AddFunc\tADDU\t$0,$0,$1
         assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 3);
         assert_eq!(dbg.mmix.get_register(255), 42);
         assert_eq!(dbg.mmix.get_exit_code(), 42);
+    }
+
+    const MINIMAL_PROGRAM: &str = "\tLOC\t#100\nMain\tTRAP\t0,Halt,0\n";
+
+    /// `Limit` is a constant-valued `IS` symbol -- not a storage location,
+    /// and not settable, distinct from a register-aliasing `GREG`/`IS $N`
+    /// symbol.
+    const CONSTANT_SYMBOL_PROGRAM: &str = "\
+Limit\tIS\t100
+\tLOC\t#100
+Main\tTRAP\t0,Halt,0
+";
+
+    #[test]
+    fn set_writes_a_general_register_with_a_decimal_value() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        dbg.do_set("$3".to_string(), "42".to_string());
+        assert_eq!(dbg.mmix.get_register(3), 42);
+    }
+
+    #[test]
+    fn set_writes_a_negative_decimal_as_its_twos_complement_bit_pattern() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        dbg.do_set("$3".to_string(), "-1".to_string());
+        assert_eq!(dbg.mmix.get_register(3), u64::MAX);
+    }
+
+    /// A decimal literal above `i64::MAX` cannot round-trip through `i64`
+    /// parsing alone; the `u64` fallback is what makes this work.
+    #[test]
+    fn set_round_trips_a_decimal_value_above_i64_max() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        let value = (i64::MAX as u64) + 100;
+        dbg.do_set("$3".to_string(), value.to_string());
+        assert_eq!(dbg.mmix.get_register(3), value);
+    }
+
+    /// Pins the corrected settled decision: a register-aliasing symbol
+    /// (here `Sp`, from `STACK_PROGRAM`'s `GREG` directive) is a settable
+    /// `set` target, and writes the same register `print`/`p` reads.
+    #[test]
+    fn set_writes_through_a_greg_aliased_symbol_name() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let reg = match dbg.assembler.symbols.get("Sp").copied() {
+            Some(SymbolType::Register(n)) => n,
+            other => panic!("Sp must be a register-aliasing symbol, got {other:?}"),
+        };
+        dbg.do_set("Sp".to_string(), "99".to_string());
+        assert_eq!(dbg.mmix.get_register(reg), 99);
+        assert_eq!(dbg.do_print("Sp"), format_value(99, dbg.format));
+    }
+
+    /// The special-register name is derived from the variant itself, not
+    /// hardcoded -- this file has a documented history of special-register
+    /// display-name bugs (the alphabetical-vs-discriminant mismatch fixed
+    /// 2026-08-22).
+    #[test]
+    fn set_writes_a_special_register_with_a_hex_value() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        let name = SpecialReg::RJ.name();
+        dbg.do_set(name.to_string(), "0x10".to_string());
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RJ), 0x10);
+    }
+
+    /// `write_octa` masks its address down to an 8-byte base; `set` must
+    /// write there too, not at the address as typed.
+    #[test]
+    fn set_writes_memory_at_the_aligned_base_of_an_unaligned_address() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        dbg.do_set("0x104".to_string(), "5".to_string());
+        assert_eq!(dbg.mmix.read_octa(0x100), 5);
+        assert_eq!(dbg.mmix.read_octa(0x104), 5);
+    }
+
+    #[test]
+    fn set_rejects_an_invalid_value_and_mutates_nothing() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
+        let before = dbg.mmix.get_register(3);
+        let result = dbg.do_set("$3".to_string(), "notanumber".to_string());
+        assert_eq!(
+            result,
+            "Invalid value 'notanumber'; expected decimal or 0x/#-prefixed hex"
+        );
+        assert_eq!(dbg.mmix.get_register(3), before);
+    }
+
+    /// The value is validated before the target is resolved: an invalid
+    /// value on an unresolvable target reports the value error, not the
+    /// not-settable-target error.
+    #[test]
+    fn set_reports_the_value_error_when_target_and_value_are_both_bad() {
+        let mut dbg = Debugger::load(assemble(CALL_PROGRAM, "set.mms"));
+        let result = dbg.do_set("Main".to_string(), "notanumber".to_string());
+        assert_eq!(
+            result,
+            "Invalid value 'notanumber'; expected decimal or 0x/#-prefixed hex"
+        );
+    }
+
+    /// A label is a compile-time address constant, not a storage location:
+    /// `set` must reject it, not silently reinterpret it.
+    #[test]
+    fn set_rejects_a_label_as_a_target() {
+        let mut dbg = Debugger::load(assemble(CALL_PROGRAM, "set.mms"));
+        let main_addr = *dbg.assembler.labels.get("Main").unwrap();
+        let before = dbg.mmix.read_octa(main_addr);
+        let result = dbg.do_set("Main".to_string(), "5".to_string());
+        assert_eq!(
+            result,
+            "No settable target \"Main\" (register, special register, or hex memory address only)"
+        );
+        assert_eq!(dbg.mmix.read_octa(main_addr), before);
+    }
+
+    /// A constant-valued `IS` symbol is also not a storage location --
+    /// distinct from the `GREG`-symbol test above, this confirms `do_set`
+    /// tells `SymbolType::Constant` and `SymbolType::Register` apart rather
+    /// than treating every symbol alike.
+    #[test]
+    fn set_rejects_a_constant_is_symbol_as_a_target() {
+        let mut dbg = Debugger::load(assemble(CONSTANT_SYMBOL_PROGRAM, "set.mms"));
+        assert_eq!(
+            dbg.assembler.symbols.get("Limit").copied(),
+            Some(SymbolType::Constant(100))
+        );
+        let result = dbg.do_set("Limit".to_string(), "5".to_string());
+        assert_eq!(
+            result,
+            "No settable target \"Limit\" (register, special register, or hex memory address only)"
+        );
+        assert_eq!(
+            dbg.assembler.symbols.get("Limit").copied(),
+            Some(SymbolType::Constant(100))
+        );
     }
 }

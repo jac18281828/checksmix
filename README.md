@@ -106,6 +106,7 @@ set (i.e. when run from Emacs's `gud-mode`).
 | break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
 | delete | `d`, `delete`, `d <line>`, `d <label>` | Delete one breakpoint, or every breakpoint given no argument. |
 | print | `p <arg>`, `print <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or the memory octa at a hex address's aligned 8-byte base (`0x...`/`#...`). |
+| set | `set <target> <value>` | Write a register (`$N`/`N`), special register, or the memory octa at a hex address's aligned 8-byte base. A symbol whose type is a register alias (from `GREG` or a register-valued `IS`, e.g. `Sp`) is settable the same way; a label or a symbol whose type is a constant (an `IS` bound to a non-register value) is not -- neither names a storage location. `value` is decimal or `0x`/`#`-prefixed hex. |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
 | breakpoints | `info break`, `info breakpoints` | List every currently-set breakpoint with its source location. |
 | list | `l`, `list` | Print source lines around the current PC. |
