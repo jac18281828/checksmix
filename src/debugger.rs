@@ -1508,7 +1508,7 @@ Main\tTRAP\t0,Halt,0
     fn set_writes_ra_above_the_put_instructions_clamp() {
         let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "set.mms"));
         let name = SpecialReg::RA.name();
-        let above_ra_max = 0x40000u64; // RA_MAX is 0x3FFFF
+        let above_ra_max = crate::mmix::RA_MAX + 1;
         dbg.do_set(name.to_string(), format!("0x{above_ra_max:x}"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RA), above_ra_max);
     }
