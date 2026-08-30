@@ -4113,11 +4113,12 @@ mod tests {
     #[test]
     fn test_byte_escape_pass1_pass2_agree() {
         // count_string_bytes sizes the escape in pass 1 and decode_byte_string
-        // expands it in pass 2; the two must agree. Alignment rounds a short
-        // pass-1 count back up to the follower's address, so measure the
-        // emitted bytes and read pass 1's counter through the forward JMP,
-        // which pass 2 encodes from the pass-1 label.
-        let mut asm = MMixAssembler::new("JMP LABEL\nBYTE \"a\\nb\",0\nLABEL: HALT", "<test>");
+        // expands it in pass 2; the two must agree. The forward OCTA reads
+        // pass 1's counter, because pass 2 resolves it before reaching the
+        // label and overwriting the entry; the emitted bytes read pass 2's.
+        // The label sits on a BYTE so that no rounding can absorb a
+        // disagreement between them.
+        let mut asm = MMixAssembler::new("OCTA LABEL\nBYTE \"a\\nb\",0\nLABEL BYTE 7", "<test>");
         asm.parse().unwrap();
         let bytes: Vec<_> = asm.instructions[1..5]
             .iter()
@@ -4126,13 +4127,13 @@ mod tests {
         assert_eq!(
             bytes,
             vec![
-                (4, MMixInstruction::BYTE(b'a')),
-                (5, MMixInstruction::BYTE(b'\n')),
-                (6, MMixInstruction::BYTE(b'b')),
-                (7, MMixInstruction::BYTE(0)),
+                (8, MMixInstruction::BYTE(b'a')),
+                (9, MMixInstruction::BYTE(b'\n')),
+                (10, MMixInstruction::BYTE(b'b')),
+                (11, MMixInstruction::BYTE(0)),
             ]
         );
-        assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(2));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(12));
     }
 
     #[test]
