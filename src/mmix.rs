@@ -1597,9 +1597,6 @@ impl MMix {
             flags |= RA_O | RA_X;
             Self::clamp_overflow_for_mode(r_near, mode)
         } else if r_near.is_finite() {
-            // A non-finite operand yields an exact result; its residual is not
-            // a rounding error and must not raise X.
-            let err = if a.is_finite() { err } else { 0.0 };
             if err != 0.0 {
                 flags |= RA_X;
             }
@@ -10204,7 +10201,7 @@ Main\tSETI\t$1,100
     fn test_fixu_wraps_mod_two_to_the_64() {
         // Knuth: u($X) <- int(f($Z)) mod 2^64. A value whose ulp reaches 2^64
         // therefore yields zero rather than saturating.
-        let cases: [(f64, u64); 8] = [
+        let cases: [(f64, u64); 10] = [
             (-1.0, 0xFFFF_FFFF_FFFF_FFFF),
             (-0.5, 0), // rounds to -0.0 under NEAR
             (3.7, 4),
@@ -10213,6 +10210,15 @@ Main\tSETI\t$1,100
             (18446744073709551616.0, 0),                    // 2^64
             (1e300, 0),
             (18446744073709549568.0, 0xFFFF_FFFF_FFFF_F800),
+            // The exponent at which every low bit has shifted out. An odd
+            // significand distinguishes the two sides: at 2^115 the value is
+            // 2^115 + 2^63, whose low octabyte is 2^63; one exponent higher
+            // every surviving bit sits above the octabyte.
+            (
+                f64::from_bits(((115 + 1023) << 52) | 1),
+                0x8000_0000_0000_0000,
+            ),
+            (f64::from_bits(((116 + 1023) << 52) | 1), 0),
         ];
         for (operand, expected) in cases {
             let mut mmix = MMix::new();
@@ -10303,6 +10309,25 @@ Main\tSETI\t$1,100
         assert_eq!(down_result, 9007199254740992.0);
         assert_eq!(up_result, 9007199254740994.0);
         assert!(up_result > down_result);
+
+        // The negative arm negates both the magnitude and the residual, so a
+        // directed mode must still round toward its own infinity.
+        let mut neg_up = MMix::new();
+        neg_up.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // ROUND_UP
+        neg_up.set_register(3, (-((1i64 << 53) + 1)) as u64);
+        neg_up.write_tetra(0, 0x08010003);
+        assert!(neg_up.execute_instruction());
+        assert_eq!(f64::from_bits(neg_up.get_register(1)), -9007199254740992.0);
+
+        let mut neg_down = MMix::new();
+        neg_down.set_special(SpecialReg::RA, 3 << RA_ROUND_SHIFT); // ROUND_DOWN
+        neg_down.set_register(3, (-((1i64 << 53) + 1)) as u64);
+        neg_down.write_tetra(0, 0x08010003);
+        assert!(neg_down.execute_instruction());
+        assert_eq!(
+            f64::from_bits(neg_down.get_register(1)),
+            -9007199254740994.0
+        );
     }
 
     #[test]

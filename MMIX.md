@@ -140,7 +140,7 @@ Arithmetic operations OR event flags into `rA`; they are never cleared automatic
 | V | `0x40` | integer | Integer overflow — `ADD`, `SUB`, `MUL`, `NEG`, `DIV` of `#8000000000000000` by −1, `SL`, and the signed stores `STB`/`STW`/`STT` |
 | D | `0x80` | integer | Divide check — signed division by zero |
 
-There is no denormalized-operand event: a subnormal operand raises nothing, and an underflow to a subnormal result raises `U`. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which includes a zero divisor — is part of its definition rather than an error.
+There is no denormalized-operand event: a subnormal operand raises nothing, and an underflow to a subnormal result raises `U`. `FREM` and `FSQRT` raise `U` in no case — the IEEE remainder is exact by definition, and the square root of a nonzero finite operand is neither zero nor subnormal. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which includes a zero divisor — is part of its definition rather than an error.
 
 Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
