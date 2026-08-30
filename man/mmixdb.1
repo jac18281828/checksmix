@@ -100,6 +100,12 @@ is the one resume command that works after the program has exited.
 Set a breakpoint at a decimal source line number in the current file, or
 at an exact label. No other address form is accepted.
 .TP
+.BR "d " \fILINE\fR|\fILABEL\fR ", " "delete " \fILINE\fR|\fILABEL\fR ", " d ", " delete
+Delete the breakpoint at a decimal source line number or an exact label,
+resolved exactly as
+.BR break .
+With no argument, delete every breakpoint.
+.TP
 .BR "p " \fIARG\fR ", " "print " \fIARG\fR
 Print a general register (\fB$\fIN\fR or bare \fIN\fR), a special
 register, a label's address, an IS/GREG symbol or the memory octa at the
@@ -107,6 +113,10 @@ hex address's aligned 8-byte base (MMIX has no unaligned access).
 .TP
 .BR bt ", " backtrace ", " "info reg" ", " "info registers"
 Print the full register dump.
+.TP
+.BR "info break" ", " "info breakpoints"
+List every currently-set breakpoint with its resolved source location, or
+report that none are set.
 .TP
 .BR l ", " list
 Print source lines around the current program counter.
@@ -128,9 +138,11 @@ are refused with
 .B run
 restarts it.
 .BR print ,
-.B state
+.BR state ,
+.BR list ,
+.B delete
 and
-.B list
+.B "info break"
 keep answering, since the register file is what the program was run to
 show.
 .SH ENVIRONMENT

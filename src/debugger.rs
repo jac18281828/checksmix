@@ -37,6 +37,8 @@ pub enum Command {
     Continue,
     Run,
     Break(String),
+    Breakpoints,
+    Delete(Option<String>),
     Print(String),
     State,
     List,
@@ -72,6 +74,11 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
                 Ok(Command::Break(rest.to_string()))
             }
         }
+        "d" | "delete" => Ok(Command::Delete(if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        })),
         "p" | "print" => {
             if rest.is_empty() {
                 Err("print requires an argument".to_string())
@@ -82,7 +89,8 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         "bt" | "backtrace" => Ok(Command::State),
         "info" => match rest {
             "reg" | "registers" => Ok(Command::State),
-            "" => Err("info requires a subcommand (reg|registers)".to_string()),
+            "break" | "breakpoints" => Ok(Command::Breakpoints),
+            "" => Err("info requires a subcommand (reg|registers|break|breakpoints)".to_string()),
             other => Err(format!("unknown info subcommand: {other}")),
         },
         "l" | "list" => Ok(Command::List),
@@ -252,6 +260,8 @@ impl Debugger {
             Command::Continue => self.do_continue(),
             Command::Run => self.do_run(),
             Command::Break(arg) => vec![self.do_break(arg.clone())],
+            Command::Breakpoints => self.do_breakpoints(),
+            Command::Delete(arg) => vec![self.do_delete(arg.clone())],
             Command::Print(arg) => vec![self.do_print(arg)],
             Command::State => self.do_state(),
             Command::List => self.do_list(),
@@ -415,18 +425,47 @@ impl Debugger {
 
     fn do_break(&mut self, arg: String) -> String {
         let arg = arg.trim();
-        let resolved = if let Ok(line) = arg.parse::<usize>() {
-            self.current_file()
-                .and_then(|file| self.assembler.addr_for_line(&file, line))
-        } else {
-            self.assembler.labels.get(arg).copied()
-        };
-        match resolved {
+        match self.resolve_break_location(arg) {
             Some(addr) => {
                 self.breakpoints.insert(addr);
                 format!("Breakpoint set at 0x{addr:x} ({arg})")
             }
             None => format!("No location found for '{arg}'; breakpoint not set"),
+        }
+    }
+
+    /// Resolve a `break`/`delete` argument to an address, in priority order:
+    /// a decimal source line in the current file, else an exact label.
+    fn resolve_break_location(&self, arg: &str) -> Option<u64> {
+        let arg = arg.trim();
+        if let Ok(line) = arg.parse::<usize>() {
+            self.current_file()
+                .and_then(|file| self.assembler.addr_for_line(&file, line))
+        } else {
+            self.assembler.labels.get(arg).copied()
+        }
+    }
+
+    fn do_delete(&mut self, arg: Option<String>) -> String {
+        match arg {
+            None => {
+                let n = self.breakpoints.len();
+                self.breakpoints.clear();
+                format!("Deleted {n} breakpoint(s).")
+            }
+            Some(arg) => {
+                let arg = arg.trim();
+                match self.resolve_break_location(arg) {
+                    Some(addr) => {
+                        if self.breakpoints.remove(&addr) {
+                            format!("Deleted breakpoint at 0x{addr:x} ({arg})")
+                        } else {
+                            format!("No breakpoint at 0x{addr:x} ({arg})")
+                        }
+                    }
+                    None => format!("No location found for '{arg}'; nothing deleted"),
+                }
+            }
         }
     }
 
@@ -494,6 +533,19 @@ impl Debugger {
             }
             None => vec!["No source line for the current location.".to_string()],
         }
+    }
+
+    fn do_breakpoints(&self) -> Vec<String> {
+        if self.breakpoints.is_empty() {
+            return vec!["No breakpoints set.".to_string()];
+        }
+        self.breakpoints
+            .iter()
+            .map(|&addr| match self.assembler.source_loc(addr) {
+                Some(loc) => format!("0x{addr:x}  {}:{}", loc.file, loc.line),
+                None => format!("0x{addr:x}  (no source line)"),
+            })
+            .collect()
     }
 
     fn current_file(&self) -> Option<String> {
@@ -581,8 +633,10 @@ stepi         si, stepi                        Execute exactly one instruction, 
 continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
 run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
+delete        d, delete, d <line>, d <label>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
+breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
 list          l, list                          Print source lines around the current PC.
 help          h, help, ?                       Show this help.
 quit          q, quit, exit                    Exit the debugger.
@@ -727,6 +781,18 @@ Text\tBYTE\t\"Hi\",0
         assert_eq!(parse_command("backtrace"), Ok(Command::State));
         assert_eq!(parse_command("info reg"), Ok(Command::State));
         assert_eq!(parse_command("info registers"), Ok(Command::State));
+        assert_eq!(
+            parse_command("d 10"),
+            Ok(Command::Delete(Some("10".to_string())))
+        );
+        assert_eq!(
+            parse_command("delete 10"),
+            Ok(Command::Delete(Some("10".to_string())))
+        );
+        assert_eq!(parse_command("d"), Ok(Command::Delete(None)));
+        assert_eq!(parse_command("delete"), Ok(Command::Delete(None)));
+        assert_eq!(parse_command("info break"), Ok(Command::Breakpoints));
+        assert_eq!(parse_command("info breakpoints"), Ok(Command::Breakpoints));
         assert_eq!(parse_command("l"), Ok(Command::List));
         assert_eq!(parse_command("list"), Ok(Command::List));
         assert_eq!(parse_command("q"), Ok(Command::Quit));
@@ -752,6 +818,8 @@ Text\tBYTE\t\"Hi\",0
         assert!(joined.contains("print"));
         assert!(joined.contains("quit"));
         assert!(joined.contains("help"));
+        assert!(joined.contains("delete"));
+        assert!(joined.contains("info break"));
     }
 
     /// `next` lands on the head of the next source line every time, never
@@ -889,6 +957,87 @@ Text\tBYTE\t\"Hi\",0
         assert!(
             stop.starts_with("stack.mms:11\t"),
             "run must stop at the line-11 breakpoint, got {stop:?}"
+        );
+    }
+
+    #[test]
+    fn breakpoints_listing_reports_none_then_both() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["No breakpoints set.".to_string()]
+        );
+        dbg.execute(Command::Break("8".to_string()));
+        dbg.execute(Command::Break("11".to_string()));
+        let listing = dbg.execute(Command::Breakpoints);
+        assert_eq!(
+            listing,
+            vec![
+                "0x100  stack.mms:8".to_string(),
+                "0x118  stack.mms:11".to_string(),
+            ]
+        );
+    }
+
+    /// Deleting one of two breakpoints by line number stops it from firing
+    /// while the other still does — the test that goes red on revert.
+    #[test]
+    fn delete_by_line_removes_only_that_breakpoint() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("8".to_string()));
+        dbg.execute(Command::Break("11".to_string()));
+        dbg.execute(Command::Delete(Some("8".to_string())));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x118);
+        assert!(
+            stop.starts_with("stack.mms:11\t"),
+            "must stop at the remaining breakpoint, not the deleted one, got {stop:?}"
+        );
+    }
+
+    /// `delete`'s label path, otherwise unproven by the line-number tests.
+    #[test]
+    fn delete_by_label_removes_the_breakpoint() {
+        let mut dbg = Debugger::load(assemble(CALL_PROGRAM, "call.mms"));
+        dbg.execute(Command::Break("Main".to_string()));
+        dbg.execute(Command::Delete(Some("Main".to_string())));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert!(
+            stop.starts_with("Program exited"),
+            "a deleted label breakpoint must no longer fire, got {stop:?}"
+        );
+    }
+
+    #[test]
+    fn delete_with_no_argument_clears_every_breakpoint() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("8".to_string()));
+        dbg.execute(Command::Break("11".to_string()));
+        let msg = dbg.execute(Command::Delete(None));
+        assert_eq!(msg, vec!["Deleted 2 breakpoint(s).".to_string()]);
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert!(
+            stop.starts_with("Program exited"),
+            "clearing every breakpoint must let the program run to completion, got {stop:?}"
+        );
+    }
+
+    /// An unresolvable argument and a resolvable one with no breakpoint set
+    /// there both leave `self.breakpoints` untouched, proven by a subsequent
+    /// run still stopping at the real breakpoint.
+    #[test]
+    fn delete_with_no_effect_leaves_breakpoints_unchanged() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("11".to_string()));
+        // Line 999 has no mapped address: unresolvable.
+        dbg.execute(Command::Delete(Some("999".to_string())));
+        // Line 9 resolves, but no breakpoint sits there.
+        dbg.execute(Command::Delete(Some("9".to_string())));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x118);
+        assert!(
+            stop.starts_with("stack.mms:11\t"),
+            "no-op deletes must not disturb the real breakpoint, got {stop:?}"
         );
     }
 
