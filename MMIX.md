@@ -121,7 +121,7 @@ All floating-point instructions use IEEE 754 double precision. Results honor the
 | `2` | `ROUND_UP` | Round toward +∞ |
 | `3` | `ROUND_DOWN` | Round toward −∞ |
 
-Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FINT`, `FIX`, `FIXU`, `SFLOT`, `SFLOTI`, `SFLOTU`, `SFLOTUI`, `STSF`, `STSFI`. **Known gap:** `FLOT`, `FLOTI`, `FLOTU` and `FLOTUI` always round to nearest and ignore the mode.
+Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FINT`, `FIX`, `FIXU`, `FLOT`, `FLOTI`, `FLOTU`, `FLOTUI`, `SFLOT`, `SFLOTI`, `SFLOTU`, `SFLOTUI`, `STSF`, `STSFI`.
 
 **Known gap:** MMIX lets `FSQRT`, `FINT` and the conversion instructions override the mode through the `Y` field. checksmix ignores `Y` on all of them and always uses `rA`.
 
@@ -273,7 +273,7 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `DIVI` | `DIV $X, $Y, Z` | Divide signed immediate |
 | `DIVU` | `DIVU $X, $Y, $Z` | Divide unsigned |
 | `DIVUI` | `DIVU $X, $Y, Z` | Divide unsigned immediate |
-| `FCMP` | `FCMP $X, $Y, $Z` | Floating compare: `$X` = −1/0/+1 |
+| `FCMP` | `FCMP $X, $Y, $Z` | Floating compare: `$X` = −1/0/+1; unordered operands give 0 and raise I |
 | `FUN` | `FUN $X, $Y, $Z` | Floating unordered: `$X` = 1 if NaN |
 | `FEQL` | `FEQL $X, $Y, $Z` | Floating equal: `$X` = 1 if equal |
 | `FCMPE` | `FCMPE $X, $Y, $Z` | Floating compare with epsilon (rE) |
@@ -283,11 +283,11 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `FSUB` | `FSUB $X, $Y, $Z` | Floating subtract (honors rA rounding) |
 | `FMUL` | `FMUL $X, $Y, $Z` | Floating multiply (honors rA rounding) |
 | `FDIV` | `FDIV $X, $Y, $Z` | Floating divide (honors rA rounding) |
-| `FREM` | `FREM $X, $Y, $Z` | Floating remainder (IEEE 754 round-half-to-even) |
+| `FREM` | `FREM $X, $Y, $Z` | Floating remainder (IEEE 754 round-half-to-even); a zero remainder takes the dividend's sign |
 | `FSQRT` | `FSQRT $X, $Y, $Z` | Floating square root (honors rA rounding; Y = mode override) |
 | `FINT` | `FINT $X, $Y, $Z` | Round float to integer (honors rA rounding; Y = mode override) |
 | `FIX` | `FIX $X, $Y, $Z` | Convert float → signed integer (honors rA rounding) |
-| `FIXU` | `FIXU $X, $Y, $Z` | Convert float → unsigned integer (honors rA rounding) |
+| `FIXU` | `FIXU $X, $Y, $Z` | Convert float → unsigned integer, reduced mod 2^64 (honors rA rounding) |
 | `FLOT` | `FLOT $X, $Y, $Z` | Convert signed integer → float (honors rA rounding) |
 | `FLOTI` | `FLOT $X, $Y, Z` | Convert signed integer → float immediate |
 | `FLOTU` | `FLOTU $X, $Y, $Z` | Convert unsigned integer → float (honors rA rounding) |
