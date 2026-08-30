@@ -979,14 +979,32 @@ Text\tBYTE\t\"Hi\",0
         );
     }
 
+    /// A breakpoint on a label bound to a bare `LOC` (no instruction or data
+    /// emitted there) lists with no resolvable source line.
+    #[test]
+    fn breakpoints_listing_shows_no_source_line_for_an_unmapped_address() {
+        let source = "\
+        LOC     #100
+Main    TRAP    0,Halt,0
+Gap     LOC     #300
+";
+        let mut dbg = Debugger::load(assemble(source, "gap.mms"));
+        dbg.execute(Command::Break("Gap".to_string()));
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["0x300  (no source line)".to_string()]
+        );
+    }
+
     /// Deleting one of two breakpoints by line number stops it from firing
-    /// while the other still does — the test that goes red on revert.
+    /// while the other still does.
     #[test]
     fn delete_by_line_removes_only_that_breakpoint() {
         let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
         dbg.execute(Command::Break("8".to_string()));
         dbg.execute(Command::Break("11".to_string()));
-        dbg.execute(Command::Delete(Some("8".to_string())));
+        let msg = dbg.execute(Command::Delete(Some("8".to_string())));
+        assert_eq!(msg, vec!["Deleted breakpoint at 0x100 (8)".to_string()]);
         let stop = dbg.execute(Command::Run).join("\n");
         assert_eq!(dbg.mmix.get_pc(), 0x118);
         assert!(
@@ -995,7 +1013,8 @@ Text\tBYTE\t\"Hi\",0
         );
     }
 
-    /// `delete`'s label path, otherwise unproven by the line-number tests.
+    /// Deleting a breakpoint set on a label, rather than a line number,
+    /// stops it from firing.
     #[test]
     fn delete_by_label_removes_the_breakpoint() {
         let mut dbg = Debugger::load(assemble(CALL_PROGRAM, "call.mms"));
@@ -1022,17 +1041,25 @@ Text\tBYTE\t\"Hi\",0
         );
     }
 
-    /// An unresolvable argument and a resolvable one with no breakpoint set
-    /// there both leave `self.breakpoints` untouched, proven by a subsequent
-    /// run still stopping at the real breakpoint.
+    /// An unresolvable `delete` argument, and a resolvable one with no
+    /// breakpoint currently set there, both leave existing breakpoints
+    /// untouched.
     #[test]
     fn delete_with_no_effect_leaves_breakpoints_unchanged() {
         let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
         dbg.execute(Command::Break("11".to_string()));
         // Line 999 has no mapped address: unresolvable.
-        dbg.execute(Command::Delete(Some("999".to_string())));
+        let unresolvable = dbg.execute(Command::Delete(Some("999".to_string())));
+        assert_eq!(
+            unresolvable,
+            vec!["No location found for '999'; nothing deleted".to_string()]
+        );
         // Line 9 resolves, but no breakpoint sits there.
-        dbg.execute(Command::Delete(Some("9".to_string())));
+        let no_breakpoint = dbg.execute(Command::Delete(Some("9".to_string())));
+        assert_eq!(
+            no_breakpoint,
+            vec!["No breakpoint at 0x110 (9)".to_string()]
+        );
         let stop = dbg.execute(Command::Run).join("\n");
         assert_eq!(dbg.mmix.get_pc(), 0x118);
         assert!(
