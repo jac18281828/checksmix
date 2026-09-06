@@ -298,18 +298,18 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `FMUL` | `FMUL $X, $Y, $Z` | Floating multiply (honors rA rounding) |
 | `FDIV` | `FDIV $X, $Y, $Z` | Floating divide (honors rA rounding) |
 | `FREM` | `FREM $X, $Y, $Z` | Floating remainder (IEEE 754 round-half-to-even); a zero remainder takes the dividend's sign |
-| `FSQRT` | `FSQRT $X, $Y, $Z` | Floating square root (honors rA rounding; Y = mode override) |
-| `FINT` | `FINT $X, $Y, $Z` | Round float to integer (honors rA rounding; Y = mode override) |
-| `FIX` | `FIX $X, $Y, $Z` | Convert float → signed integer (honors rA rounding) |
-| `FIXU` | `FIXU $X, $Y, $Z` | Convert float → unsigned integer, reduced mod 2^64 (honors rA rounding) |
-| `FLOT` | `FLOT $X, $Y, $Z` | Convert signed integer → float (honors rA rounding) |
-| `FLOTI` | `FLOT $X, $Y, Z` | Convert signed integer → float immediate |
-| `FLOTU` | `FLOTU $X, $Y, $Z` | Convert unsigned integer → float (honors rA rounding) |
-| `FLOTUI` | `FLOTU $X, $Y, Z` | Convert unsigned integer → float immediate |
-| `SFLOT` | `SFLOT $X, $Y, $Z` | Convert signed integer → short float (honors rA rounding) |
-| `SFLOTI` | `SFLOT $X, $Y, Z` | Convert signed integer → short float immediate |
-| `SFLOTU` | `SFLOTU $X, $Y, $Z` | Convert unsigned integer → short float (honors rA rounding) |
-| `SFLOTUI` | `SFLOTU $X, $Y, Z` | Convert unsigned integer → short float immediate |
+| `FSQRT` | `FSQRT $X, $Z` / `FSQRT $X, Y, $Z` | Floating square root (honors rA rounding; Y = mode override) |
+| `FINT` | `FINT $X, $Z` / `FINT $X, Y, $Z` | Round float to integer (honors rA rounding; Y = mode override) |
+| `FIX` | `FIX $X, $Z` / `FIX $X, Y, $Z` | Convert float → signed integer (honors rA rounding; Y = mode override) |
+| `FIXU` | `FIXU $X, $Z` / `FIXU $X, Y, $Z` | Convert float → unsigned integer, reduced mod 2^64 (honors rA rounding; Y = mode override) |
+| `FLOT` | `FLOT $X, $Z` / `FLOT $X, Y, $Z` | Convert signed integer → float (honors rA rounding; Y = mode override) |
+| `FLOTI` | `FLOT $X, Z` / `FLOT $X, Y, Z` | Convert signed integer → float immediate (honors rA rounding; Y = mode override) |
+| `FLOTU` | `FLOTU $X, $Z` / `FLOTU $X, Y, $Z` | Convert unsigned integer → float (honors rA rounding; Y = mode override) |
+| `FLOTUI` | `FLOTU $X, Z` / `FLOTU $X, Y, Z` | Convert unsigned integer → float immediate (honors rA rounding; Y = mode override) |
+| `SFLOT` | `SFLOT $X, $Z` / `SFLOT $X, Y, $Z` | Convert signed integer → short float (honors rA rounding; Y = mode override) |
+| `SFLOTI` | `SFLOT $X, Z` / `SFLOT $X, Y, Z` | Convert signed integer → short float immediate (honors rA rounding; Y = mode override) |
+| `SFLOTU` | `SFLOTU $X, $Z` / `SFLOTU $X, Y, $Z` | Convert unsigned integer → short float (honors rA rounding; Y = mode override) |
+| `SFLOTUI` | `SFLOTU $X, Z` / `SFLOTU $X, Y, Z` | Convert unsigned integer → short float immediate (honors rA rounding; Y = mode override) |
 | `CMP` | `CMP $X, $Y, $Z` | Compare signed: `$X` = −1/0/+1 |
 | `CMPI` | `CMP $X, $Y, Z` | Compare signed immediate |
 | `CMPU` | `CMPU $X, $Y, $Z` | Compare unsigned: `$X` = −1/0/+1 |

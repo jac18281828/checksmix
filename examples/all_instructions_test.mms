@@ -2400,7 +2400,9 @@ Test189 ADDUI   TestNum,TestNum,1
         FLOTI   $11,11
         FLOTI   $12,2             % epsilon = 2.0
         PUT     rE,$12
-        FEQLE   Result,$10,$11         % |10-11| = 1 ≤ 2 → 1
+        FEQLE   Result,$10,$11         % 10's raw exponent field is 1025, so
+                                        % Nε's radius is 2.0*2^3=16; |10-11|=1
+                                        % is within it both directions → 1
         SETI Expect,1
         CMP     Temp,Result,Expect
         PBZ     Temp,Test190

@@ -1443,7 +1443,20 @@ impl MMix {
         } else {
             let e = (v.to_bits() >> 52) & 0x7FF;
             let scale = if e == 0 { -1021 } else { e as i32 - 1022 };
-            (u - v).abs() <= epsilon * 2f64.powi(scale)
+            // `2f64.powi(scale)` overflows to `inf` at the top binade
+            // (scale == 1024), turning a finite radius into "everything" or,
+            // with epsilon == 0.0, into NaN. Scale the difference down by
+            // `2^-scale` instead of scaling epsilon up by `2^scale`, and
+            // split that exponent into two normal-range powers rather than
+            // one call that can itself land on a subnormal (`2^-1024`):
+            // `f64::powi`'s squaring can lose that subnormal's few bits of
+            // precision before the multiply with `diff` ever happens.
+            // Applying each half in turn keeps every intermediate value in
+            // the normal range, since `diff` and `2^scale` share the same
+            // binade by construction.
+            let half = -scale / 2;
+            let rest = -scale - half;
+            (u - v).abs() * 2f64.powi(half) * 2f64.powi(rest) <= epsilon
         }
     }
 
@@ -9935,6 +9948,165 @@ Main\tSETI\t$1,100
         assert_eq!(handle.diagnostics().len(), 1);
         assert!(handle.diagnostics()[0].contains("FLOTI"));
         assert!(handle.diagnostics()[0].contains("Y=5"));
+    }
+
+    #[test]
+    fn test_fsqrt_y_greater_than_four_halts_with_diagnostic() {
+        // The Y>4 halt is wired at four distinct read sites (decision 9);
+        // FLOTI above pins the FLOT/i2f_conv_ri! site, this pins FSQRT's
+        // separate finalize_fp_unop site.
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.write_tetra(0, 0x15010502); // FSQRT $1,5,$2 (Y=5, illegal)
+        let should_continue = mmix.execute_instruction();
+        assert!(!should_continue);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("FSQRT"));
+        assert!(handle.diagnostics()[0].contains("Y=5"));
+    }
+
+    #[test]
+    fn test_fix_y_two_selects_round_up_not_round_off() {
+        // Y=2 (ROUND_UP) must map to rA mode 2, not `Y-1`'s mode 1
+        // (ROUND_OFF) — decision 8's forbidden mapping. rA holds ROUND_OFF
+        // already, so the two mappings coincide unless Y's own value (2)
+        // is honored: ceil(2.5)=3 under the correct mapping's ROUND_UP,
+        // trunc(2.5)=2 under the forbidden Y-1 mapping (indistinguishable
+        // from rA's own ROUND_OFF, i.e. Y ignored).
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT); // ROUND_OFF
+        mmix.set_register(2, 2.5f64.to_bits());
+        mmix.write_tetra(0, 0x05010202); // FIX $1,2,$2 (Y=ROUND_UP)
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, 3);
+    }
+
+    #[test]
+    fn test_fcmpe_denormal_radius_pins_exact_constant() {
+        // Both operands are denormal (raw exponent field 0), placing the
+        // gap strictly between the off-by-one radius 2^-1022*ε and the
+        // correct radius 2^-1021*ε — only the correct constant reports 0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.1f64.to_bits());
+        mmix.set_register(2, 1.5e-308f64.to_bits());
+        mmix.set_register(3, 1.83e-308f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_fcmpe_infinite_neighborhood_epsilon_below_one() {
+        // Nε(+∞) = {+∞} only when ε < 1: a finite value is never close to
+        // +∞ and the ordinary sign compare applies.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.5f64.to_bits());
+        mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, f64::INFINITY.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1);
+    }
+
+    #[test]
+    fn test_fcmpe_infinite_neighborhood_epsilon_one_to_two() {
+        // Nε(+∞) = everything except -∞ when 1 ≤ ε < 2: a finite value is
+        // close to +∞, but -∞ itself is not — the "except" half, which a
+        // mutation collapsing this branch to unconditional "everything"
+        // (ε ≥ 2's behavior) would not catch on the finite vector alone.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 1.5f64.to_bits());
+        mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, f64::INFINITY.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+
+        let mut opposite = MMix::new();
+        opposite.set_special(SpecialReg::RE, 1.5f64.to_bits());
+        opposite.set_register(2, f64::NEG_INFINITY.to_bits());
+        opposite.set_register(3, f64::INFINITY.to_bits());
+        opposite.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(opposite.execute_instruction());
+        assert_eq!(opposite.get_register(1) as i64, -1);
+    }
+
+    #[test]
+    fn test_feqle_stronger_than_fcmpe_asymmetric_binade() {
+        // 4.0 sits at the start of a binade twice as wide as 3.99's; the
+        // gap fits inside 4.0's radius but not inside 3.99's, so
+        // 3.99 ∈ Nε(4.0) while 4.0 ∉ Nε(3.99) — FCMPE's OR is satisfied
+        // (∼ holds) but FEQLE's AND (≈) is not. An &&-to-|| mutation in
+        // FEQLE's arm would survive without this test.
+        let mut fcmpe = MMix::new();
+        fcmpe.set_special(SpecialReg::RE, 0.002f64.to_bits());
+        fcmpe.set_register(2, 3.99f64.to_bits());
+        fcmpe.set_register(3, 4.0f64.to_bits());
+        fcmpe.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(fcmpe.execute_instruction());
+        assert_eq!(fcmpe.get_register(1), 0);
+
+        let mut feqle = MMix::new();
+        feqle.set_special(SpecialReg::RE, 0.002f64.to_bits());
+        feqle.set_register(2, 3.99f64.to_bits());
+        feqle.set_register(3, 4.0f64.to_bits());
+        feqle.write_tetra(0, 0x13010203); // FEQLE $1,$2,$3
+        assert!(feqle.execute_instruction());
+        assert_eq!(feqle.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_feqle_nan_operand_forces_zero_and_raises_invalid() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.1f64.to_bits());
+        mmix.set_register(2, f64::NAN.to_bits());
+        mmix.set_register(3, 5.0f64.to_bits());
+        mmix.write_tetra(0, 0x13010203); // FEQLE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+    }
+
+    #[test]
+    fn test_fcmpe_reflexive_at_top_binade_zero_epsilon() {
+        // f64::MAX's raw exponent field is 2046, the top binade, where
+        // `2^(e-1022)` is `2^1024` — unrepresentable, and `0.0 * inf` is
+        // NaN. Reflexivity must still hold: a value is always in its own
+        // Nε-neighborhood, so FCMPE(v, v) is 0 even with ε = 0.0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.0f64.to_bits());
+        mmix.set_register(2, f64::MAX.to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, 0);
+    }
+
+    #[test]
+    fn test_feqle_reflexive_at_top_binade_zero_epsilon() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.0f64.to_bits());
+        mmix.set_register(2, f64::MAX.to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.write_tetra(0, 0x13010203); // FEQLE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 1);
+    }
+
+    #[test]
+    fn test_fcmpe_top_binade_radius_stays_finite_not_infinite() {
+        // Both operands are huge and finite (top binade), but far enough
+        // apart that the correct, finite radius (ε * 2^1024, computed
+        // without materializing the unrepresentable literal `2^1024`)
+        // does not cover the gap — an `inf`-radius implementation would
+        // wrongly call this pair close (0) for any ε > 0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 1e-300f64.to_bits());
+        mmix.set_register(2, (f64::MAX / 2.0).to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1);
     }
 
     #[test]

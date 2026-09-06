@@ -5729,6 +5729,33 @@ ZSEVI $7,$8,128
     }
 
     #[test]
+    fn test_flot_rejects_register_in_y_slot() {
+        // Decision 6 narrows Y from `register` to `expr_value`-only; the
+        // retired register-Y spelling this task displaced must now fail
+        // to parse, not silently reinterpret $2's register number as a
+        // rounding-mode value.
+        let mut asm = MMixAssembler::new("FLOT $1,$2,$3", "<test>");
+        assert!(
+            asm.parse().is_err(),
+            "a register in FLOT's Y slot must no longer parse"
+        );
+    }
+
+    #[test]
+    fn test_round_mode_symbols_resolve_to_documented_values() {
+        // mmixal.w:2003-2012's predefined-symbol table, independent of
+        // rA's own persistent-mode numbering (decision 8).
+        let asm = MMixAssembler::new("", "<test>");
+        for (name, value) in [("ROUND_OFF", 1u64), ("ROUND_UP", 2), ("ROUND_DOWN", 3)] {
+            assert_eq!(
+                asm.symbols.get(name).copied(),
+                Some(SymbolType::Constant(value)),
+                "{name} must resolve to {value}"
+            );
+        }
+    }
+
+    #[test]
     fn test_lda_selects_addus_two_opcodes() {
         assert_first_instruction("LDA $1,$2,$3", MMixInstruction::LDA(1, 2, 3));
         assert_first_instruction("LDA $1,$2,3", MMixInstruction::LDAI(1, 2, 3));
