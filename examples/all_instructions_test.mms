@@ -1249,8 +1249,8 @@ Test100 ADDUI   TestNum,TestNum,1
 % ========================================
 Test101 ADDUI   TestNum,TestNum,1
         SETI $10,42
-        FLOT    Result,Zero,$10
-        FLOT    Expect,Zero,$10 % 42.0 in floating point
+        FLOT    Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
+        FLOT    Expect,$10 % 2-operand form (Y implicit 0); 42.0 in floating point
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test102
         JMP     TestFail
@@ -1259,8 +1259,8 @@ Test101 ADDUI   TestNum,TestNum,1
 % Test 102: FLOTI - Float from immediate
 % ========================================
 Test102 ADDUI   TestNum,TestNum,1
-        FLOTI   Result,Zero,100
-        FLOTI   Expect,Zero,100
+        FLOTI   Result,ROUND_NEAR,100  % 3-operand form (Y forced)
+        FLOTI   Expect,100             % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test103
         JMP     TestFail
@@ -1270,8 +1270,8 @@ Test102 ADDUI   TestNum,TestNum,1
 % ========================================
 Test103 ADDUI   TestNum,TestNum,1
         SETI $10,1000
-        FLOTU   Result,Zero,$10
-        FLOTU   Expect,Zero,$10
+        FLOTU   Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
+        FLOTU   Expect,$10             % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test104
         JMP     TestFail
@@ -1280,8 +1280,8 @@ Test103 ADDUI   TestNum,TestNum,1
 % Test 104: FLOTUI - Float from unsigned immediate
 % ========================================
 Test104 ADDUI   TestNum,TestNum,1
-        FLOTUI  Result,Zero,255
-        FLOTUI  Expect,Zero,255
+        FLOTUI  Result,ROUND_NEAR,255  % 3-operand form (Y forced)
+        FLOTUI  Expect,255             % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test105
         JMP     TestFail
@@ -1291,8 +1291,8 @@ Test104 ADDUI   TestNum,TestNum,1
 % ========================================
 Test105 ADDUI   TestNum,TestNum,1
         SETI $10,7
-        SFLOT   Result,Zero,$10
-        SFLOT   Expect,Zero,$10
+        SFLOT   Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
+        SFLOT   Expect,$10             % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test106
         JMP     TestFail
@@ -1301,8 +1301,8 @@ Test105 ADDUI   TestNum,TestNum,1
 % Test 106: SFLOTI - Short float from immediate
 % ========================================
 Test106 ADDUI   TestNum,TestNum,1
-        SFLOTI  Result,Zero,13
-        SFLOTI  Expect,Zero,13
+        SFLOTI  Result,ROUND_NEAR,13   % 3-operand form (Y forced)
+        SFLOTI  Expect,13              % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test107
         JMP     TestFail
@@ -1312,8 +1312,8 @@ Test106 ADDUI   TestNum,TestNum,1
 % ========================================
 Test107 ADDUI   TestNum,TestNum,1
         SETI $10,99
-        SFLOTU  Result,Zero,$10
-        SFLOTU  Expect,Zero,$10
+        SFLOTU  Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
+        SFLOTU  Expect,$10             % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test108
         JMP     TestFail
@@ -1322,8 +1322,8 @@ Test107 ADDUI   TestNum,TestNum,1
 % Test 108: SFLOTUI - Short float from unsigned immediate
 % ========================================
 Test108 ADDUI   TestNum,TestNum,1
-        SFLOTUI Result,Zero,77
-        SFLOTUI Expect,Zero,77
+        SFLOTUI Result,ROUND_NEAR,77   % 3-operand form (Y forced)
+        SFLOTUI Expect,77              % 2-operand form (Y implicit 0)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test109
         JMP     TestFail
@@ -1332,10 +1332,10 @@ Test108 ADDUI   TestNum,TestNum,1
 % Test 109: FADD - Floating point add
 % ========================================
 Test109 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,10
-        FLOTI   $11,Zero,20
+        FLOTI   $10,10
+        FLOTI   $11,20
         FADD    Result,$10,$11
-        FLOTI   Expect,Zero,30
+        FLOTI   Expect,30
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test110
         JMP     TestFail
@@ -1344,10 +1344,10 @@ Test109 ADDUI   TestNum,TestNum,1
 % Test 110: FSUB - Floating point subtract
 % ========================================
 Test110 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,100
-        FLOTI   $11,Zero,42
+        FLOTI   $10,100
+        FLOTI   $11,42
         FSUB    Result,$10,$11
-        FLOTI   Expect,Zero,58
+        FLOTI   Expect,58
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test111
         JMP     TestFail
@@ -1356,10 +1356,10 @@ Test110 ADDUI   TestNum,TestNum,1
 % Test 111: FMUL - Floating point multiply
 % ========================================
 Test111 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,5
-        FLOTI   $11,Zero,7
+        FLOTI   $10,5
+        FLOTI   $11,7
         FMUL    Result,$10,$11
-        FLOTI   Expect,Zero,35
+        FLOTI   Expect,35
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test112
         JMP     TestFail
@@ -1368,10 +1368,10 @@ Test111 ADDUI   TestNum,TestNum,1
 % Test 112: FDIV - Floating point divide
 % ========================================
 Test112 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,100
-        FLOTI   $11,Zero,4
+        FLOTI   $10,100
+        FLOTI   $11,4
         FDIV    Result,$10,$11
-        FLOTI   Expect,Zero,25
+        FLOTI   Expect,25
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test113
         JMP     TestFail
@@ -1380,8 +1380,8 @@ Test112 ADDUI   TestNum,TestNum,1
 % Test 113: FCMP - Floating point compare
 % ========================================
 Test113 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,50
-        FLOTI   $11,Zero,50
+        FLOTI   $10,50
+        FLOTI   $11,50
         FCMP    Result,$10,$11
         SETI Expect,0        % Equal
         CMP     Temp,Result,Expect
@@ -1392,8 +1392,8 @@ Test113 ADDUI   TestNum,TestNum,1
 % Test 114: FEQL - Floating point equal
 % ========================================
 Test114 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,77
-        FLOTI   $11,Zero,77
+        FLOTI   $10,77
+        FLOTI   $11,77
         FEQL    Result,$10,$11
         SETI Expect,1        % True (equal)
         CMP     Temp,Result,Expect
@@ -1404,8 +1404,8 @@ Test114 ADDUI   TestNum,TestNum,1
 % Test 115: FUN - Floating point unordered
 % ========================================
 Test115 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,100
-        FLOTI   $11,Zero,200
+        FLOTI   $10,100
+        FLOTI   $11,200
         FUN     Result,$10,$11
         SETI Expect,0        % False (both are ordered numbers)
         CMP     Temp,Result,Expect
@@ -1416,9 +1416,12 @@ Test115 ADDUI   TestNum,TestNum,1
 % Test 116: FIX - Fix (float to int)
 % ========================================
 Test116 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,42
-        FIX     Result,Zero,$10
+        FLOTI   $10,42
+        FIX     Result,$10             % 2-operand form (Y implicit 0)
         SETI Expect,42
+        CMP     Temp,Result,Expect
+        PBNZ    Temp,TestFail
+        FIX     Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
         CMP     Temp,Result,Expect
         PBZ     Temp,Test117
         JMP     TestFail
@@ -1427,9 +1430,12 @@ Test116 ADDUI   TestNum,TestNum,1
 % Test 117: FIXU - Fix unsigned (float to unsigned int)
 % ========================================
 Test117 ADDUI   TestNum,TestNum,1
-        FLOTUI  $10,Zero,200
-        FIXU    Result,Zero,$10
+        FLOTUI  $10,200
+        FIXU    Result,$10             % 2-operand form (Y implicit 0)
         SETI Expect,200
+        CMP     Temp,Result,Expect
+        PBNZ    Temp,TestFail
+        FIXU    Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
         CMP     Temp,Result,Expect
         PBZ     Temp,Test118
         JMP     TestFail
@@ -1438,9 +1444,12 @@ Test117 ADDUI   TestNum,TestNum,1
 % Test 118: FSQRT - Floating point square root
 % ========================================
 Test118 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,16
-        FSQRT   Result,Zero,$10
-        FLOTI   Expect,Zero,4
+        FLOTI   $10,16
+        FSQRT   Result,$10             % 2-operand form (Y implicit 0)
+        FLOTI   Expect,4
+        FCMP    Temp,Result,Expect
+        PBNZ    Temp,TestFail
+        FSQRT   Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test119
         JMP     TestFail
@@ -1449,9 +1458,12 @@ Test118 ADDUI   TestNum,TestNum,1
 % Test 119: FINT - Floating point integer part
 % ========================================
 Test119 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,42
-        FINT    Result,Zero,$10
-        FLOTI   Expect,Zero,42
+        FLOTI   $10,42
+        FINT    Result,$10             % 2-operand form (Y implicit 0)
+        FLOTI   Expect,42
+        FCMP    Temp,Result,Expect
+        PBNZ    Temp,TestFail
+        FINT    Result,ROUND_NEAR,$10  % 3-operand form (Y forced)
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test120
         JMP     TestFail
@@ -1460,10 +1472,10 @@ Test119 ADDUI   TestNum,TestNum,1
 % Test 120: FREM - Floating point remainder
 % ========================================
 Test120 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,10
-        FLOTI   $11,Zero,3
+        FLOTI   $10,10
+        FLOTI   $11,3
         FREM    Result,$10,$11
-        FLOTI   Expect,Zero,1
+        FLOTI   Expect,1
         FCMP    Temp,Result,Expect
         PBZ     Temp,Test121
         JMP     TestFail
@@ -2355,9 +2367,9 @@ Test186Skip
 % Test 187: FCMPE - Floating compare with epsilon (rE)
 % ========================================
 Test187 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,5             % $10 = 5.0
-        FLOTI   $11,Zero,5             % $11 = 5.0
-        FLOTI   $12,Zero,1             % $12 = 1.0 epsilon
+        FLOTI   $10,5             % $10 = 5.0
+        FLOTI   $11,5             % $11 = 5.0
+        FLOTI   $12,1             % $12 = 1.0 epsilon
         PUT     rE,$12
         FCMPE   Result,$10,$11         % 5.0 vs 5.0 within rE → 0
         SETI Expect,0
@@ -2369,11 +2381,13 @@ Test187 ADDUI   TestNum,TestNum,1
 % Test 188: FUNE - Floating unordered with epsilon
 % ========================================
 Test188 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,1
-        FLOTI   $11,Zero,2
+        FLOTI   $10,1
+        FLOTI   $11,2
         PUT     rE,$10                 % rE = 1.0
-        FUNE    Result,$10,$11         % |1-2| = 1 ≤ 1 → 1
-        SETI Expect,1
+        FUNE    Result,$10,$11         % neither operand nor rE is
+                                        % exceptional (no NaN, rE not
+                                        % negative) → 0
+        SETI Expect,0
         CMP     Temp,Result,Expect
         PBZ     Temp,Test189
         JMP     TestFail
@@ -2382,9 +2396,9 @@ Test188 ADDUI   TestNum,TestNum,1
 % Test 189: FEQLE - Floating equivalence with epsilon
 % ========================================
 Test189 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,10
-        FLOTI   $11,Zero,11
-        FLOTI   $12,Zero,2             % epsilon = 2.0
+        FLOTI   $10,10
+        FLOTI   $11,11
+        FLOTI   $12,2             % epsilon = 2.0
         PUT     rE,$12
         FEQLE   Result,$10,$11         % |10-11| = 1 ≤ 2 → 1
         SETI Expect,1
@@ -2398,7 +2412,7 @@ Test189 ADDUI   TestNum,TestNum,1
 %   but to next_up(1.0) under ROUND_UP — they must differ.
 % ========================================
 Test190 ADDUI   TestNum,TestNum,1
-        FLOTI   $10,Zero,1             % 1.0
+        FLOTI   $10,1                  % 1.0
         GETA    $13,FpStdData
         LDOI    $11,$13,0              % 2^-53 from data
         PUTI    rA,0                   % ROUND_NEAR
@@ -2420,7 +2434,7 @@ Test191 ADDUI   TestNum,TestNum,1
         PUTI    rA,0                   % clear flags
         GETA    $13,FpStdData
         LDOI    $10,$13,8              % sNaN bit pattern
-        FLOTI   $11,Zero,1             % 1.0
+        FLOTI   $11,1                  % 1.0
         FADD    $12,$10,$11            % NaN, raises I
         GET     Result,rA
         SETI    $15,#10                % I bit
@@ -2436,8 +2450,8 @@ Test191 ADDUI   TestNum,TestNum,1
 % ========================================
 Test192 ADDUI   TestNum,TestNum,1
         PUTI    rA,0                   % clear flags
-        FLOTI   $10,Zero,1
-        FLOTI   $11,Zero,3
+        FLOTI   $10,1
+        FLOTI   $11,3
         FDIV    $12,$10,$11            % 1/3 inexact
         GET     Result,rA
         SETI    $15,#01                % X bit
@@ -3399,23 +3413,23 @@ Test262b STCO   77,$10,136      % base spelling, immediate Z
 % Test 263: the fixed-to-float conversions with an immediate Z
 % ========================================
 Test263 ADDUI   TestNum,TestNum,1
-        FLOT    $10,Zero,100    % base spelling, immediate Z
-        FLOTI   $11,Zero,100
+        FLOT    $10,100         % base spelling, immediate Z
+        FLOTI   $11,100
         CMP     Temp,$10,$11
         PBZ     Temp,Test263b
         JMP     TestFail
-Test263b FLOTU  $10,Zero,42
-        FLOTUI  $11,Zero,42
+Test263b FLOTU  $10,42
+        FLOTUI  $11,42
         CMP     Temp,$10,$11
         PBZ     Temp,Test263c
         JMP     TestFail
-Test263c SFLOT  $10,Zero,7
-        SFLOTI  $11,Zero,7
+Test263c SFLOT  $10,7
+        SFLOTI  $11,7
         CMP     Temp,$10,$11
         PBZ     Temp,Test263d
         JMP     TestFail
-Test263d SFLOTU $10,Zero,9
-        SFLOTUI $11,Zero,9
+Test263d SFLOTU $10,9
+        SFLOTUI $11,9
         CMP     Temp,$10,$11
         PBZ     Temp,Test264
         JMP     TestFail
@@ -3465,7 +3479,7 @@ Test266 ADDUI   TestNum,TestNum,1
 % ========================================
 Test267 ADDUI   TestNum,TestNum,1
         GETA    $10,SaveArea
-        FLOT    $11,Zero,25
+        FLOT    $11,25
         STSF    $11,$10,160     % base spelling, immediate Z
         LDSF    $12,$10,160     % base spelling, immediate Z
         STSFI   $11,$10,168

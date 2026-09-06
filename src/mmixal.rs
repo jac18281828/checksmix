@@ -1198,6 +1198,20 @@ impl MMixAssembler {
             Self::seed_predefined(&mut symbols, name, SymbolType::Constant(num));
         }
 
+        // Y rounding-mode override values for FIX, FIXU, FSQRT, FINT, and the
+        // FLOT/SFLOT families (mmixal.w:2003-2012). Numbered independently of
+        // rA's own persistent-mode field (`RA_ROUND_SHIFT`): rA's ROUND_NEAR
+        // is 0, but Y's is 4, since Y=0 is reserved to mean "no override".
+        for (name, mode) in [
+            ("ROUND_CURRENT", 0u64),
+            ("ROUND_OFF", 1),
+            ("ROUND_UP", 2),
+            ("ROUND_DOWN", 3),
+            ("ROUND_NEAR", 4),
+        ] {
+            Self::seed_predefined(&mut symbols, name, SymbolType::Constant(mode));
+        }
+
         // Preprocess the source to expand debug directives
         let preprocessed_source = Self::preprocess_debug(source);
 
@@ -1765,9 +1779,13 @@ impl MMixAssembler {
             Rule::inst_lda_ri => self.parse_inst_lda_ri(inner),
             Rule::inst_arith_auto => self.parse_inst_arith_auto(inner),
             Rule::inst_arith_rri => self.parse_inst_arith_rri(inner),
+            Rule::inst_flot_round => self.parse_inst_flot_round(inner),
             Rule::inst_flot_auto => self.parse_inst_flot_auto(inner),
-            Rule::inst_float_rrr => self.parse_inst_float_rrr(inner),
+            Rule::inst_float_round_rrz => self.parse_inst_float_round_rrz(inner),
+            Rule::inst_float_round_rr => self.parse_inst_float_round_rr(inner),
+            Rule::inst_float_round_rri => self.parse_inst_float_round_rri(inner),
             Rule::inst_float_rri => self.parse_inst_float_rri(inner),
+            Rule::inst_float_rrr => self.parse_inst_float_rrr(inner),
             Rule::inst_neg_auto => self.parse_inst_neg_auto(inner),
             Rule::inst_neg_rri => self.parse_inst_neg_rri(inner),
             Rule::inst_bitwise_auto => self.parse_inst_bitwise_auto(inner),
@@ -2400,10 +2418,6 @@ impl MMixAssembler {
             "FMUL" => Ok(MMixInstruction::FMUL(x, y, z)),
             "FDIV" => Ok(MMixInstruction::FDIV(x, y, z)),
             "FREM" => Ok(MMixInstruction::FREM(x, y, z)),
-            "FSQRT" => Ok(MMixInstruction::FSQRT(x, y, z)),
-            "FINT" => Ok(MMixInstruction::FINT(x, y, z)),
-            "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
-            "FIXU" => Ok(MMixInstruction::FIXU(x, y, z)),
             _ => Err(format!(
                 "Unknown floating point instruction: {}",
                 mnem.as_str()
@@ -2411,17 +2425,68 @@ impl MMixAssembler {
         }
     }
 
-    fn parse_inst_flot_auto(
+    /// `FIX`/`FIXU`/`FSQRT`/`FINT`, 3-operand form: `Y` is a rounding-mode
+    /// value (`0..=4`, `ROUND_CURRENT`/`ROUND_OFF`/`ROUND_UP`/`ROUND_DOWN`/
+    /// `ROUND_NEAR`), range-checked at runtime (`Y > 4` halts), not here —
+    /// mirrors how `NEG`'s own value-typed `Y` is parsed.
+    fn parse_inst_float_round_rrz(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let x = self.parse_register(parts.next().unwrap())?;
+        let y = self.parse_number(parts.next().unwrap())? as u8;
+        let z = self.parse_register(parts.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
+            "FIXU" => Ok(MMixInstruction::FIXU(x, y, z)),
+            "FSQRT" => Ok(MMixInstruction::FSQRT(x, y, z)),
+            "FINT" => Ok(MMixInstruction::FINT(x, y, z)),
+            _ => Err(format!(
+                "Unknown floating point instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    /// `FIX`/`FIXU`/`FSQRT`/`FINT`, 2-operand form: `Y` is implicitly 0
+    /// (`ROUND_CURRENT` — no override, use rA's mode).
+    fn parse_inst_float_round_rr(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_register(ops.next().unwrap())?;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "FIX" => Ok(MMixInstruction::FIX(x, 0, z)),
+            "FIXU" => Ok(MMixInstruction::FIXU(x, 0, z)),
+            "FSQRT" => Ok(MMixInstruction::FSQRT(x, 0, z)),
+            "FINT" => Ok(MMixInstruction::FINT(x, 0, z)),
+            _ => Err(format!(
+                "Unknown floating point instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    /// `FLOT`/`FLOTU`/`SFLOT`/`SFLOTU`, 3-operand form: `Y` forces a
+    /// rounding mode, `Z` auto-selects register or immediate.
+    fn parse_inst_flot_round(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+        let x = self.parse_register(parts.next().unwrap())?;
+        let y = self.parse_number(parts.next().unwrap())? as u8;
+        let z = self.lower_z_operand(parts.next().unwrap(), &mnem)?;
 
         match (mnem.as_str(), z) {
             ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, y, z)),
@@ -2436,6 +2501,56 @@ impl MMixAssembler {
         }
     }
 
+    /// `FLOT`/`FLOTU`/`SFLOT`/`SFLOTU`, 2-operand form: `Y` implicitly 0.
+    fn parse_inst_flot_auto(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap().as_str().to_uppercase();
+        let operands = parts.next().unwrap();
+        let mut ops = operands.into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+
+        match (mnem.as_str(), z) {
+            ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, 0, z)),
+            ("FLOT", ZForm::Imm(z)) => Ok(MMixInstruction::FLOTI(x, 0, z)),
+            ("FLOTU", ZForm::Reg(z)) => Ok(MMixInstruction::FLOTU(x, 0, z)),
+            ("FLOTU", ZForm::Imm(z)) => Ok(MMixInstruction::FLOTUI(x, 0, z)),
+            ("SFLOT", ZForm::Reg(z)) => Ok(MMixInstruction::SFLOT(x, 0, z)),
+            ("SFLOT", ZForm::Imm(z)) => Ok(MMixInstruction::SFLOTI(x, 0, z)),
+            ("SFLOTU", ZForm::Reg(z)) => Ok(MMixInstruction::SFLOTU(x, 0, z)),
+            ("SFLOTU", ZForm::Imm(z)) => Ok(MMixInstruction::SFLOTUI(x, 0, z)),
+            _ => Err(format!("Unknown float conversion instruction: {}", mnem)),
+        }
+    }
+
+    /// `FLOTI`/`FLOTUI`/`SFLOTI`/`SFLOTUI`, 3-operand form: `Y` forces a
+    /// rounding mode, `Z` stays immediate-only.
+    fn parse_inst_float_round_rri(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<MMixInstruction, String> {
+        let mut parts = pair.into_inner();
+        let mnem = parts.next().unwrap();
+        let x = self.parse_register(parts.next().unwrap())?;
+        let y = self.parse_number(parts.next().unwrap())? as u8;
+        let z = self.parse_number(parts.next().unwrap())? as u8;
+
+        match mnem.as_str().to_uppercase().as_str() {
+            "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
+            "FLOTUI" => Ok(MMixInstruction::FLOTUI(x, y, z)),
+            "SFLOTI" => Ok(MMixInstruction::SFLOTI(x, y, z)),
+            "SFLOTUI" => Ok(MMixInstruction::SFLOTUI(x, y, z)),
+            _ => Err(format!(
+                "Unknown floating point immediate instruction: {}",
+                mnem.as_str()
+            )),
+        }
+    }
+
+    /// `FLOTI`/`FLOTUI`/`SFLOTI`/`SFLOTUI`, 2-operand form: `Y` implicitly 0.
     fn parse_inst_float_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -2445,14 +2560,13 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
         let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
-            "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
-            "FLOTUI" => Ok(MMixInstruction::FLOTUI(x, y, z)),
-            "SFLOTI" => Ok(MMixInstruction::SFLOTI(x, y, z)),
-            "SFLOTUI" => Ok(MMixInstruction::SFLOTUI(x, y, z)),
+            "FLOTI" => Ok(MMixInstruction::FLOTI(x, 0, z)),
+            "FLOTUI" => Ok(MMixInstruction::FLOTUI(x, 0, z)),
+            "SFLOTI" => Ok(MMixInstruction::SFLOTI(x, 0, z)),
+            "SFLOTUI" => Ok(MMixInstruction::SFLOTUI(x, 0, z)),
             _ => Err(format!(
                 "Unknown floating point immediate instruction: {}",
                 mnem.as_str()
@@ -5482,15 +5596,17 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_auto_float_conversion_full_coverage() {
+        // Y is a rounding-mode value, not a register (decision 6); 0 here
+        // exercises Z's register/immediate auto-select, this test's point.
         let cases: &[(&str, MMixInstruction)] = &[
-            ("FLOT $1,$2,$3", MMixInstruction::FLOT(1, 2, 3)),
-            ("FLOT $1,$2,5", MMixInstruction::FLOTI(1, 2, 5)),
-            ("FLOTU $1,$2,$3", MMixInstruction::FLOTU(1, 2, 3)),
-            ("FLOTU $1,$2,5", MMixInstruction::FLOTUI(1, 2, 5)),
-            ("SFLOT $1,$2,$3", MMixInstruction::SFLOT(1, 2, 3)),
-            ("SFLOT $1,$2,5", MMixInstruction::SFLOTI(1, 2, 5)),
-            ("SFLOTU $1,$2,$3", MMixInstruction::SFLOTU(1, 2, 3)),
-            ("SFLOTU $1,$2,5", MMixInstruction::SFLOTUI(1, 2, 5)),
+            ("FLOT $1,0,$3", MMixInstruction::FLOT(1, 0, 3)),
+            ("FLOT $1,0,5", MMixInstruction::FLOTI(1, 0, 5)),
+            ("FLOTU $1,0,$3", MMixInstruction::FLOTU(1, 0, 3)),
+            ("FLOTU $1,0,5", MMixInstruction::FLOTUI(1, 0, 5)),
+            ("SFLOT $1,0,$3", MMixInstruction::SFLOT(1, 0, 3)),
+            ("SFLOT $1,0,5", MMixInstruction::SFLOTI(1, 0, 5)),
+            ("SFLOTU $1,0,$3", MMixInstruction::SFLOTU(1, 0, 3)),
+            ("SFLOTU $1,0,5", MMixInstruction::SFLOTUI(1, 0, 5)),
         ];
         for (src, expected) in cases {
             assert_first_instruction(src, expected.clone());
@@ -5533,10 +5649,10 @@ ZSEVI $7,$8,128
             ("SYNCID $1,$2,5", "SYNCIDI $1,$2,5"),
             ("GO $1,$2,5", "GOI $1,$2,5"),
             ("PUSHGO $1,$2,5", "PUSHGOI $1,$2,5"),
-            ("FLOT $1,$2,5", "FLOTI $1,$2,5"),
-            ("FLOTU $1,$2,5", "FLOTUI $1,$2,5"),
-            ("SFLOT $1,$2,5", "SFLOTI $1,$2,5"),
-            ("SFLOTU $1,$2,5", "SFLOTUI $1,$2,5"),
+            ("FLOT $1,0,5", "FLOTI $1,0,5"),
+            ("FLOTU $1,0,5", "FLOTUI $1,0,5"),
+            ("SFLOT $1,0,5", "SFLOTI $1,0,5"),
+            ("SFLOTU $1,0,5", "SFLOTUI $1,0,5"),
             ("STCO 5,$2,7", "STCOI 5,$2,7"),
             ("NEG $1,0,7", "NEGI $1,0,7"),
             ("NEGU $1,0,7", "NEGUI $1,0,7"),
@@ -5586,14 +5702,14 @@ ZSEVI $7,$8,128
             "GOI $1,$2,5",
             "PUSHGO $1,$2,$3",
             "PUSHGOI $1,$2,5",
-            "FLOT $1,$2,$3",
-            "FLOTI $1,$2,5",
-            "FLOTU $1,$2,$3",
-            "FLOTUI $1,$2,5",
-            "SFLOT $1,$2,$3",
-            "SFLOTI $1,$2,5",
-            "SFLOTU $1,$2,$3",
-            "SFLOTUI $1,$2,5",
+            "FLOT $1,0,$3",
+            "FLOTI $1,0,5",
+            "FLOTU $1,0,$3",
+            "FLOTUI $1,0,5",
+            "SFLOT $1,0,$3",
+            "SFLOTI $1,0,5",
+            "SFLOTU $1,0,$3",
+            "SFLOTUI $1,0,5",
             "STCO 5,$2,$3",
             "STCOI 5,$2,7",
             "NEG $1,0,$3",
@@ -5762,17 +5878,19 @@ ZSEVI $7,$8,128
     fn test_prefix_robust_float_fix_flot() {
         // FIX/FIXU and FLOT/FLOTI/FLOTU/FLOTUI and SFLOT/SFLOTI/SFLOTU/
         // SFLOTUI: FIX must not steal FIXU's literal, FLOT must not steal
-        // FLOTU's/FLOTI's/FLOTUI's, and likewise for SFLOT.
-        assert_first_instruction("FIX $1,$2,$3", MMixInstruction::FIX(1, 2, 3));
-        assert_first_instruction("FIXU $1,$2,$3", MMixInstruction::FIXU(1, 2, 3));
-        assert_first_instruction("FLOT $1,$2,$3", MMixInstruction::FLOT(1, 2, 3));
-        assert_first_instruction("FLOTU $1,$2,$3", MMixInstruction::FLOTU(1, 2, 3));
-        assert_first_instruction("FLOTI $1,$2,5", MMixInstruction::FLOTI(1, 2, 5));
-        assert_first_instruction("FLOTUI $1,$2,5", MMixInstruction::FLOTUI(1, 2, 5));
-        assert_first_instruction("SFLOT $1,$2,$3", MMixInstruction::SFLOT(1, 2, 3));
-        assert_first_instruction("SFLOTU $1,$2,$3", MMixInstruction::SFLOTU(1, 2, 3));
-        assert_first_instruction("SFLOTI $1,$2,5", MMixInstruction::SFLOTI(1, 2, 5));
-        assert_first_instruction("SFLOTUI $1,$2,5", MMixInstruction::SFLOTUI(1, 2, 5));
+        // FLOTU's/FLOTI's/FLOTUI's, and likewise for SFLOT. Y is a
+        // rounding-mode value, not a register (decision 6); 0 here is
+        // orthogonal to what this test exercises.
+        assert_first_instruction("FIX $1,0,$3", MMixInstruction::FIX(1, 0, 3));
+        assert_first_instruction("FIXU $1,0,$3", MMixInstruction::FIXU(1, 0, 3));
+        assert_first_instruction("FLOT $1,0,$3", MMixInstruction::FLOT(1, 0, 3));
+        assert_first_instruction("FLOTU $1,0,$3", MMixInstruction::FLOTU(1, 0, 3));
+        assert_first_instruction("FLOTI $1,0,5", MMixInstruction::FLOTI(1, 0, 5));
+        assert_first_instruction("FLOTUI $1,0,5", MMixInstruction::FLOTUI(1, 0, 5));
+        assert_first_instruction("SFLOT $1,0,$3", MMixInstruction::SFLOT(1, 0, 3));
+        assert_first_instruction("SFLOTU $1,0,$3", MMixInstruction::SFLOTU(1, 0, 3));
+        assert_first_instruction("SFLOTI $1,0,5", MMixInstruction::SFLOTI(1, 0, 5));
+        assert_first_instruction("SFLOTUI $1,0,5", MMixInstruction::SFLOTUI(1, 0, 5));
     }
 
     #[test]

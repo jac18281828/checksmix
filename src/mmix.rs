@@ -92,10 +92,13 @@ macro_rules! muladd_ri {
 }
 
 /// Macro for int-to-float conversions (register). `$signed` reinterprets `$Z`
-/// as `i64`.
+/// as `i64`. `$mnem` names the instruction in the `Y > 4` diagnostic.
 macro_rules! i2f_conv_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr) => {{
-        // Y is rounding mode register (currently unused)
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
+        let mode = match $cpu.resolved_round_mode($y) {
+            Ok(m) => m,
+            Err(()) => return $cpu.illegal_round_mode($mnem, $y),
+        };
         let z_val = $cpu.get_register($z);
         let negative = $signed && (z_val as i64) < 0;
         let magnitude = if negative {
@@ -103,7 +106,7 @@ macro_rules! i2f_conv_rr {
         } else {
             z_val
         };
-        let (result, flags) = $cpu.int_to_f64_rounded(negative, magnitude);
+        let (result, flags) = $cpu.int_to_f64_rounded(negative, magnitude, mode);
         $cpu.raise_fp_flags(flags);
         $cpu.set_register($x, MMix::f64_to_u64(result));
         $cpu.advance_pc();
@@ -111,18 +114,22 @@ macro_rules! i2f_conv_rr {
     }};
 }
 
-/// Macro for int-to-float conversions (immediate). Every 8-bit operand converts
-/// exactly, so the flag and the rounding mode can never fire here.
+/// Macro for int-to-float conversions (immediate). Every 8-bit operand
+/// converts exactly, so the rounding mode can never change the result — `Y`
+/// is still checked, since `Y > 4` halts regardless.
 macro_rules! i2f_conv_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr) => {{
-        // Y is rounding mode register (currently unused)
+    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
+        let mode = match $cpu.resolved_round_mode($y) {
+            Ok(m) => m,
+            Err(()) => return $cpu.illegal_round_mode($mnem, $y),
+        };
         // Z is 8-bit immediate value to convert
         let v = if $signed {
             ($z as i8) as i64
         } else {
             $z as i64
         };
-        let (result, flags) = $cpu.int_to_f64_rounded(v < 0, v.unsigned_abs());
+        let (result, flags) = $cpu.int_to_f64_rounded(v < 0, v.unsigned_abs(), mode);
         $cpu.raise_fp_flags(flags);
         $cpu.set_register($x, MMix::f64_to_u64(result));
         $cpu.advance_pc();
@@ -1414,6 +1421,40 @@ impl MMix {
         }
     }
 
+    /// `u ∈ Nε(v)`, Knuth's ε-neighborhood (`mmix-doc.w`, "MMIX goes beyond
+    /// the IEEE standard..."). The radius scales by `v`'s own binade: `e` is
+    /// `v`'s raw IEEE-754 biased exponent field, `0` for zero and
+    /// subnormals, `1..=2046` for a normal double. `v == 0` and `v == ±∞`
+    /// are their own cases, not the scaled formula. Callers exclude NaN
+    /// operands and a NaN or negative `ε` beforehand (the shared exception
+    /// condition, `epsilon_exceptional`) — `v` and `ε` are never NaN here.
+    #[inline]
+    fn in_epsilon_neighborhood(u: f64, v: f64, epsilon: f64) -> bool {
+        if v.is_infinite() {
+            if epsilon < 1.0 {
+                u == v
+            } else if epsilon < 2.0 {
+                u != -v
+            } else {
+                true
+            }
+        } else if v == 0.0 {
+            u == 0.0
+        } else {
+            let e = (v.to_bits() >> 52) & 0x7FF;
+            let scale = if e == 0 { -1021 } else { e as i32 - 1022 };
+            (u - v).abs() <= epsilon * 2f64.powi(scale)
+        }
+    }
+
+    /// The shared exceptional condition for `FCMPE`/`FEQLE`/`FUNE`
+    /// (`mmix-doc.w`): either compared value is NaN, or `rE` is NaN or
+    /// negative. `-0.0 < 0.0` is `false`, so `rE = -0.0` is not negative.
+    #[inline]
+    fn epsilon_exceptional(y_val: f64, z_val: f64, epsilon: f64) -> bool {
+        y_val.is_nan() || z_val.is_nan() || epsilon.is_nan() || epsilon < 0.0
+    }
+
     /// OR `flags` into rA (no-op if flags == 0).
     #[inline]
     fn raise_fp_flags(&mut self, flags: u64) {
@@ -1582,8 +1623,7 @@ impl MMix {
     /// No U: the only caller is `FSQRT`, and the square root of a nonzero
     /// finite operand is neither zero nor subnormal — the root of the smallest
     /// subnormal is about `2^-537`.
-    fn finalize_fp_unop(&self, a: f64, r_near: f64, err: f64) -> (f64, u64) {
-        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+    fn finalize_fp_unop(&self, a: f64, r_near: f64, err: f64, mode: u64) -> (f64, u64) {
         let mut flags = 0u64;
         if Self::is_signaling_nan(a) {
             flags |= RA_I;
@@ -1625,6 +1665,33 @@ impl MMix {
         let n = (a / b).round_ties_even();
         let r = a - n * b;
         if r == 0.0 { 0.0f64.copysign(a) } else { r }
+    }
+
+    /// Resolve the `Y` rounding-mode override that `FIX`, `FIXU`, `FSQRT`,
+    /// `FINT`, and the `FLOT`/`SFLOT` families carry (`mmix-doc.w`). `Y == 0`
+    /// defers to rA's own persistent mode (`RA_ROUND_SHIFT`); `Y` in `1..=4`
+    /// forces a mode via `Y & 3` — this maps `Y=4` (`ROUND_NEAR`) onto rA's
+    /// mode `0`, since the two numberings are not related by a simple
+    /// offset (`MMIX.md`'s rounding-mode table). `Y > 4` is Knuth's
+    /// illegal-instruction condition; `Err` and the caller halts.
+    #[inline]
+    fn resolved_round_mode(&self, y: u8) -> Result<u64, ()> {
+        match y {
+            0 => Ok((self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3),
+            1..=4 => Ok((y & 3) as u64),
+            _ => Err(()),
+        }
+    }
+
+    /// `Y > 4` on an instruction that takes a rounding-mode override
+    /// (`mmix-doc.w`): an illegal-instruction interrupt this VM has no
+    /// vector for. Mirrors `Opcode::TRIP`'s halt-with-diagnostic precedent.
+    fn illegal_round_mode(&mut self, mnemonic: &str, y: u8) -> bool {
+        self.host.diagnostic(&format!(
+            "{mnemonic}: illegal Y={y} at PC={:#018x} (Y must be 0-4)",
+            self.pc
+        ));
+        false
     }
 
     /// MMIX rounding mode (rA bits 17-16): 0=NEAR (default), 1=OFF (trunc), 2=UP
@@ -1710,12 +1777,11 @@ impl MMix {
         }
     }
 
-    /// Convert an exact integer to `f64` under rA's rounding mode, reporting X
-    /// when the conversion loses bits. The value is given as sign and magnitude
-    /// so the residual stays in integer arithmetic.
+    /// Convert an exact integer to `f64` under the given rounding mode,
+    /// reporting X when the conversion loses bits. The value is given as
+    /// sign and magnitude so the residual stays in integer arithmetic.
     #[inline]
-    fn int_to_f64_rounded(&self, negative: bool, magnitude: u64) -> (f64, u64) {
-        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+    fn int_to_f64_rounded(&self, negative: bool, magnitude: u64, mode: u64) -> (f64, u64) {
         let residual = Self::u64_to_f64_residual(magnitude) as f64;
         let (r_near, err) = if negative {
             (-(magnitude as f64), -residual)
@@ -1726,11 +1792,11 @@ impl MMix {
         (Self::apply_directed_rounding(r_near, err, mode), flags)
     }
 
-    /// Convert f64 → f32 honoring the rA rounding mode and reporting flags.
-    /// Returns `(narrowed_as_f64, flags)`.
+    /// Convert f64 → f32 under the given rounding mode, reporting flags.
+    /// Returns `(narrowed_as_f64, flags)`. `STSF`/`STSFI` always pass rA's
+    /// own mode; `SFLOT`'s family passes its resolved `Y` override.
     #[inline]
-    fn f64_to_f32_rounded(&self, value: f64) -> (f64, u64) {
-        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+    fn f64_to_f32_rounded(&self, value: f64, mode: u64) -> (f64, u64) {
         let near = value as f32; // hardware default: round-to-nearest-even
         let narrowed = if !value.is_finite() || (near as f64) == value {
             near
@@ -2437,10 +2503,13 @@ impl MMix {
                 true
             }
             Opcode::FIX => {
-                // FIX $X, $Z - Convert floating to fixed (signed). Raises X on
-                // inexact and W when the value is out of i64 range or NaN/Inf.
+                // FIX $X, Y, $Z - Convert floating to fixed (signed). Raises X
+                // on inexact and W when the value is out of i64 range or NaN/Inf.
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("FIX", y),
+                };
                 let f = Self::u64_to_f64(self.get_register(z));
-                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
@@ -2475,9 +2544,12 @@ impl MMix {
                 true
             }
             Opcode::FIXU => {
-                // FIXU $X, $Z - Convert floating to fixed unsigned
+                // FIXU $X, Y, $Z - Convert floating to fixed unsigned
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("FIXU", y),
+                };
                 let f = Self::u64_to_f64(self.get_register(z));
-                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
@@ -2498,52 +2570,68 @@ impl MMix {
                 true
             }
             Opcode::FLOT => {
-                // FLOT $X, $Y, $Z - Convert fixed to floating (signed)
-                i2f_conv_rr!(self, x, y, z, true)
+                // FLOT $X, Y, $Z - Convert fixed to floating (signed)
+                i2f_conv_rr!(self, x, y, z, true, "FLOT")
             }
             Opcode::FLOTI => {
-                // FLOTI $X, $Y, Z - Convert fixed to floating immediate (signed)
-                i2f_conv_ri!(self, x, y, z, true)
+                // FLOTI $X, Y, Z - Convert fixed to floating immediate (signed)
+                i2f_conv_ri!(self, x, y, z, true, "FLOTI")
             }
             Opcode::FLOTU => {
-                // FLOTU $X, $Y, $Z - Convert fixed unsigned to floating
-                i2f_conv_rr!(self, x, y, z, false)
+                // FLOTU $X, Y, $Z - Convert fixed unsigned to floating
+                i2f_conv_rr!(self, x, y, z, false, "FLOTU")
             }
             Opcode::FLOTUI => {
-                // FLOTUI $X, $Y, Z - Convert fixed unsigned to floating immediate
-                i2f_conv_ri!(self, x, y, z, false)
+                // FLOTUI $X, Y, Z - Convert fixed unsigned to floating immediate
+                i2f_conv_ri!(self, x, y, z, false, "FLOTUI")
             }
             Opcode::SFLOT => {
-                // SFLOT $X, $Y, $Z - Convert signed integer to f32 (in f64 register)
+                // SFLOT $X, Y, $Z - Convert signed integer to f32 (in f64 register)
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("SFLOT", y),
+                };
                 let v = self.get_register(z) as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64);
+                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
                 self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
                 self.advance_pc();
                 true
             }
             Opcode::SFLOTI => {
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("SFLOTI", y),
+                };
                 let v = (z as i8) as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64);
+                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
                 self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
                 self.advance_pc();
                 true
             }
             Opcode::SFLOTU => {
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("SFLOTU", y),
+                };
                 let v = self.get_register(z);
                 let flags = Self::int_to_f64_inexact(v);
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64);
+                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
                 self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
                 self.advance_pc();
                 true
             }
             Opcode::SFLOTUI => {
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("SFLOTUI", y),
+                };
                 let flags = Self::int_to_f64_inexact(z as u64);
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z as f64);
+                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z as f64, mode);
                 self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
                 self.advance_pc();
@@ -2566,14 +2654,19 @@ impl MMix {
                 true
             }
             Opcode::FCMPE => {
-                // FCMPE $X, $Y, $Z - Floating compare with epsilon
-                // Epsilon from rE register
+                // FCMPE $X, $Y, $Z - Knuth's ε-relation: −1 (≺), 0 (∼, an
+                // epsilon-close pair), or +1 (≻). Forces 0 and raises I on
+                // an exceptional input; never both -1/+1 and I.
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
-                let diff = (y_val - z_val).abs();
-                let result = if diff <= epsilon {
-                    0 // Equal within epsilon
+                let result = if Self::epsilon_exceptional(y_val, z_val, epsilon) {
+                    self.raise_fp_flags(RA_I);
+                    0
+                } else if Self::in_epsilon_neighborhood(y_val, z_val, epsilon)
+                    || Self::in_epsilon_neighborhood(z_val, y_val, epsilon)
+                {
+                    0
                 } else if y_val < z_val {
                     (-1i64) as u64
                 } else {
@@ -2584,12 +2677,15 @@ impl MMix {
                 true
             }
             Opcode::FUNE => {
-                // FUNE $X, $Y, $Z - Floating unordered with epsilon
+                // FUNE $X, $Y, $Z - reports only whether $Y, $Z, or rE is
+                // exceptional (NaN operand, or rE NaN/negative); says
+                // nothing about proximity, unlike FCMPE/FEQLE's ∼. Exempt
+                // from the invalid exception Knuth raises on that same
+                // condition for FCMPE/FEQLE — raises no flag either way.
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
-                let diff = (y_val - z_val).abs();
-                let result = if y_val.is_nan() || z_val.is_nan() || diff <= epsilon {
+                let result = if Self::epsilon_exceptional(y_val, z_val, epsilon) {
                     1
                 } else {
                     0
@@ -2599,12 +2695,21 @@ impl MMix {
                 true
             }
             Opcode::FEQLE => {
-                // FEQLE $X, $Y, $Z - Floating equivalent with epsilon
+                // FEQLE $X, $Y, $Z - Knuth's ≈: both directions of Nε
+                // membership must hold, stronger than FCMPE's ∼.
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
-                let diff = (y_val - z_val).abs();
-                let result = if diff <= epsilon { 1 } else { 0 };
+                let result = if Self::epsilon_exceptional(y_val, z_val, epsilon) {
+                    self.raise_fp_flags(RA_I);
+                    0
+                } else if Self::in_epsilon_neighborhood(y_val, z_val, epsilon)
+                    && Self::in_epsilon_neighborhood(z_val, y_val, epsilon)
+                {
+                    1
+                } else {
+                    0
+                };
                 self.set_register(x, result);
                 self.advance_pc();
                 true
@@ -2633,13 +2738,17 @@ impl MMix {
                 true
             }
             Opcode::FSQRT => {
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("FSQRT", y),
+                };
                 let a = Self::u64_to_f64(self.get_register(z));
                 let r_near = a.sqrt();
                 // residual = a - r_near^2, exact via FMA.
                 // sign(true - r_near) = sign(residual) when r_near >= 0 (always
                 // true here since sqrt returns ≥0 or NaN).
                 let err = (-r_near).mul_add(r_near, a);
-                let (r, flags) = self.finalize_fp_unop(a, r_near, err);
+                let (r, flags) = self.finalize_fp_unop(a, r_near, err, mode);
                 self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.advance_pc();
@@ -2656,10 +2765,13 @@ impl MMix {
                 true
             }
             Opcode::FINT => {
-                // FINT $X, $Y, $Z — Integerize using the rA rounding mode.
-                // Mode (rA bits 17-16): 0=NEAR, 1=OFF (trunc), 2=UP, 3=DOWN.
+                // FINT $X, Y, $Z — Integerize under Y's rounding-mode
+                // override, or rA's own mode when Y is 0.
+                let mode = match self.resolved_round_mode(y) {
+                    Ok(m) => m,
+                    Err(()) => return self.illegal_round_mode("FINT", y),
+                };
                 let v = Self::u64_to_f64(self.get_register(z));
-                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let r = if v.is_finite() {
                     Self::round_with_mode(v, mode)
                 } else {
@@ -3261,9 +3373,11 @@ impl MMix {
             }
             Opcode::STSF => {
                 // STSF $X, $Y, $Z - Narrow $X to f32 using rA mode and store at $Y+$Z.
+                // No Y-operand override: STSF takes no rounding-mode field.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = Self::u64_to_f64(self.get_register(x));
-                let (narrowed, flags) = self.f64_to_f32_rounded(value);
+                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+                let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
                 self.raise_fp_flags(flags);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
                 self.advance_pc();
@@ -3272,7 +3386,8 @@ impl MMix {
             Opcode::STSFI => {
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
-                let (narrowed, flags) = self.f64_to_f32_rounded(value);
+                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+                let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
                 self.raise_fp_flags(flags);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
                 self.advance_pc();
@@ -8131,13 +8246,15 @@ Main\tSETI\t$1,100
     #[test]
     fn test_fune() {
         let mut mmix = MMix::new();
-        // FUNE $1, $2, $3 - Test unordered or equivalent with epsilon
+        // FUNE $1, $2, $3 - neither operand nor rE is exceptional (no NaN,
+        // rE not negative), so FUNE reports 0: it says nothing about
+        // proximity, only whether the inputs are exceptional.
         mmix.set_special(SpecialReg::RE, 0.5f64.to_bits());
         mmix.set_register(2, 7.0f64.to_bits());
         mmix.set_register(3, 7.3f64.to_bits());
         mmix.write_tetra(0, 0x12010203); // FUNE $1,$2,$3
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_register(1), 1); // Within epsilon
+        assert_eq!(mmix.get_register(1), 0);
     }
 
     #[test]
@@ -9688,6 +9805,136 @@ Main\tSETI\t$1,100
         mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1) as i64, -1);
+    }
+
+    #[test]
+    fn test_fcmpe_binade_scaled_radius() {
+        // A flat |y-z|<=epsilon test gives -1 (16 > 0.25). 1024's raw
+        // exponent field is 1033, so Nε's radius is 0.25 * 2^11 = 512,
+        // which covers 1040 (diff 16) and FCMPE reports 0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.25f64.to_bits());
+        mmix.set_register(2, 1024.0f64.to_bits());
+        mmix.set_register(3, 1040.0f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_fcmpe_radius_uses_e_minus_1022_not_1023() {
+        // 1.0's raw exponent field is 1023, so the radius is
+        // 0.5 * 2^(1023-1022) = 1.0, covering the 0.75 gap to 1.75. An
+        // off-by-one-binade radius (2^(e-1023) = 0.5) would not.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.5f64.to_bits());
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 1.75f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_fcmpe_denormal_neighborhood_uses_fixed_radius() {
+        // $3 is subnormal (raw exponent field 0): Nε's denormal case uses
+        // the fixed radius 2^-1021 * ε, not a per-value binade scale, and
+        // that radius is far smaller than the gap to $2. A flat
+        // |y-z|<=epsilon check would call this pair close (1e-300 <=
+        // 1e-10) and report 0; the correct radius does not, and $2 > $3
+        // gives +1.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 1e-10f64.to_bits());
+        mmix.set_register(2, 1e-300f64.to_bits());
+        mmix.set_register(3, f64::from_bits(1).to_bits()); // smallest subnormal
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, 1);
+    }
+
+    #[test]
+    fn test_fcmpe_infinite_neighborhood_epsilon_at_least_two() {
+        // Nε(+∞) is everything when ε≥2, so 5.0 ∈ Nε(+∞) and FCMPE
+        // reports 0. A flat |y-z|<=epsilon check sees an infinite
+        // difference, never within any finite epsilon, and falls back to
+        // the sign compare (5.0 < ∞ ⇒ -1).
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 3.0f64.to_bits());
+        mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, f64::INFINITY.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_fcmpe_nan_operand_forces_zero_and_raises_invalid() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.1f64.to_bits());
+        mmix.set_register(2, f64::NAN.to_bits());
+        mmix.set_register(3, 5.0f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+    }
+
+    #[test]
+    fn test_fcmpe_negative_epsilon_forces_zero_and_raises_invalid() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, (-1.0f64).to_bits());
+        mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, 6.0f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+        assert!((mmix.get_special(SpecialReg::RA) & RA_I) != 0);
+    }
+
+    #[test]
+    fn test_fune_negative_epsilon_is_exceptional() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, (-1.0f64).to_bits());
+        mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, 5.0f64.to_bits());
+        mmix.write_tetra(0, 0x12010203); // FUNE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 1);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_I, 0); // FUNE raises nothing
+    }
+
+    #[test]
+    fn test_fix_y_override_forces_mode_regardless_of_ra() {
+        // rA's persistent mode is ROUND_UP (2); Y=1 (ROUND_OFF) must
+        // override it: trunc(2.5)=2, not rA's ceil(2.5)=3.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT);
+        mmix.set_register(2, 2.5f64.to_bits());
+        mmix.write_tetra(0, 0x05010102); // FIX $1,1,$2 (Y=ROUND_OFF)
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, 2);
+    }
+
+    #[test]
+    fn test_fix_two_operand_form_still_honors_ra_mode() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT); // ROUND_UP
+        mmix.set_register(2, 2.5f64.to_bits());
+        mmix.write_tetra(0, 0x05010002); // FIX $1,0,$2 (Y=0, no override)
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, 3); // ceil(2.5) per rA's mode
+    }
+
+    #[test]
+    fn test_y_greater_than_four_halts_with_diagnostic() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.write_tetra(0, 0x0901050A); // FLOTI $1,5,10 (Y=5, illegal)
+        let should_continue = mmix.execute_instruction();
+        assert!(!should_continue);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("FLOTI"));
+        assert!(handle.diagnostics()[0].contains("Y=5"));
     }
 
     #[test]

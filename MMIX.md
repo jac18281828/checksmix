@@ -123,7 +123,19 @@ All floating-point instructions use IEEE 754 double precision. Results honor the
 
 Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FINT`, `FIX`, `FIXU`, `FLOT`, `FLOTI`, `FLOTU`, `FLOTUI`, `SFLOT`, `SFLOTI`, `SFLOTU`, `SFLOTUI`, `STSF`, `STSFI`.
 
-**Known gap:** MMIX lets `FSQRT`, `FINT` and the conversion instructions override the mode through the `Y` field. checksmix ignores `Y` on all of them and always uses `rA`.
+`FIX`, `FIXU`, `FSQRT`, `FINT`, and the `FLOT`/`FLOTI`/`FLOTU`/`FLOTUI`/`SFLOT`/`SFLOTI`/`SFLOTU`/`SFLOTUI` family additionally take a `Y` operand that overrides the mode for that one instruction, numbered independently of rA's own field:
+
+| `Y` | Symbol | rA-equivalent mode |
+| --- | --- | --- |
+| `0` | `ROUND_CURRENT` | none — uses rA's current mode |
+| `1` | `ROUND_OFF` | `1` |
+| `2` | `ROUND_UP` | `2` |
+| `3` | `ROUND_DOWN` | `3` |
+| `4` | `ROUND_NEAR` | `0` |
+
+`Y` is omitted (the two-operand form) or `0` to defer to `rA`; `Y > 4` raises an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic instead. `STSF`/`STSFI` take no `Y` operand and always use `rA`'s mode.
+
+**Known gap:** none for the twelve mnemonics above — `Y` overrides `rA`'s mode per-instruction; `Y = 0` or the implicit two-operand form falls back to `rA`.
 
 ### rA event flags
 
@@ -146,7 +158,9 @@ Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
 ### Epsilon instructions (FCMPE / FUNE / FEQLE)
 
-`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. They compare `|$Y − $Z|` against the value in special register `rE` and report equality when the difference is within epsilon. They also raise the `I` flag on NaN operands and `E` (epsilon) comparisons.
+`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. Knuth defines an ε-neighborhood `Nε(u)` around each compared value, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; and `Nε(±∞)` depends on whether `ε` is below 1, in `[1, 2)`, or at least 2. `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
+
+`FCMPE` and `FEQLE` force their result to `0` and raise `I` when `$Y`, `$Z`, or `rE` is NaN, or `rE` is negative — never on an ordinary inequality. `FUNE` reports `1` on exactly that same exceptional condition and `0` otherwise; it says nothing about proximity, and raises no flag either way.
 
 ## TRAP interface
 

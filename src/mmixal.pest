@@ -491,27 +491,60 @@ inst_neg_rri = {
     register ~ comma ~ expr_value ~ comma ~ expr_value
 }
 
-// Floating point instructions (3 operands) - ordered longest first
+// Floating point instructions (3 operands) - ordered longest first.
+// FCMPE/FEQLE/FUNE's middle operand is rE compared as a real register, and
+// FADD/FSUB/FMUL/FDIV/FREM's is a genuine operand — unlike the twelve
+// mnemonics below, none of these take a Y rounding-mode override.
 inst_float_rrr = {
     (mnemonic_fcmpe | mnemonic_feqle | mnemonic_fune |
      mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
      mnemonic_fadd | mnemonic_fsub | mnemonic_fmul | mnemonic_fdiv |
-     mnemonic_frem | mnemonic_fsqrt | mnemonic_fint |
-     mnemonic_fixu | mnemonic_fix) ~
+     mnemonic_frem) ~
     operand_reg_reg_reg
 }
 
-// Fixed-to-float conversions, the only float ops taking an immediate Z.
+// FIX/FIXU/FSQRT/FINT take a single register operand plus an optional Y
+// rounding-mode override (a pure value, never a register — Knuth's Y is a
+// mode number, not $Y). The 3-operand form is tried first: PEG commits to
+// the first alternative that matches, and the shorter 2-operand form would
+// otherwise swallow the register-looking Y symbol and strand the comma.
+inst_float_round_rrz = {
+    (mnemonic_fixu | mnemonic_fix | mnemonic_fsqrt | mnemonic_fint) ~
+    register ~ comma ~ expr_value ~ comma ~ register
+}
+
+inst_float_round_rr = {
+    (mnemonic_fixu | mnemonic_fix | mnemonic_fsqrt | mnemonic_fint) ~
+    operand_reg_reg
+}
+
+// Fixed-to-float conversions: Y is a rounding-mode value, Z auto-selects
+// register or immediate. Precedent: inst_neg_auto. 3-operand form first,
+// same PEG-commit reasoning as inst_float_round_rrz above.
+inst_flot_round = {
+    (mnemonic_sflotu | mnemonic_sflot |
+     mnemonic_flotu | mnemonic_flot) ~
+    register ~ comma ~ expr_value ~ comma ~ (register | expr_value)
+}
+
 inst_flot_auto = {
     (mnemonic_sflotu | mnemonic_sflot |
      mnemonic_flotu | mnemonic_flot) ~
-    operand_reg_reg_z
+    operand_reg_z
+}
+
+// FLOTI/FLOTUI/SFLOTI/SFLOTUI: Y is a rounding-mode value; Z stays
+// immediate-only. Precedent: inst_neg_rri. 3-operand form first.
+inst_float_round_rri = {
+    (mnemonic_sflotui | mnemonic_sfloti |
+     mnemonic_flotui | mnemonic_floti) ~
+    register ~ comma ~ expr_value ~ comma ~ expr_value
 }
 
 inst_float_rri = {
     (mnemonic_sflotui | mnemonic_sfloti |
      mnemonic_flotui | mnemonic_floti) ~
-    operand_reg_reg_imm
+    operand_reg_imm
 }
 
 // Bitwise operations (3 operands) - base mnemonics auto-select RRR/RRI by Z.
@@ -677,7 +710,10 @@ instruction = {
     inst_stco_auto | inst_stco_rri |
     inst_lda_auto | inst_lda_rri | inst_lda_ri |
     inst_arith_auto | inst_arith_rri |
-    inst_flot_auto | inst_float_rrr | inst_float_rri |
+    inst_flot_round | inst_flot_auto |
+    inst_float_round_rrz | inst_float_round_rr |
+    inst_float_round_rri | inst_float_rri |
+    inst_float_rrr |
     inst_neg_auto | inst_neg_rri |
     inst_bitwise_auto | inst_bitwise_rri |
     inst_bitfiddle_auto | inst_bitfiddle_rri |
