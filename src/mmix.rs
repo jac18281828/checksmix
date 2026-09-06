@@ -1446,14 +1446,14 @@ impl MMix {
             // `2f64.powi(scale)` overflows to `inf` at the top binade
             // (scale == 1024), turning a finite radius into "everything" or,
             // with epsilon == 0.0, into NaN. Scale the difference down by
-            // `2^-scale` instead of scaling epsilon up by `2^scale`, and
-            // split that exponent into two normal-range powers rather than
-            // one call that can itself land on a subnormal (`2^-1024`):
-            // `f64::powi`'s squaring can lose that subnormal's few bits of
-            // precision before the multiply with `diff` ever happens.
-            // Applying each half in turn keeps every intermediate value in
-            // the normal range, since `diff` and `2^scale` share the same
-            // binade by construction.
+            // `2^-scale` instead of scaling epsilon up by `2^scale` — but a
+            // single `2f64.powi(-scale)` has its own top-binade failure:
+            // at `-scale == -1024`, `f64::powi`'s squaring chain overflows
+            // an intermediate power to `inf`, and the final reciprocal turns
+            // that `inf` into `0.0` — a total loss, not a rounding error.
+            // Splitting `-scale` into two halves keeps each `powi` call's
+            // result within the normal exponent range, so multiplying
+            // `diff` by each half in turn never hits that collapse.
             let half = -scale / 2;
             let rest = -scale - half;
             (u - v).abs() * 2f64.powi(half) * 2f64.powi(rest) <= epsilon
@@ -9996,12 +9996,43 @@ Main\tSETI\t$1,100
     }
 
     #[test]
+    fn test_fcmpe_denormal_radius_pins_exact_constant_upper_side() {
+        // The sibling test above pins the -1021 -> -1022 boundary; this
+        // pins the other side. The gap sits strictly between the correct
+        // radius 2^-1021*ε and the off-by-one radius 2^-1020*ε, so only
+        // the correct constant reports non-zero (not close).
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.1f64.to_bits());
+        mmix.set_register(2, 1.5e-308f64.to_bits());
+        mmix.set_register(3, 2.16752215755216e-308f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1);
+    }
+
+    #[test]
     fn test_fcmpe_infinite_neighborhood_epsilon_below_one() {
         // Nε(+∞) = {+∞} only when ε < 1: a finite value is never close to
         // +∞ and the ordinary sign compare applies.
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RE, 0.5f64.to_bits());
         mmix.set_register(2, 5.0f64.to_bits());
+        mmix.set_register(3, f64::INFINITY.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1);
+    }
+
+    #[test]
+    fn test_fcmpe_infinite_neighborhood_epsilon_below_one_opposite_infinities() {
+        // Nε(+∞) = {+∞} when ε < 1: the entry condition is `u == v`, exact
+        // equality, not `u.is_infinite()` — opposite infinities are each
+        // infinite but never equal, so they must compare -1, not 0. A
+        // mutant widening the entry test to `u.is_infinite()` would wrongly
+        // place -∞ in Nε(+∞) here and report 0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.5f64.to_bits());
+        mmix.set_register(2, f64::NEG_INFINITY.to_bits());
         mmix.set_register(3, f64::INFINITY.to_bits());
         mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
         assert!(mmix.execute_instruction());
@@ -10091,6 +10122,33 @@ Main\tSETI\t$1,100
         mmix.write_tetra(0, 0x13010203); // FEQLE $1,$2,$3
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 1);
+    }
+
+    #[test]
+    fn test_fcmpe_zero_neighborhood_reflexive() {
+        // Nε(0) = {0}: zero is always in its own neighborhood, so
+        // FCMPE(0.0, 0.0) is 0 for any ε >= 0.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.0f64.to_bits());
+        mmix.set_register(2, 0.0f64.to_bits());
+        mmix.set_register(3, 0.0f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_fcmpe_zero_neighborhood_excludes_nonzero() {
+        // Nε(0) = {0}, the single point, not "anything within ε of 0" —
+        // a nonzero value is never in it, however small, and no ε widens
+        // that set.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RE, 0.1f64.to_bits());
+        mmix.set_register(2, 0.0f64.to_bits());
+        mmix.set_register(3, 1.0f64.to_bits());
+        mmix.write_tetra(0, 0x11010203); // FCMPE $1,$2,$3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1) as i64, -1);
     }
 
     #[test]

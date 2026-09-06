@@ -5733,12 +5733,16 @@ ZSEVI $7,$8,128
         // Decision 6 narrows Y from `register` to `expr_value`-only; the
         // retired register-Y spelling this task displaced must now fail
         // to parse, not silently reinterpret $2's register number as a
-        // rounding-mode value.
+        // rounding-mode value. `is_err()` alone survives a re-widened
+        // grammar that admits the register but still leaves a trailing
+        // token elsewhere, so pin the exact rejection: the 3-operand form
+        // fails to match at Y (a register isn't `expr_value`), and the
+        // 2-operand form then consumes only `$1,$2`, stranding `,$3`.
         let mut asm = MMixAssembler::new("FLOT $1,$2,$3", "<test>");
-        assert!(
-            asm.parse().is_err(),
-            "a register in FLOT's Y slot must no longer parse"
-        );
+        let err = asm
+            .parse()
+            .expect_err("a register in FLOT's Y slot must no longer parse");
+        assert_eq!(err, "<test>:1:11: syntax error: expected EOI");
     }
 
     #[test]
@@ -5746,7 +5750,12 @@ ZSEVI $7,$8,128
         // mmixal.w:2003-2012's predefined-symbol table, independent of
         // rA's own persistent-mode numbering (decision 8).
         let asm = MMixAssembler::new("", "<test>");
-        for (name, value) in [("ROUND_OFF", 1u64), ("ROUND_UP", 2), ("ROUND_DOWN", 3)] {
+        for (name, value) in [
+            ("ROUND_CURRENT", 0u64),
+            ("ROUND_OFF", 1),
+            ("ROUND_UP", 2),
+            ("ROUND_DOWN", 3),
+        ] {
             assert_eq!(
                 asm.symbols.get(name).copied(),
                 Some(SymbolType::Constant(value)),
