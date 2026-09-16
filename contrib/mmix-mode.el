@@ -17,8 +17,8 @@
 ;;   - Mnemonics and directives are case-insensitive; predefined symbols
 ;;     (`rJ', `StdOut', `Fputs', `ROUND_NEAR', ...) are case-sensitive.
 ;;   - The explicit immediate spellings (ADDI, SETI, GETAB, ...), the
-;;     extensions JE/JNE/JL/JG/HALT, `.BYTE'-style directives, QUAD,
-;;     INCLUDE and the `debug "text"' preprocessor line are all keywords.
+;;     extension HALT, `.BYTE'-style directives, QUAD, INCLUDE and the
+;;     `debug "text"' preprocessor line are all keywords.
 ;;
 ;; A name the buffer defines is highlighted where it is used, in the face
 ;; of its definition: a label as a function name, an IS or GREG name as a
@@ -69,8 +69,8 @@
     "CSWAPI" "CSZ" "CSZI" "DIV" "DIVI" "DIVU" "DIVUI" "FADD" "FCMP" "FCMPE"
     "FDIV" "FEQL" "FEQLE" "FINT" "FIX" "FIXU" "FLOT" "FLOTI" "FLOTU"
     "FLOTUI" "FMUL" "FREM" "FSQRT" "FSUB" "FUN" "FUNE" "GET" "GETA" "GETAB"
-    "GO" "GOI" "HALT" "INCH" "INCL" "INCMH" "INCML" "JE" "JG" "JL" "JMP"
-    "JMPB" "JNE" "LDA" "LDAI" "LDB" "LDBI" "LDBU" "LDBUI" "LDHT" "LDHTI"
+    "GO" "GOI" "HALT" "INCH" "INCL" "INCMH" "INCML" "JMP" "JMPB" "LDA"
+    "LDAI" "LDB" "LDBI" "LDBU" "LDBUI" "LDHT" "LDHTI"
     "LDO" "LDOI" "LDOU" "LDOUI" "LDSF" "LDSFI" "LDT" "LDTI" "LDTU" "LDTUI"
     "LDUNC" "LDUNCI" "LDVTS" "LDVTSI" "LDW" "LDWI" "LDWU" "LDWUI" "MOR"
     "MORI" "MUL" "MULI" "MULU" "MULUI" "MUX" "MUXI" "MXOR" "MXORI" "NAND"
@@ -978,14 +978,6 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Branch if $X is even")
     (("BEVB") "BEVB $X, addr"
      "Branch if $X is even (backward hint)")
-    (("JE") "JE $X, addr"
-     "checksmix extension — branch if $X == 0; encodes as BZ/BZB")
-    (("JNE") "JNE $X, addr"
-     "checksmix extension — branch if $X != 0; encodes as BNZ/BNZB")
-    (("JL") "JL $X, addr"
-     "checksmix extension — branch if $X < 0; encodes as BN/BNB")
-    (("JG") "JG $X, addr"
-     "checksmix extension — branch if $X > 0; encodes as BP/BPB")
     (("PBN") "PBN $X, Y, Z"
      "Probable branch if negative")
     (("PBNB") "PBNB $X, Y, Z"

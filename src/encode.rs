@@ -650,27 +650,6 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             let z = (offset & 0xFF) as u8;
             bytes.extend_from_slice(&[0x4F, *x, y, z]);
         }
-        // Pseudo-branch instructions (map to conditional branches with inverted conditions)
-        MMixInstruction::JE(x, offset) => {
-            let y = (offset >> 8) as u8;
-            let z = (offset & 0xFF) as u8;
-            bytes.extend_from_slice(&[0x42, *x, y, z]); // BZ
-        }
-        MMixInstruction::JNE(x, offset) => {
-            let y = (offset >> 8) as u8;
-            let z = (offset & 0xFF) as u8;
-            bytes.extend_from_slice(&[0x4A, *x, y, z]); // BNZ
-        }
-        MMixInstruction::JL(x, offset) => {
-            let y = (offset >> 8) as u8;
-            let z = (offset & 0xFF) as u8;
-            bytes.extend_from_slice(&[0x40, *x, y, z]); // BN
-        }
-        MMixInstruction::JG(x, offset) => {
-            let y = (offset >> 8) as u8;
-            let z = (offset & 0xFF) as u8;
-            bytes.extend_from_slice(&[0x44, *x, y, z]); // BP
-        }
         // System control instructions
         MMixInstruction::TRIP(x, y, z) => {
             bytes.extend_from_slice(&[0xFF, *x, *y, *z]);

@@ -329,12 +329,8 @@ mnemonic_bev = @{ ^"BEV" ~ word_end }
 mnemonic_bn = @{ ^"BN" ~ word_end }
 mnemonic_bz = @{ ^"BZ" ~ word_end }
 mnemonic_bp = @{ ^"BP" ~ word_end }
-mnemonic_jne = @{ ^"JNE" ~ word_end }
 mnemonic_jmpb = @{ ^"JMPB" ~ word_end }
 mnemonic_jmp = @{ ^"JMP" ~ word_end }
-mnemonic_je = @{ ^"JE" ~ word_end }
-mnemonic_jl = @{ ^"JL" ~ word_end }
-mnemonic_jg = @{ ^"JG" ~ word_end }
 
 // Subroutine and control flow instructions
 mnemonic_pushj = @{ ^"PUSHJ" ~ word_end }
@@ -618,8 +614,7 @@ inst_branch = {
     (mnemonic_bnnb | mnemonic_bnzb | mnemonic_bnpb | mnemonic_bevb |
      mnemonic_bnn | mnemonic_bnz | mnemonic_bnp | mnemonic_bev |
      mnemonic_bnb | mnemonic_bzb | mnemonic_bpb | mnemonic_bodb |
-     mnemonic_bn | mnemonic_bz | mnemonic_bp | mnemonic_bod |
-     mnemonic_jne | mnemonic_je | mnemonic_jl | mnemonic_jg) ~
+     mnemonic_bn | mnemonic_bz | mnemonic_bp | mnemonic_bod) ~
     operand_reg_imm
 }
 

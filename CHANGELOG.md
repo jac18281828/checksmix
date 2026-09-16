@@ -1,3 +1,7 @@
+0.3.9 (2026-09-16)
+
+* **Breaking: `JE`, `JNE`, `JL` and `JG` no longer assemble as MMIX.** MMIXAL never had them — they are MIX's compare-and-jump mnemonics, which test `CMPA`'s comparison indicator, and MMIX has no such indicator. They entered the grammar as aliases of `BZ`, `BNZ`, `BN` and `BP` respectively; source that used them must now spell the branch it means. The `0.3.6` entry documenting the four as checksmix extensions is superseded
+
 0.3.8 (2026-09-16)
 
 * `contrib/mmix-mode.el` is a major mode for `.mms` source that follows the MMIXAL dialect checksmix assembles: `%` and `;` comments, char-literal escapes, column-free labels with an optional leading or trailing colon, dotted directives, `QUAD`, `INCLUDE` and `debug "text"`. It colours every use of a label or an `IS`/`GREG` name the buffer defines, aligns the label, operation and operand fields, shows instruction help through eldoc and `C-c C-d`, and runs the buffer through `checksmix` with `C-c C-c`. The help is built in and the mode needs only Emacs 29.1, so a `cargo install` user loads it without the checksmix source

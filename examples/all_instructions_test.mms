@@ -1948,18 +1948,18 @@ Test156Forward  SETI $10,8
         JMP     TestFail
 
 % ========================================
-% CONDITIONAL JUMP TESTS
+% CONDITIONAL BRANCH TESTS
 % ========================================
 
 % ========================================
-% Test 157: JE - Jump if equal (taken)
+% Test 157: BZ - Branch if zero (taken)
 % ========================================
 Test157 ADDUI   TestNum,TestNum,1
         SETI $10,42
         SETI $11,42
         CMP     $10,$10,$11
         SETI Result,99
-        JE      $10,Test157Skip
+        BZ      $10,Test157Skip
         SETI Result,#DEAD
 Test157Skip     SETI Expect,99
         CMP     Temp,Result,Expect
@@ -1967,14 +1967,14 @@ Test157Skip     SETI Expect,99
         JMP     TestFail
 
 % ========================================
-% Test 158: JNE - Jump if not equal (taken)
+% Test 158: BNZ - Branch if nonzero (taken)
 % ========================================
 Test158 ADDUI   TestNum,TestNum,1
         SETI $10,10
         SETI $11,20
         CMP     $10,$10,$11
         SETI Result,88
-        JNE     $10,Test158Skip
+        BNZ     $10,Test158Skip
         SETI Result,#DEAD
 Test158Skip     SETI Expect,88
         CMP     Temp,Result,Expect
@@ -1982,14 +1982,14 @@ Test158Skip     SETI Expect,88
         JMP     TestFail
 
 % ========================================
-% Test 159: JL - Jump if less (taken)
+% Test 159: BN - Branch if negative (taken)
 % ========================================
 Test159 ADDUI   TestNum,TestNum,1
         SETI $10,5
         SETI $11,10
         CMP     $10,$10,$11
         SETI Result,77
-        JL      $10,Test159Skip
+        BN      $10,Test159Skip
         SETI Result,#DEAD
 Test159Skip     SETI Expect,77
         CMP     Temp,Result,Expect
@@ -1997,14 +1997,14 @@ Test159Skip     SETI Expect,77
         JMP     TestFail
 
 % ========================================
-% Test 160: JG - Jump if greater (taken)
+% Test 160: BP - Branch if positive (taken)
 % ========================================
 Test160 ADDUI   TestNum,TestNum,1
         SETI $10,100
         SETI $11,50
         CMP     $10,$10,$11
         SETI Result,66
-        JG      $10,Test160Skip
+        BP      $10,Test160Skip
         SETI Result,#DEAD
 Test160Skip     SETI Expect,66
         CMP     Temp,Result,Expect

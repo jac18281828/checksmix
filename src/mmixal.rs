@@ -253,10 +253,6 @@ pub enum MMixInstruction {
     // Branch instructions
     JMP(u32),          // JMP XYZ (24-bit), jump to @ + 4*XYZ
     JMPB(u32),         // JMPB XYZ (24-bit), jump to @ + 4*(XYZ - 2^24)
-    JE(u8, u16),       // JE $X, offset
-    JNE(u8, u16),      // JNE $X, offset
-    JL(u8, u16),       // JL $X, offset
-    JG(u8, u16),       // JG $X, offset
     BN(u8, u16),       // BN $X, offset - branch if negative
     BNB(u8, u16),      // BNB $X, offset - branch if negative backward
     BZ(u8, u16),       // BZ $X, offset - branch if zero
@@ -2949,16 +2945,11 @@ impl MMixAssembler {
         let x = self.parse_register(ops.next().unwrap())?;
         let target = self.parse_number(ops.next().unwrap())?;
 
-        // Each mnemonic names the variant to emit for a forward target and the
-        // one for a backward target. JE/JNE/JL/JG are forward-only spellings of
-        // BZ/BNZ/BN/BP, so their backward form is the sibling's.
+        // Each mnemonic names the variant to emit for a forward target and
+        // the one for a backward target.
         type Branch = fn(u8, u16) -> MMixInstruction;
         let mnem = mnem.as_str().to_uppercase();
         let (forward, backward): (Branch, Branch) = match mnem.as_str() {
-            "JE" => (MMixInstruction::JE, MMixInstruction::BZB),
-            "JNE" => (MMixInstruction::JNE, MMixInstruction::BNZB),
-            "JL" => (MMixInstruction::JL, MMixInstruction::BNB),
-            "JG" => (MMixInstruction::JG, MMixInstruction::BPB),
             "BN" | "BNB" => (MMixInstruction::BN, MMixInstruction::BNB),
             "BZ" | "BZB" => (MMixInstruction::BZ, MMixInstruction::BZB),
             "BP" | "BPB" => (MMixInstruction::BP, MMixInstruction::BPB),
@@ -4465,13 +4456,20 @@ mod tests {
     }
 
     #[test]
-    fn test_backward_je_emits_bzb() {
-        // JE has no hand-writable backward form; a backward target must still
-        // reach BZB, the sibling of the BZ it otherwise encodes to.
-        let source = "LOC #100\nBACK: HALT\nJE $1,BACK";
+    fn test_mix_jump_mnemonics_do_not_assemble_as_mmix_branches() {
+        // JE, JNE, JL and JG are MIX's compare-and-jump mnemonics, not
+        // MMIX's; only BZ/BNZ/BN/BP belong in this slot. Restoring any one
+        // of the four (grammar rule, variant, parse_inst_branch arm or
+        // encoder arm) must turn this red.
+        for mnem in ["JE", "JNE", "JL", "JG"] {
+            let source = format!("LOC #100\nBACK: HALT\n{mnem} $1,BACK");
+            let mut asm = MMixAssembler::new(&source, "<test>");
+            assert!(asm.parse().is_err(), "{mnem} should not assemble as MMIX");
+        }
+
+        let source = "LOC #100\nBACK: HALT\nBZ $1,BACK";
         let mut asm = MMixAssembler::new(source, "<test>");
-        asm.parse().unwrap();
-        assert_eq!(asm.instructions[1].1, MMixInstruction::BZB(1, 0xFFFF));
+        assert!(asm.parse().is_ok(), "BZ should still assemble in this slot");
     }
 
     #[test]

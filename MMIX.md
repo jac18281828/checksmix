@@ -372,10 +372,6 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `BNPB` | `BNPB $X, addr` | Branch if `$X <= 0` (backward hint) |
 | `BEV` | `BEV $X, addr` | Branch if `$X` is even |
 | `BEVB` | `BEVB $X, addr` | Branch if `$X` is even (backward hint) |
-| `JE` | `JE $X, addr` | checksmix extension — branch if `$X == 0`; encodes as `BZ`/`BZB` |
-| `JNE` | `JNE $X, addr` | checksmix extension — branch if `$X != 0`; encodes as `BNZ`/`BNZB` |
-| `JL` | `JL $X, addr` | checksmix extension — branch if `$X < 0`; encodes as `BN`/`BNB` |
-| `JG` | `JG $X, addr` | checksmix extension — branch if `$X > 0`; encodes as `BP`/`BPB` |
 | `PBN` | `PBN $X, Y, Z` | Probable branch if negative |
 | `PBNB` | `PBNB $X, Y, Z` | Probable branch if negative (backward) |
 | `PBZ` | `PBZ $X, Y, Z` | Probable branch if zero |
