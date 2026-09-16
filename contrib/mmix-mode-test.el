@@ -321,6 +321,29 @@ refontify when the defined names are unchanged."
     (mmix--definitions)
     (should (= (mmix-test--run-rescan) 0))))
 
+(ert-deftest mmix-rescan-does-nothing-after-leaving-the-mode ()
+  "A rescan scheduled in `mmix-mode' does not run in the buffer's next mode."
+  (mmix-test--with-buffer "Foo\tSWYM\n"
+    (insert "Bar\tSWYM\n")
+    (mmix--definitions)
+    (let ((timer mmix--definitions-timer))
+      (should (timerp timer))
+      (cancel-timer timer)
+      (fundamental-mode)
+      (apply (timer--function timer) (timer--args timer))
+      (should-not (local-variable-p 'mmix--definitions)))))
+
+(ert-deftest mmix-a-colon-label-before-is-defines-nothing ()
+  "checksmix rejects `Five: IS 5', so Five is neither highlighted nor
+tracked; a colon label before GREG or LOC is accepted."
+  (mmix-test--with-buffer
+      "Five: IS 5\nSp:\tGREG\t@\n\tSETL\t$0,Five\n\tLDO\t$1,Sp,0\n"
+    (should-not (mmix-test--face-at "Five:"))
+    (should-not (mmix-test--face-at "Five\n"))
+    (should-not (gethash "Five" (mmix--definitions)))
+    (should (eq (mmix-test--face-at "Sp:") 'font-lock-variable-name-face))
+    (should (eq (mmix-test--face-at "Sp,") 'font-lock-variable-name-face))))
+
 (ert-deftest mmix-definition-tables-compare-names-and-kinds ()
   "Tables differ when a name is added, removed or changes kind."
   (let ((a (make-hash-table :test #'equal))

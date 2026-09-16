@@ -326,6 +326,12 @@ Group 1 is a label, group 2 an instruction, group 3 a directive."
         (pcase fields
           (`(,label-beg ,label-end ,op-beg ,op-end ,_)
            (let ((kind (and op-beg (mmix--statement-kind op-beg op-end))))
+             (unless (and label-beg
+                          (mmix--definition-kind
+                           (buffer-substring-no-properties label-beg label-end)
+                           (and op-beg (buffer-substring-no-properties
+                                        op-beg op-end))))
+               (setq label-beg nil label-end nil))
              (when (or label-beg kind)
                (set-match-data
                 (list (or label-beg op-beg) (or op-end label-end)
@@ -339,9 +345,23 @@ Group 1 is a label, group 2 an instruction, group 3 a directive."
 
 (defun mmix--label-face ()
   "Face for the label matched by `mmix--match-statement'."
-  (if (member (upcase (or (match-string-no-properties 3) "")) '("IS" "GREG"))
+  (if (eq (mmix--definition-kind (match-string-no-properties 1)
+                                 (match-string-no-properties 3))
+          'value)
       'font-lock-variable-name-face
     'font-lock-function-name-face))
+
+(defun mmix--definition-kind (label operation)
+  "Return what LABEL defines when OPERATION follows it, or nil.
+OPERATION is the word after LABEL, or nil.  A name bound by IS or GREG
+is a `value' and any other label a `label'.  checksmix reads IS's name
+as a bare symbol, so a label with a trailing colon before IS defines
+nothing."
+  (let ((operation (and operation (upcase operation))))
+    (cond
+     ((and (string= operation "IS") (string-suffix-p ":" label)) nil)
+     ((member operation '("IS" "GREG")) 'value)
+     (t 'label))))
 
 ;;;; Symbol references
 
@@ -354,8 +374,8 @@ TICK is the `buffer-chars-modified-tick' TABLE was built at.")
 
 (defun mmix--scan-definitions ()
   "Return a table mapping each name the buffer defines to its kind.
-A name bound by IS or GREG is a `value'; any other label is a `label'.
-A trailing colon is not part of the name; a leading one is."
+The kind is `mmix--definition-kind'.  A trailing colon is not part of
+the name; a leading one is."
   (let ((table (make-hash-table :test #'equal)))
     (save-excursion
       (save-match-data
@@ -363,16 +383,14 @@ A trailing colon is not part of the name; a leading one is."
         (while (not (eobp))
           (pcase (mmix--line-fields)
             (`(,label-beg ,label-end ,op-beg ,op-end ,_)
-             (when label-beg
-               (puthash (string-remove-suffix
-                         ":" (buffer-substring-no-properties label-beg label-end))
-                        (if (and op-beg
-                                 (member (upcase (buffer-substring-no-properties
-                                                  op-beg op-end))
-                                         '("IS" "GREG")))
-                            'value
-                          'label)
-                        table))))
+             (when-let* ((label (and label-beg
+                                     (buffer-substring-no-properties
+                                      label-beg label-end)))
+                         (kind (mmix--definition-kind
+                                label
+                                (and op-beg (buffer-substring-no-properties
+                                             op-beg op-end)))))
+               (puthash (string-remove-suffix ":" label) kind table))))
           (forward-line 1))))
     table))
 
@@ -393,15 +411,17 @@ typing never waits on a scan of the whole buffer."
     (cdr mmix--definitions)))
 
 (defun mmix--rescan-definitions (buffer)
-  "Rescan BUFFER's definitions, refontifying it if the names changed."
+  "Rescan BUFFER's definitions, refontifying it if the names changed.
+Do nothing once BUFFER is dead or has left `mmix-mode'."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (setq mmix--definitions-timer nil)
-      (let ((previous (cdr mmix--definitions))
-            (table (mmix--scan-definitions)))
-        (setq mmix--definitions (cons (buffer-chars-modified-tick) table))
-        (unless (and previous (mmix--same-names-p previous table))
-          (font-lock-flush))))))
+      (when (derived-mode-p 'mmix-mode)
+        (setq mmix--definitions-timer nil)
+        (let ((previous (cdr mmix--definitions))
+              (table (mmix--scan-definitions)))
+          (setq mmix--definitions (cons (buffer-chars-modified-tick) table))
+          (unless (and previous (mmix--same-names-p previous table))
+            (font-lock-flush)))))))
 
 (defun mmix--same-names-p (a b)
   "Return non-nil when tables A and B hold the same names and kinds."
