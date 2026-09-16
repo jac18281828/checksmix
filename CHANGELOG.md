@@ -1,3 +1,9 @@
+0.3.8 (2026-09-16)
+
+* `contrib/mmix-mode.el` is a major mode for `.mms` source that follows the MMIXAL dialect checksmix assembles: `%` and `;` comments, char-literal escapes, column-free labels with an optional leading or trailing colon, dotted directives, `QUAD`, `INCLUDE` and `debug "text"`. It colours every use of a label or an `IS`/`GREG` name the buffer defines, aligns the label, operation and operand fields, shows instruction help through eldoc and `C-c C-d`, and runs the buffer through `checksmix` with `C-c C-c`. The help is built in and the mode needs only Emacs 29.1, so a `cargo install` user loads it without the checksmix source
+* `examples/prime.mms` tests a number for primality by trial division. It bounds the scan with `D > N/D`, reusing the quotient `DIVU` already computed, so no product exists to overflow
+* `examples/remeuclid.mms` is removed; its eight `POP` return-value cases run as a unit test in `src/mmix.rs`
+
 0.3.7 (2026-09-06)
 
 * **Breaking: `FCMPE`/`FEQLE`/`FUNE` implement Knuth's ε-neighborhood, not a flat tolerance.** `Nε(u)` scales its radius by `u`'s own binade — `2^(e−1022)·ε` for a normal `u`, `2^−1021·ε` for a denormal, `{0}` for zero, and an `ε`-dependent set for `±∞` — where the old code tested a flat `|$Y − $Z| ≤ rE` regardless of magnitude. `FCMPE(1024, 1040)` with `rE = 0.25` gave `-1` and now gives `0`: 1024's radius is `0.25 · 2^11 = 512`, which covers the gap of 16. `FCMPE`/`FEQLE` also gain the `I` flag they never raised: forced to `0` and raised when `$Y`, `$Z`, or `rE` is NaN, or `rE` is negative — never on an ordinary inequality. `rE = -0.0` is not negative (`-0.0 < 0.0` is `false`) and takes the ordinary path
