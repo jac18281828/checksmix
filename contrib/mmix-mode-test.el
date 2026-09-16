@@ -222,6 +222,85 @@ Digits inside a register, a symbol or a mnemonic are not."
     (should (eq (mmix-test--face-at "12") 'font-lock-variable-name-face))
     (should-not (mmix-test--face-at "2,Y"))))
 
+;;;; Symbol references
+
+(ert-deftest mmix-references-take-the-face-of-their-definition ()
+  "A label use is a function name and an IS or GREG name a variable.
+Forward references count; undefined names, near-misses in case or
+colon, hex digits, comments and strings do not."
+  (mmix-test--with-buffer
+      (concat "MOD\tIS\t100\n"
+              "Sp\tGREG\t@\n"
+              "Main\tSETI\t$2,MOD\n"
+              "\tPUSHJ\t$0,RemEuclid\n"
+              "\tLDO\t$1,Sp,0\n"
+              "\tBNZ\t$3,Undefined\n"
+              "\tBNZ\t$3,remeuclid\n"
+              "\tBNZ\t$3,:RemEuclid\n"
+              "\tSET\t$1,#FF\n"
+              "\tSET\t$1,1\t% RemEuclid in a comment\n"
+              "\tBYTE\t\"RemEuclid\",0\n"
+              "RemEuclid\tPOP\t1,0\n"
+              "FF\tSWYM\n"
+              ":Glob\tSWYM\n"
+              "\tJMP\t:Glob\n"
+              "\tJMP\tGlob\n")
+    (should (eq (mmix-test--face-at "MOD\n") 'font-lock-variable-name-face))
+    (should (eq (mmix-test--face-at "RemEuclid\n") 'font-lock-function-name-face))
+    (should (eq (mmix-test--face-at "Sp,") 'font-lock-variable-name-face))
+    (should-not (mmix-test--face-at "Undefined"))
+    (should-not (mmix-test--face-at "remeuclid"))
+    (should-not (mmix-test--face-at ":RemEuclid"))
+    (should-not (mmix-test--face-at "RemEuclid\n" 2))
+    (should (eq (mmix-test--face-at "FF\n") 'font-lock-number-face))
+    (should (eq (mmix-test--face-at "RemEuclid in") 'font-lock-comment-face))
+    (should (eq (mmix-test--face-at "RemEuclid\"") 'font-lock-string-face))
+    (should (eq (mmix-test--face-at ":Glob\n") 'font-lock-function-name-face))
+    (should-not (mmix-test--face-at "\tGlob\n"))))
+
+(defun mmix-test--run-rescan ()
+  "Run the pending definitions rescan now; return how often it flushed."
+  (let* ((timer mmix--definitions-timer)
+         (flushes 0)
+         (count (lambda (&rest _) (setq flushes (1+ flushes)))))
+    (should (timerp timer))
+    (cancel-timer timer)
+    (advice-add 'font-lock-flush :before count)
+    (unwind-protect
+        (apply (timer--function timer) (timer--args timer))
+      (advice-remove 'font-lock-flush count))
+    flushes))
+
+(ert-deftest mmix-references-follow-edits ()
+  "An edit schedules a rescan rather than scanning during fontification.
+The rescan picks up a new definition and refontifies, and does not
+refontify when the defined names are unchanged."
+  (mmix-test--with-buffer "\tJMP\tLater\n"
+    (should-not (mmix-test--face-at "Later"))
+    (goto-char (point-max))
+    (insert "Later\tSWYM\n")
+    (should-not (gethash "Later" (mmix--definitions)))
+    (should (= (mmix-test--run-rescan) 1))
+    (should-not mmix--definitions-timer)
+    (should (eq (gethash "Later" (mmix--definitions)) 'label))
+    (font-lock-ensure)
+    (should (eq (mmix-test--face-at "Later") 'font-lock-function-name-face))
+    (goto-char (point-max))
+    (insert "% no new names\n")
+    (mmix--definitions)
+    (should (= (mmix-test--run-rescan) 0))))
+
+(ert-deftest mmix-definition-tables-compare-names-and-kinds ()
+  "Tables differ when a name is added, removed or changes kind."
+  (let ((a (make-hash-table :test #'equal))
+        (b (make-hash-table :test #'equal)))
+    (puthash "Foo" 'label a)
+    (should-not (mmix--same-names-p a b))
+    (puthash "Foo" 'value b)
+    (should-not (mmix--same-names-p a b))
+    (puthash "Foo" 'label b)
+    (should (mmix--same-names-p a b))))
+
 ;;;; Indentation
 
 (defun mmix-test--indent (source)

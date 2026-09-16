@@ -20,6 +20,12 @@
 ;;     extensions JE/JNE/JL/JG/HALT, `.BYTE'-style directives, QUAD,
 ;;     INCLUDE and the `debug "text"' preprocessor line are all keywords.
 ;;
+;; A name the buffer defines is highlighted where it is used, in the face
+;; of its definition: a label as a function name, an IS or GREG name as a
+;; variable.  Names match exactly, so `:Foo' and `Foo' are different
+;; symbols.  Names from an INCLUDEd file, or qualified by PREFIX, are not
+;; tracked.
+;;
 ;; Instruction help is built in.  `eldoc' shows the syntax and description
 ;; of the instruction on the current line, or of the predefined symbol at
 ;; point; C-c C-d describes any instruction in a help buffer.
@@ -300,6 +306,94 @@ Group 1 is a label, group 2 an instruction, group 3 a directive."
       'font-lock-variable-name-face
     'font-lock-function-name-face))
 
+;;;; Symbol references
+
+(defvar-local mmix--definitions nil
+  "(TICK . TABLE) mapping each name this buffer defines to its kind.
+TICK is the `buffer-chars-modified-tick' TABLE was built at.")
+
+(defvar-local mmix--definitions-timer nil
+  "Idle timer that will rescan this buffer's definitions, or nil.")
+
+(defun mmix--scan-definitions ()
+  "Return a table mapping each name the buffer defines to its kind.
+A name bound by IS or GREG is a `value'; any other label is a `label'.
+A trailing colon is not part of the name; a leading one is."
+  (let ((table (make-hash-table :test #'equal)))
+    (save-excursion
+      (save-match-data
+        (goto-char (point-min))
+        (while (not (eobp))
+          (pcase (mmix--line-fields)
+            (`(,label-beg ,label-end ,op-beg ,op-end ,_)
+             (when label-beg
+               (puthash (string-remove-suffix
+                         ":" (buffer-substring-no-properties label-beg label-end))
+                        (if (and op-beg
+                                 (member (upcase (buffer-substring-no-properties
+                                                  op-beg op-end))
+                                         '("IS" "GREG")))
+                            'value
+                          'label)
+                        table))))
+          (forward-line 1))))
+    table))
+
+(defun mmix--definitions ()
+  "Return the buffer's definition table.
+The first call scans the buffer.  After an edit the previous table is
+returned at once and a rescan is scheduled for when Emacs is idle, so
+typing never waits on a scan of the whole buffer."
+  (let ((tick (buffer-chars-modified-tick)))
+    (cond
+     ((null mmix--definitions)
+      (setq mmix--definitions (cons tick (mmix--scan-definitions))))
+     ((and (not (eql (car mmix--definitions) tick))
+           (not mmix--definitions-timer))
+      (setq mmix--definitions-timer
+            (run-with-idle-timer 0.2 nil #'mmix--rescan-definitions
+                                 (current-buffer)))))
+    (cdr mmix--definitions)))
+
+(defun mmix--rescan-definitions (buffer)
+  "Rescan BUFFER's definitions, refontifying it if the names changed."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq mmix--definitions-timer nil)
+      (let ((previous (cdr mmix--definitions))
+            (table (mmix--scan-definitions)))
+        (setq mmix--definitions (cons (buffer-chars-modified-tick) table))
+        (unless (and previous (mmix--same-names-p previous table))
+          (font-lock-flush))))))
+
+(defun mmix--same-names-p (a b)
+  "Return non-nil when tables A and B hold the same names and kinds."
+  (and (= (hash-table-count a) (hash-table-count b))
+       (catch 'differ
+         (maphash (lambda (name kind)
+                    (unless (eq (gethash name b) kind)
+                      (throw 'differ nil)))
+                  a)
+         t)))
+
+(defconst mmix--symbol-regexp ":?\\_<[[:alpha:]_][[:alnum:]_]*\\_>"
+  "A symbol as an operand spells it, with an optional global colon.")
+
+(defun mmix--match-reference (limit)
+  "Find the next use of a name the buffer defines before LIMIT.
+Group 1 matches a label, group 2 a name bound by IS or GREG."
+  (let ((definitions (mmix--definitions))
+        found)
+    (while (and (not found) (re-search-forward mmix--symbol-regexp limit t))
+      (let ((beg (match-beginning 0))
+            (end (match-end 0)))
+        (pcase (gethash (match-string-no-properties 0) definitions)
+          ('label (set-match-data (list beg end beg end))
+                  (setq found t))
+          ('value (set-match-data (list beg end nil nil beg end))
+                  (setq found t)))))
+    found))
+
 (defconst mmix-font-lock-keywords
   `((mmix--match-statement
      (1 (mmix--label-face) nil t)
@@ -312,7 +406,10 @@ Group 1 is a label, group 2 an instruction, group 3 a directive."
      . 'font-lock-constant-face)
     ("\\(?:^\\|[^$#[:alnum:]_]\\)\\(-?\\(?:#[[:xdigit:]]+\\|0[xX][[:xdigit:]]+\\|[0-9]+\\)\\)\\_>"
      1 'font-lock-number-face)
-    ("@" . 'font-lock-number-face))
+    ("@" . 'font-lock-number-face)
+    (mmix--match-reference
+     (1 'font-lock-function-name-face nil t)
+     (2 'font-lock-variable-name-face nil t)))
   "Font-lock keywords for `mmix-mode'.")
 
 ;;;; Indentation
