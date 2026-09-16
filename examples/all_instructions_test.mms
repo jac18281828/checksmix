@@ -2002,8 +2002,7 @@ Test160Skip     SET     Expect,55
         JMP     TestFail
 
 % ========================================
-% load values from special registers 
-% confirm initialization
+% Test 161: GET - Load rN, confirming special-register initialization
 % ========================================
 Test161 ADDUI   TestNum,TestNum,1
         GET     Result,rN
@@ -2315,12 +2314,7 @@ Test184 ADDUI   TestNum,TestNum,1
         JMP     TestFail
 
 % ========================================
-% Test 185: SAVE - Save registers
-% Test 186: UNSAVE - Unsave registers
-% ========================================
-% Test 185: SAVE - Save registers
-% Test 186: UNSAVE - Unsave registers  
-% Test 187: RESUME - Resume execution
+% Test 185: SAVE / UNSAVE - Save and restore registers
 % ========================================
 Test185 ADDUI   TestNum,TestNum,1
         GETA    $10,SaveArea
@@ -3374,6 +3368,10 @@ Test260Pgi
 % New source here uses SET rather than SETI: for a non-negative operand
 % below #10000 the two leave the same register state, and SET does it in
 % one tetra instead of four.
+% ========================================
+
+% ========================================
+% Test 261: LDUNC with an immediate Z
 % ========================================
 Test261 ADDUI   TestNum,TestNum,1
         GETA    $10,UncachedData
