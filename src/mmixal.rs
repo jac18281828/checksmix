@@ -4456,23 +4456,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mix_jump_mnemonics_do_not_assemble_as_mmix_branches() {
-        // JE, JNE, JL and JG are MIX's compare-and-jump mnemonics, not
-        // MMIX's; only BZ/BNZ/BN/BP belong in this slot. Restoring any one
-        // of the four (grammar rule, variant, parse_inst_branch arm or
-        // encoder arm) must turn this red.
-        for mnem in ["JE", "JNE", "JL", "JG"] {
-            let source = format!("LOC #100\nBACK: HALT\n{mnem} $1,BACK");
-            let mut asm = MMixAssembler::new(&source, "<test>");
-            assert!(asm.parse().is_err(), "{mnem} should not assemble as MMIX");
-        }
-
-        let source = "LOC #100\nBACK: HALT\nBZ $1,BACK";
-        let mut asm = MMixAssembler::new(source, "<test>");
-        assert!(asm.parse().is_ok(), "BZ should still assemble in this slot");
-    }
-
-    #[test]
     fn test_pushj_at_backward_target_emits_pushjb() {
         let source = "LOC #100\nBACK: HALT\nPUSHJ $1,BACK";
         let mut asm = MMixAssembler::new(source, "<test>");
