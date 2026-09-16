@@ -129,6 +129,24 @@ or autoload it instead:
 (autoload 'mmixdb "mmixdb" "Run mmixdb under gud-mode." t)
 ```
 
+`contrib/mmix-mode.el` is a major mode for `.mms` source written to the dialect
+checksmix assembles: both `%` and `;` comments, column-free labels, the explicit
+immediate mnemonics and checksmix's extensions. It highlights and indents, shows
+the current line's instruction from `MMIX.md` through eldoc, describes any
+instruction with `C-c C-d`, and runs the file with `C-c C-c`
+(`checksmix run`). It needs nothing beyond Emacs 29.1 and checksmix:
+
+```elisp
+(add-to-list 'load-path "/path/to/checksmix/contrib")
+(require 'mmix-mode)
+```
+
+Its tests read the grammar and `MMIX.md`, so run them from the repository root:
+
+```sh
+emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and-exit
+```
+
 ## Legacy MIX support
 `.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.
 
