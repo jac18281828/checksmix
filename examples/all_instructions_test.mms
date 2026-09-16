@@ -1948,65 +1948,55 @@ Test156Forward  SETI $10,8
         JMP     TestFail
 
 % ========================================
-% CONDITIONAL BRANCH TESTS
+% SETL AND BRANCH BOUNDARY TESTS
 % ========================================
 
 % ========================================
-% Test 157: BZ - Branch if zero (taken)
+% Test 157: SETL - Set low wyde, clearing the rest
 % ========================================
 Test157 ADDUI   TestNum,TestNum,1
-        SETI $10,42
-        SETI $11,42
-        CMP     $10,$10,$11
-        SETI Result,99
-        BZ      $10,Test157Skip
-        SETI Result,#DEAD
-Test157Skip     SETI Expect,99
+        SETI    Result,-1
+        SETL    Result,#FFFF
+        SET     Expect,#FFFF
         CMP     Temp,Result,Expect
         PBZ     Temp,Test158
         JMP     TestFail
 
 % ========================================
-% Test 158: BNZ - Branch if nonzero (taken)
+% Test 158: BP - Branch if positive (not taken on zero)
 % ========================================
 Test158 ADDUI   TestNum,TestNum,1
-        SETI $10,10
-        SETI $11,20
-        CMP     $10,$10,$11
-        SETI Result,88
-        BNZ     $10,Test158Skip
-        SETI Result,#DEAD
-Test158Skip     SETI Expect,88
+        SET     $10,0
+        SET     Result,88
+        BP      $10,Test158Skip
+        SET     Result,99
+Test158Skip     SET     Expect,99
         CMP     Temp,Result,Expect
         PBZ     Temp,Test159
         JMP     TestFail
 
 % ========================================
-% Test 159: BN - Branch if negative (taken)
+% Test 159: BN - Branch if negative (taken on the sign bit alone)
 % ========================================
 Test159 ADDUI   TestNum,TestNum,1
-        SETI $10,5
-        SETI $11,10
-        CMP     $10,$10,$11
-        SETI Result,77
+        SETH    $10,#8000
+        SET     Result,77
         BN      $10,Test159Skip
-        SETI Result,#DEAD
-Test159Skip     SETI Expect,77
+        SET     Result,#DEAD
+Test159Skip     SET     Expect,77
         CMP     Temp,Result,Expect
         PBZ     Temp,Test160
         JMP     TestFail
 
 % ========================================
-% Test 160: BP - Branch if positive (taken)
+% Test 160: BZ - Branch if zero (not taken on bit 32 alone)
 % ========================================
 Test160 ADDUI   TestNum,TestNum,1
-        SETI $10,100
-        SETI $11,50
-        CMP     $10,$10,$11
-        SETI Result,66
-        BP      $10,Test160Skip
-        SETI Result,#DEAD
-Test160Skip     SETI Expect,66
+        SETMH   $10,1
+        SET     Result,66
+        BZ      $10,Test160Skip
+        SET     Result,55
+Test160Skip     SET     Expect,55
         CMP     Temp,Result,Expect
         PBZ     Temp,Test161
         JMP     TestFail
