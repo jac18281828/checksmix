@@ -331,7 +331,7 @@ refontify when the defined names are unchanged."
       (cancel-timer timer)
       (fundamental-mode)
       (apply (timer--function timer) (timer--args timer))
-      (should-not (local-variable-p 'mmix--definitions)))))
+      (should-not (local-variable-p 'mmix--definitions-cache)))))
 
 (ert-deftest mmix-a-colon-label-before-is-defines-nothing ()
   "checksmix rejects `Five: IS 5', so Five is neither highlighted nor
