@@ -484,7 +484,7 @@ column 0 is taken for an operation being typed, not a label."
     ("SET" "SET $X, $Y / SET $X, imm"
      "MMIXAL alias — emits ORI $X, $Y, 0 for a register, SETL $X, imm for a wyde-wide immediate")
     ("SETI" "SETI $X, imm"
-     "checksmix extension, no Knuth counterpart — sets a full 64-bit constant in four tetras, clearing the register")
+     "checksmix extension — sets a full 64-bit constant in four tetras, clearing the register")
     ("SETL" "SETL $X, YZ"
      "Set low wyde; the other 48 bits become zero")
     ("SETH" "SETH $X, YZ"
@@ -848,13 +848,13 @@ column 0 is taken for an operation being typed, not a label."
     ("BEVB" "BEVB $X, addr"
      "Branch if $X is even (backward hint)")
     ("JE" "JE $X, addr"
-     "checksmix extension, no Knuth counterpart — branch if $X == 0; encodes as BZ/BZB")
+     "checksmix extension — branch if $X == 0; encodes as BZ/BZB")
     ("JNE" "JNE $X, addr"
-     "checksmix extension, no Knuth counterpart — branch if $X != 0; encodes as BNZ/BNZB")
+     "checksmix extension — branch if $X != 0; encodes as BNZ/BNZB")
     ("JL" "JL $X, addr"
-     "checksmix extension, no Knuth counterpart — branch if $X < 0; encodes as BN/BNB")
+     "checksmix extension — branch if $X < 0; encodes as BN/BNB")
     ("JG" "JG $X, addr"
-     "checksmix extension, no Knuth counterpart — branch if $X > 0; encodes as BP/BPB")
+     "checksmix extension — branch if $X > 0; encodes as BP/BPB")
     ("PBN" "PBN $X, Y, Z"
      "Probable branch if negative")
     ("PBNB" "PBNB $X, Y, Z"
@@ -984,7 +984,7 @@ column 0 is taken for an operation being typed, not a label."
     ("TRAP" "TRAP X, Y, Z"
      "System call (see TRAP interface above)")
     ("HALT" "HALT"
-     "checksmix extension, no Knuth counterpart — encodes as TRAP 0,Halt,0")
+     "checksmix extension — encodes as TRAP 0,Halt,0")
     ("TRIP" "TRIP X, Y, Z"
      "Forced trip (software interrupt)")
     ("SYNC" "SYNC XYZ"
