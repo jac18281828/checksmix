@@ -190,7 +190,7 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | Mnemonic | Operands | Description |
 | --- | --- | --- |
 | `SET` | `SET $X, $Y` / `SET $X, imm` | MMIXAL alias — emits `ORI $X, $Y, 0` for a register, `SETL $X, imm` for a wyde-wide immediate |
-| `SETI` | `SETI $X, imm` | checksmix extension, no Knuth counterpart — sets a full 64-bit constant in four tetras, clearing the register |
+| `SETI` | `SETI $X, imm` | checksmix extension — sets a full 64-bit constant in four tetras, clearing the register |
 | `SETL` | `SETL $X, YZ` | Set low wyde; the other 48 bits become zero |
 | `SETH` | `SETH $X, YZ` | Set high wyde; the other 48 bits become zero |
 | `SETMH` | `SETMH $X, YZ` | Set medium-high wyde; the other 48 bits become zero |
@@ -372,10 +372,10 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `BNPB` | `BNPB $X, addr` | Branch if `$X <= 0` (backward hint) |
 | `BEV` | `BEV $X, addr` | Branch if `$X` is even |
 | `BEVB` | `BEVB $X, addr` | Branch if `$X` is even (backward hint) |
-| `JE` | `JE $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X == 0`; encodes as `BZ`/`BZB` |
-| `JNE` | `JNE $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X != 0`; encodes as `BNZ`/`BNZB` |
-| `JL` | `JL $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X < 0`; encodes as `BN`/`BNB` |
-| `JG` | `JG $X, addr` | checksmix extension, no Knuth counterpart — branch if `$X > 0`; encodes as `BP`/`BPB` |
+| `JE` | `JE $X, addr` | checksmix extension — branch if `$X == 0`; encodes as `BZ`/`BZB` |
+| `JNE` | `JNE $X, addr` | checksmix extension — branch if `$X != 0`; encodes as `BNZ`/`BNZB` |
+| `JL` | `JL $X, addr` | checksmix extension — branch if `$X < 0`; encodes as `BN`/`BNB` |
+| `JG` | `JG $X, addr` | checksmix extension — branch if `$X > 0`; encodes as `BP`/`BPB` |
 | `PBN` | `PBN $X, Y, Z` | Probable branch if negative |
 | `PBNB` | `PBNB $X, Y, Z` | Probable branch if negative (backward) |
 | `PBZ` | `PBZ $X, Y, Z` | Probable branch if zero |
@@ -440,7 +440,7 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `UNSAVE` | `UNSAVE 0, $Z` | Restore register stack from memory |
 | `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
 | `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
-| `HALT` | `HALT` | checksmix extension, no Knuth counterpart — encodes as `TRAP 0,Halt,0` |
+| `HALT` | `HALT` | checksmix extension — encodes as `TRAP 0,Halt,0` |
 | `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
 | `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline |
 | `SWYM` | `SWYM` / `SWYM X, Y, Z` | Sympathize with your machinery (no-op); operands optional, default to zero |
