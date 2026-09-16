@@ -7,7 +7,7 @@
 ;;
 ;; The keyword and predefined-symbol tests read src/mmixal.pest and
 ;; src/mmixal.rs, so a mnemonic or symbol added to the assembler without
-;; the mode turns them red.
+;; the mode turns them red.  The mode itself reads no file.
 
 ;;; Code:
 
@@ -77,57 +77,65 @@ INCLUDE is a preprocessor stage outside the grammar."
                   #'string<)))))
 
 (ert-deftest mmix-every-keyword-has-help ()
-  "MMIX.md documents every mnemonic and directive the mode knows."
-  (let ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root)))
-    (should (null (seq-remove #'mmix-instruction-help
-                              (append mmix-instructions mmix-directives))))))
+  "The built-in reference documents every mnemonic and directive."
+  (should (null (seq-remove #'mmix-instruction-help
+                            (append mmix-instructions mmix-directives
+                                    (list mmix-debug-directive))))))
 
 ;;;; Help
 
 (ert-deftest mmix-help-covers-both-operand-forms ()
   "A base mnemonic lists its register and immediate rows."
-  (let* ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root))
-         (help (mmix-instruction-help "add")))
+  (let ((help (mmix-instruction-help "add")))
     (should (member '("ADD $X, $Y, $Z" . "Add signed (sets overflow)") help))
     (should (member '("ADD $X, $Y, Z" . "Add signed immediate") help))))
 
-(ert-deftest mmix-help-keeps-a-bar-inside-a-description ()
-  "A `|' inside a description's code span does not end the cell."
-  (let ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root)))
-    (should (equal (cdar (mmix-instruction-help "ORN"))
-                   "Bitwise OR-NOT ($Y | ~$Z)"))))
-
 (ert-deftest mmix-help-reads-spelled-mnemonics-and-aliases ()
-  "2ADDU, .BYTE and QUAD resolve to their MMIX.md rows."
-  (let ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root)))
-    (should (string-prefix-p "2ADDU" (caar (mmix-instruction-help "2ADDU"))))
-    (should (string-prefix-p "BYTE" (caar (mmix-instruction-help ".byte"))))
-    (should (equal (mmix-instruction-help "QUAD")
-                   (mmix-instruction-help "OCTA")))))
+  "2ADDU, 16ADDUI, .BYTE and QUAD resolve to their rows."
+  (should (string-prefix-p "2ADDU" (caar (mmix-instruction-help "2ADDU"))))
+  (should (equal (mmix-instruction-help "16ADDUI")
+                 '(("16ADDU $X, $Y, Z" . "$X = 16*$Y + Z unsigned"))))
+  (should (string-prefix-p "BYTE" (caar (mmix-instruction-help ".byte"))))
+  (should (equal (mmix-instruction-help "QUAD")
+                 (mmix-instruction-help "OCTA"))))
+
+(ert-deftest mmix-help-ignores-non-keywords ()
+  "Only a keyword has help; debug is case-sensitive."
+  (should-not (mmix-instruction-help "Main"))
+  (should-not (mmix-instruction-help "DEBUG"))
+  (should (mmix-instruction-help "debug")))
 
 (ert-deftest mmix-help-describes-predefined-symbols ()
-  "Special registers and TRAP codes are documented; TRAP rows win."
-  (let ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root)))
-    (should (equal (mmix-symbol-help "rJ")
-                   "rJ: special register 4, return-jump register"))
-    (should (string-match-p "TRAP function 8: Write null-terminated string"
-                            (mmix-symbol-help ":Fputs")))
-    (should-not (mmix-symbol-help "rj"))))
+  "Special registers and TRAP codes are documented, case-sensitively."
+  (should (equal (mmix-symbol-help "rJ")
+                 "rJ: special register 4, return-jump register"))
+  (should (string-match-p "TRAP function 8: Write null-terminated string"
+                          (mmix-symbol-help ":Fputs")))
+  (should-not (mmix-symbol-help "rj")))
 
-(ert-deftest mmix-help-is-absent-without-a-reference ()
-  "Without MMIX.md there is no instruction help, but symbol help remains."
-  (let ((mmix-reference-file nil))
-    (should-not (mmix-instruction-help "ADD"))
-    (should (equal (mmix-symbol-help "Fputs") "Fputs: TRAP function code"))))
+(ert-deftest mmix-help-works-from-a-lone-copy ()
+  "A copy of the mode alone in a directory, loaded by a fresh Emacs, has help."
+  (let ((dir (make-temp-file "mmix-mode-" t)))
+    (unwind-protect
+        (progn
+          (copy-file (locate-library "mmix-mode.el" t) (file-name-as-directory dir))
+          (with-temp-buffer
+            (should
+             (zerop
+              (call-process
+               (expand-file-name invocation-name invocation-directory)
+               nil t nil "--batch" "-Q" "-L" dir "-l" "mmix-mode"
+               "--eval" "(princ (car (car (mmix-instruction-help \"PUSHJ\"))))")))
+            (should (string-match-p "PUSHJ \\$X, addr" (buffer-string)))))
+      (delete-directory dir t))))
 
 (ert-deftest mmix-eldoc-documents-the-line-instruction ()
   "eldoc reports the instruction anywhere on its line."
-  (let ((mmix-reference-file (expand-file-name "MMIX.md" mmix-test--root)))
-    (mmix-test--with-buffer "Main\tSUB\t$1,$2,$3\t% subtract\n"
-      (search-forward "$3")
-      (let (reported)
-        (mmix-eldoc-function (lambda (text &rest _) (setq reported text)))
-        (should (string-match-p "Subtract signed" reported))))))
+  (mmix-test--with-buffer "Main\tSUB\t$1,$2,$3\t% subtract\n"
+    (search-forward "$3")
+    (let (reported)
+      (mmix-eldoc-function (lambda (text &rest _) (setq reported text)))
+      (should (string-match-p "Subtract signed" reported)))))
 
 ;;;; Statement fields and font lock
 

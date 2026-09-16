@@ -132,16 +132,17 @@ or autoload it instead:
 `contrib/mmix-mode.el` is a major mode for `.mms` source written to the dialect
 checksmix assembles: both `%` and `;` comments, column-free labels, the explicit
 immediate mnemonics and checksmix's extensions. It highlights and indents, shows
-the current line's instruction from `MMIX.md` through eldoc, describes any
-instruction with `C-c C-d`, and runs the file with `C-c C-c`
-(`checksmix run`). It needs nothing beyond Emacs 29.1 and checksmix:
+the current line's instruction through eldoc, describes any instruction with
+`C-c C-d`, and runs the file with `C-c C-c` (`checksmix run`). The instruction
+reference is built in, so the file stands alone: copy it into a directory on
+`load-path` and require it, with Emacs 29.1 or later:
 
 ```elisp
-(add-to-list 'load-path "/path/to/checksmix/contrib")
 (require 'mmix-mode)
 ```
 
-Its tests read the grammar and `MMIX.md`, so run them from the repository root:
+Its tests check the mode against the assembler's grammar, so run them from the
+repository root:
 
 ```sh
 emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and-exit
