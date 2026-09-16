@@ -196,16 +196,16 @@ Each is (NAME . MEANING).")
 (defconst mmix--label-regexp "\\`:?[[:alpha:]_][[:alnum:]_]*:?\\'"
   "A label: an optionally global symbol with an optional trailing colon.")
 
+(defconst mmix--single-operand-keywords
+  '("JMP" "JMPB" "RESUME" "SYNC" "LOC" "GREG" "PREFIX" "BYTE" ".BYTE"
+    "WYDE" ".WYDE" "TETRA" ".TETRA" "OCTA" ".OCTA" "QUAD" ".QUAD")
+  "Keywords whose statement is complete with a single operand.")
+
 (defun mmix--line-fields ()
   "Return the statement fields of the current line, or nil.
 The value is (LABEL-BEG LABEL-END OP-BEG OP-END OPERAND-BEG); a field
-absent from the line is nil.
-
-checksmix tries a line as a bare statement before it tries a label, so
-the first word is the operation when it cannot be a label, or when it is
-a mnemonic or directive that is not followed by another and does not
-stand alone (HALT and SWYM may), or when operands follow it directly.
-Otherwise it is a label and the next word, if any, is the operation."
+absent from the line is nil.  `mmix--operation-first-p' decides whether
+the first word is a label or the operation."
   (save-excursion
     (beginning-of-line)
     (unless (nth 3 (syntax-ppss))
@@ -217,14 +217,11 @@ Otherwise it is a label and the next word, if any, is the operation."
                (beg2 (progn (skip-chars-forward " \t") (point)))
                (end2 (and (looking-at mmix--word-regexp) (match-end 0)))
                (word2 (and end2 (buffer-substring-no-properties beg2 end2)))
-               (operands-follow (and (not end2) (mmix--operands-at-point-p)))
-               (op-first
-                (or (not (string-match-p mmix--label-regexp word1))
-                    (and (mmix--keyword-kind word1)
-                         (not (and word2 (mmix--keyword-kind word2)))
-                         (or word2 operands-follow
-                             (member (upcase word1) '("HALT" "SWYM"))))
-                    operands-follow))
+               (rest (progn (when end2
+                              (goto-char end2)
+                              (skip-chars-forward " \t"))
+                            (mmix--operands-at-point-p)))
+               (op-first (mmix--operation-first-p word1 word2 rest))
                (op-beg (if op-first beg1 (and end2 beg2)))
                (op-end (if op-first end1 end2)))
           (when op-end
@@ -232,6 +229,30 @@ Otherwise it is a label and the next word, if any, is the operation."
             (skip-chars-forward " \t"))
           (list (unless op-first beg1) (unless op-first end1) op-beg op-end
                 (and op-end (mmix--operands-at-point-p) (point))))))))
+
+(defun mmix--operation-first-p (word1 word2 rest)
+  "Return non-nil when WORD1, a line's first word, is its operation.
+WORD2 is the word after WORD1, or nil.  REST is non-nil when something
+other than a comment follows the last of the two words.
+
+checksmix reads a line as a bare statement before it reads it as a
+label followed by one, and the conditions below follow that order."
+  (let ((name1 (upcase word1))
+        (kind1 (mmix--keyword-kind word1)))
+    (cond
+     ;; `.BYTE', `2ADDU': not label-shaped.
+     ((not (string-match-p mmix--label-regexp word1)) t)
+     ;; INCLUDE takes the rest of the line, whatever it spells.
+     ((string= name1 "INCLUDE") (or word2 rest))
+     ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
+     ((null word2) (or rest (member name1 '("HALT" "SWYM"))))
+     ;; `Main SETL $0,1'.
+     ((not kind1) nil)
+     ;; `PUT rA,$1', `JMP Loop'.
+     ((not (mmix--keyword-kind word2)) t)
+     ;; `JMP ADD' jumps to a label named ADD; `Add ADD $1,$2,$3' and
+     ;; `Set HALT' are labelled statements.
+     (t (and (not rest) (member name1 mmix--single-operand-keywords))))))
 
 (defun mmix--operands-at-point-p ()
   "Return non-nil when point is before text that is not a comment."
@@ -277,6 +298,24 @@ open a comment."
 
 ;;;; Font lock
 
+(defconst mmix--debug-line-regexp
+  "^\\(?:[^ \t\n]*[ \t]+\\)?debug[ \t]+\"[^\"\n]*\"[ \t]*$"
+  "A line checksmix's preprocessor expands as `debug \"text\"'.
+Nothing, not even a comment, may follow the closing quote.")
+
+(defun mmix--statement-kind (op-beg op-end)
+  "Return the kind of the operation between OP-BEG and OP-END, or nil.
+`debug' is a directive only on a line the preprocessor accepts."
+  (let* ((operation (buffer-substring-no-properties op-beg op-end))
+         (kind (mmix--keyword-kind operation)))
+    (if (and (string= operation mmix-debug-directive)
+             (not (save-excursion
+                    (goto-char op-beg)
+                    (beginning-of-line)
+                    (looking-at-p mmix--debug-line-regexp))))
+        nil
+      kind)))
+
 (defun mmix--match-statement (limit)
   "Find the next statement line before LIMIT and set its match data.
 Group 1 is a label, group 2 an instruction, group 3 a directive."
@@ -286,9 +325,7 @@ Group 1 is a label, group 2 an instruction, group 3 a directive."
         (forward-line 1)
         (pcase fields
           (`(,label-beg ,label-end ,op-beg ,op-end ,_)
-           (let ((kind (and op-beg (mmix--keyword-kind
-                                    (buffer-substring-no-properties
-                                     op-beg op-end)))))
+           (let ((kind (and op-beg (mmix--statement-kind op-beg op-end))))
              (when (or label-beg kind)
                (set-match-data
                 (list (or label-beg op-beg) (or op-end label-end)
@@ -570,9 +607,9 @@ column 0 is taken for an operation being typed, not a label."
     ("CSWAPI" "CSWAP $X, $Y, Z"
      "Compare and swap (immediate): if M8[$Y+Z] = rP, store $X there and set $X ← 1; otherwise rP ← M8[$Y+Z] and $X ← 0")
     ("LDA" "LDA $X, $Y, $Z / LDA $X, addr"
-     "Load address of $Y + $Z — the ADDU $X, $Y, $Z alias; two-operand form described below the table")
+     "Load address of $Y + $Z — the ADDU $X, $Y, $Z alias; LDA $X, addr loads addr in one tetra when it fits a byte, else in four")
     ("LDAI" "LDA $X, $Y, Z / LDAI $X, addr"
-     "Load address of $Y + Z — the ADDU $X, $Y, Z alias; two-operand form described below the table")
+     "Load address of $Y + Z — the ADDU $X, $Y, Z alias; LDAI $X, addr loads addr in one tetra when it fits a byte, else in four")
     ("STB" "STB $X, $Y, $Z"
      "Store byte signed")
     ("STBI" "STB $X, $Y, Z"

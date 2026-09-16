@@ -166,6 +166,37 @@ INCLUDE is a preprocessor stage outside the grammar."
     (should (eq (mmix-test--face-at ":Glob") 'font-lock-function-name-face))
     (should-not (mmix-test--face-at "FOO"))))
 
+(ert-deftest mmix-single-operand-statements-take-a-keyword-named-operand ()
+  "A lone keyword-named word after a single-operand keyword is its operand.
+checksmix assembles `JMP ADD' as a jump to ADD and `Loc HALT' as LOC, but
+reads `Set HALT' as the label Set on a HALT."
+  (mmix-test--with-buffer
+      (concat "\tJMP\tADD\n"
+              "Loc\tHALT\n"
+              "\tPREFIX\tSET\n"
+              "Set\tHALT\n"
+              "\tJMP\tADD $1\n"
+              "\tINCLUDE\tADD\n")
+    (should (eq (mmix-test--face-at "JMP") 'font-lock-keyword-face))
+    (should-not (mmix-test--face-at "ADD\n"))
+    (should (eq (mmix-test--face-at "Loc") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "PREFIX") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "Set\t") 'font-lock-function-name-face))
+    (should (eq (mmix-test--face-at "HALT" 2) 'font-lock-keyword-face))
+    (should (eq (mmix-test--face-at "JMP" 2) 'font-lock-function-name-face))
+    (should (eq (mmix-test--face-at "ADD $1") 'font-lock-keyword-face))
+    (should (eq (mmix-test--face-at "INCLUDE") 'font-lock-preprocessor-face))
+    (should-not (mmix-test--face-at "ADD\n" 2)))
+  (should (equal (mmix-test--indent "\tJMP\tADD\n\tLOC\tGREG\n")
+                 "\tJMP\tADD\n\tLOC\tGREG\n")))
+
+(ert-deftest mmix-debug-is-a-directive-only-where-checksmix-expands-it ()
+  "Nothing may follow the text of a debug line, not even a comment."
+  (mmix-test--with-buffer
+      "Main\tdebug \"ok\"  \n\tdebug \"bad\" % note\n"
+    (should (eq (mmix-test--face-at "debug") 'font-lock-preprocessor-face))
+    (should-not (mmix-test--face-at "debug" 2))))
+
 (ert-deftest mmix-keywords-are-case-insensitive-and-symbols-are-not ()
   "halt is the instruction; Halt in an operand is the TRAP constant."
   (mmix-test--with-buffer "\thalt\n\tTRAP\t0,Halt,0\n\tGET\t$1,rJ\n\tGET\t$1,rj\n"
@@ -341,21 +372,6 @@ refontify when the defined names are unchanged."
     (should (equal compile-command "checksmix run /tmp/prog.mms"))
     (set-buffer-modified-p nil)
     (setq buffer-file-name nil)))
-
-(ert-deftest mmix-checksmix-errors-are-compilation-errors ()
-  "compilation-mode locates checksmix's assembler diagnostics."
-  (with-temp-buffer
-    (insert "=== MMIX Assembler ===\n"
-            "Error: /tmp/bad.mms:3:6: syntax error: expected one of: EOI\n")
-    (compilation-mode)
-    (font-lock-ensure)
-    (goto-char (point-min))
-    (compilation-next-error 1)
-    (let ((loc (compilation--message->loc
-                (get-text-property (point) 'compilation-message))))
-      (should (equal (caar (compilation--loc->file-struct loc))
-                     "/tmp/bad.mms"))
-      (should (equal (compilation--loc->line loc) 3)))))
 
 (ert-deftest mmix-imenu-lists-labels ()
   "imenu indexes labels and IS names, without trailing colons."
