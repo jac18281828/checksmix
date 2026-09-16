@@ -61,6 +61,9 @@ cargo run --bin checksmix -- target/hello_world.mmo
   so the caller's `$X+1,$X+2` arrive as the callee's `$0,$1`, and `POP 1` returns a value
   to the caller's hole.
 - `examples/fibonacci.mms`: that convention applied to an iterative `fib(20)`.
+- `examples/prime.mms`: trial-division primality test that prints its verdict. It bounds
+  the scan with `D > N/D`, reusing the quotient `DIVU` already computed, so the test
+  cannot overflow the way `D*D > N` does.
 - `examples/linked_list.mms`: walks a statically allocated list and sums node values.
 - `examples/time.mms`: reads the host clock through `TRAP 0,Time,2`.
 - `examples/all_instructions_test.mms`: broad instruction coverage for regression checks.
