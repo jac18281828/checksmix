@@ -61,8 +61,6 @@ cargo run --bin checksmix -- target/hello_world.mmo
   so the caller's `$X+1,$X+2` arrive as the callee's `$0,$1`, and `POP 1` returns a value
   to the caller's hole.
 - `examples/fibonacci.mms`: that convention applied to an iterative `fib(20)`.
-- `examples/remeuclid.mms`: Euclidean remainder over eight cases, accumulating a pass
-  bit-field in `$20`.
 - `examples/linked_list.mms`: walks a statically allocated list and sums node values.
 - `examples/time.mms`: reads the host clock through `TRAP 0,Time,2`.
 - `examples/all_instructions_test.mms`: broad instruction coverage for regression checks.

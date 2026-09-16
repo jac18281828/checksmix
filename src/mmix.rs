@@ -7621,6 +7621,40 @@ mod tests {
     }
 
     #[test]
+    fn pop_returns_a_callee_computed_remainder_to_the_hole() {
+        // Each case: dividend, and its Euclidean remainder mod 100.
+        let cases = [
+            (42, 42),
+            (142, 42),
+            (-58, 42),
+            (-194, 6),
+            (0, 0),
+            (100, 0),
+            (-100, 0),
+            (-1, 99),
+        ];
+        for (dividend, expected) in cases {
+            let source = format!(
+                "\
+\tLOC\t#100
+Main\tSETI\t$1,{dividend}
+\tSET\t$2,100
+\tPUSHJ\t$0,RemEuclid
+\tSET\t$255,$0
+\tTRAP\t0,Halt,0
+RemEuclid\tDIV\t$2,$0,$1
+\tMUL\t$3,$2,$1
+\tSUB\t$0,$0,$3
+\tBNN\t$0,Done
+\tADDU\t$0,$0,$1
+Done\tPOP\t1,0
+"
+            );
+            assert_eq!(run_to_halt(&source), expected, "{dividend} mod 100");
+        }
+    }
+
+    #[test]
     fn pushjb_reaches_a_backward_callee() {
         // The PUSHJB sits ten tetras past AddFunc, so YZ is 65536 - 10.
         // Read as a magnitude that lands in zeroed memory and halts with 0.
