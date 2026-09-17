@@ -3709,11 +3709,11 @@ Test277Inner
 % PUT rL only ever lowers rL, to min(z, rL), and zeroes every register
 % the drop excludes from the local range.
 % ========================================
-Test278 ADDUI   TestNum,TestNum,1
+Test278 ADDU    TestNum,TestNum,1
         SET     $50,#DEAD         % global while rG = 32
         SET     $10,60
         PUT     rG,$10            % rG = 60; $50 is now marginal, still #DEAD
-        SET     $55,777           % claims $7..$55, zeroing the gap -- $50 too
+        SET     $55,777           % claims $11..$55, zeroing the gap -- $50 too
         SET     Expect,0
         CMP     Temp,$50,Expect
         PBZ     Temp,Test278b
@@ -3747,7 +3747,7 @@ Test278d
 % first, raising rL to 60, and only then reads rL -- so it stores the
 % raised value, not the value rL held when the instruction began.
 % ========================================
-Test279 ADDUI   TestNum,TestNum,1
+Test279 ADDU    TestNum,TestNum,1
         GET     $59,rL
         SET     Expect,60
         CMP     Temp,$59,Expect
@@ -3757,8 +3757,13 @@ Test279b
         GET     Result,rL
         SET     Expect,60
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test279c
         JMP     TestFail
+Test279c
+        SET     $10,32
+        PUT     rL,$10            % restore the default split so a test
+        PUT     rG,$10            % appended here starts from rL = rG = 32
+        JMP     TestPass
 
 % ========================================
 % Intentional coverage exceptions

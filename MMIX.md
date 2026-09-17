@@ -186,8 +186,12 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 
 ## Register stack
 
-Every register from `rL` through `rG-1` is marginal and reads zero. Writing
-a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL..$(X-1)`; for
+Every register from `rL` through `rG-1` is marginal and reads zero, with one
+exception: a raw write to `rG` or `rL` — `PUT rG` raising `rG`, or `UNSAVE`
+restoring a context — moves the boundary without clearing anything, so a
+register it makes marginal keeps its old contents until something claims it.
+Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL` through
+`$X`; for
 an instruction whose `X` field is a general-register destination, this rise
 happens before the instruction runs, so `GET $X,rL` stores the raised `rL`,
 not the value it held when the instruction began. `PUT rL,z` (and `PUTI`)

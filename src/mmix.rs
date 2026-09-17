@@ -1020,14 +1020,18 @@ impl MMix {
     /// zeroing every register from the old rL through `reg`. A no-op when
     /// `reg` is already local or is a global register (`reg >= rG`).
     fn claim_local(&mut self, reg: u8) {
-        let rg = self.special_regs[SpecialReg::RG as usize] as u8;
-        if reg >= rg {
+        // UNSAVE restores rL and rG straight from guest memory, so either can
+        // name a register the file does not have. Compare at full width: a
+        // truncated rL would read as a low register and drop live locals.
+        let rg = self.special_regs[SpecialReg::RG as usize];
+        if (reg as u64) >= rg {
             return;
         }
-        let rl = self.special_regs[SpecialReg::RL as usize] as u8;
-        if reg < rl {
+        let rl = self.special_regs[SpecialReg::RL as usize];
+        if (reg as u64) < rl {
             return;
         }
+        let rl = rl as u8;
         for marginal in rl..=reg {
             self.general_regs[marginal as usize] = 0;
         }
@@ -1210,9 +1214,11 @@ impl MMix {
     fn put_rl(&mut self, z: u64) {
         let rl_old = self.get_special(SpecialReg::RL);
         let rl_new = z.min(rl_old);
-        // UNSAVE restores rL straight from guest memory, so it can name a
-        // register the file does not have. Zero only what exists.
-        let drop_end = rl_old.min(self.general_regs.len() as u64);
+        // Only the local range goes marginal: the globals $rG.. keep their
+        // values, and an rL restored from guest memory can name a register
+        // the file does not have.
+        let rg = self.get_special(SpecialReg::RG);
+        let drop_end = rl_old.min(rg).min(self.general_regs.len() as u64);
         for marginal in rl_new..drop_end {
             self.general_regs[marginal as usize] = 0;
         }
@@ -2502,8 +2508,7 @@ impl MMix {
 
         // The destination register raises rL before the instruction runs,
         // not after: a marginal $Y or $Z is still read as an operand while
-        // it is zero, so this can run once, ahead of every arm below,
-        // instead of splitting each arm's operand reads from its result.
+        // it is zero, so the rise belongs ahead of every arm below.
         if Self::writes_general_register_x(op_byte) {
             self.claim_local(x);
         }
@@ -4548,7 +4553,6 @@ impl MMix {
             Opcode::PUT => {
                 // PUT rX, $Z - Put to special register
                 // X field specifies the special register, Z specifies source register
-                // rL is special-cased in put_special: it only ever lowers.
                 let special_reg_num = x;
                 let value = self.get_register(z);
                 // Map register number to SpecialReg enum
@@ -4560,7 +4564,6 @@ impl MMix {
             }
             Opcode::PUTI => {
                 // PUTI $X, YZ - Put to special register (immediate)
-                // rL is special-cased in put_special: it only ever lowers.
                 let special_reg_num = x;
                 let value = ((y as u64) << 8) | (z as u64);
                 if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
@@ -5055,7 +5058,7 @@ mod tests {
 
         // rS advances by X+2 = 5 (4 saved + 1 frame word)
         assert_eq!(mmix.get_special(SpecialReg::RS), 5);
-        // new rL = max(0, rL_old - X - 1) = max(0, 3-3-1) = 0
+        // new rL = max(0, rL_old - X - 1) = max(0, 4-3-1) = 0
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
         assert_eq!(mmix.get_pc(), 0x104);
@@ -8210,7 +8213,7 @@ Main\tSETI\t$1,100
     fn test_put_rl_survives_an_rl_beyond_the_register_file() {
         // UNSAVE copies rL out of guest memory without checking it, so a
         // program can reach PUT rL with an rL no register answers to. The
-        // drop must still lower rL instead of running off the file.
+        // drop still lowers rL, and the globals it never covered survive.
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RL, u64::MAX);
         mmix.general_regs[200] = 42;
@@ -8220,7 +8223,54 @@ Main\tSETI\t$1,100
         assert!(mmix.execute_instruction());
 
         assert_eq!(mmix.get_special(SpecialReg::RL), 3);
-        assert_eq!(mmix.get_register(200), 0, "the whole file drops out");
+        assert_eq!(mmix.get_register(200), 42, "a global is not a local");
+    }
+
+    #[test]
+    fn test_a_destination_rise_after_an_out_of_range_unsave_keeps_the_locals() {
+        // UNSAVE takes rL from the saved context without checking it, so a
+        // crafted context can name more locals than the machine has. The
+        // next destination must not read that rL narrowly and drop live
+        // registers it mistakes for marginal ones.
+        let mut mmix = MMix::new();
+        let context = 0x2000;
+        for (reg, value) in [(5u64, 111u64), (6, 222), (7, 333)] {
+            mmix.write_octa(context + reg * 8, value);
+        }
+        let specials = context + 256 * 8;
+        mmix.write_octa(specials + (SpecialReg::RG as u64) * 8, 32);
+        mmix.write_octa(specials + (SpecialReg::RL as u64) * 8, 256);
+        mmix.set_register(255, context);
+
+        // UNSAVE 0,$255
+        mmix.write_tetra(0, 0xFB0000FF);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RL), 256);
+
+        // ADD $10,$0,$0 - a destination rise against the restored rL.
+        mmix.write_tetra(4, 0x200A0000);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(5), 111);
+        assert_eq!(mmix.get_register(6), 222);
+        assert_eq!(mmix.get_register(7), 333);
+    }
+
+    #[test]
+    fn test_put_rl_leaves_the_globals_alone_when_rg_sits_below_rl() {
+        // Lowering rG below rL leaves the locals above it named by rL but
+        // owned by the global range. PUT rL drops the local range only.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RG, 60);
+        mmix.set_register(55, 777); // local while rG = 60, so rL rises to 56
+        mmix.set_special(SpecialReg::RG, 32); // $55 is global now
+
+        // PUTI rL,3
+        mmix.write_tetra(0, 0xF7140003);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
+        assert_eq!(mmix.get_register(55), 777, "a global keeps its value");
     }
 
     #[test]
@@ -8243,16 +8293,86 @@ Main\tSETI\t$1,100
 
     #[test]
     fn test_arithmetic_destination_rise_leaves_a_marginal_source_reading_zero() {
+        // $40 carries a stale value into the marginal range: written while
+        // it was global, then left behind by a raised rG. The destination's
+        // rise covers it, so the operand read that follows sees zero.
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+        mmix.set_special(SpecialReg::RG, 50);
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // ADD $45,$40,$0 - the rise claims $3..=$45, zeroing $40 before it
+        // is read as an operand.
+        mmix.write_tetra(0, 0x202D2800);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(45), 0);
+        assert_eq!(mmix.get_register(40), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 46);
+    }
+
+    #[test]
+    fn test_a_conditional_set_that_stores_nothing_still_raises_rl() {
+        // The destination claims its locals whether or not the arm writes
+        // it: CSN with a false condition leaves $8 untouched, and $8 is
+        // local from then on.
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RL, 3);
 
-        // ADD $8,$6,$0 - $6 and $8 are both marginal; the destination's
-        // rise runs first, but the marginal source still reads zero.
-        mmix.write_tetra(0, 0x20080600);
+        // CSN $8,$6,$7 - $6 is zero, so the condition is false.
+        mmix.write_tetra(0, 0x60080607);
         assert!(mmix.execute_instruction());
 
-        assert_eq!(mmix.get_register(8), 0);
         assert_eq!(mmix.get_special(SpecialReg::RL), 9);
+    }
+
+    #[test]
+    fn test_a_read_modify_write_destination_reads_its_own_rise_as_zero() {
+        // INCL's destination is also its source. The rise runs first, so a
+        // stale marginal $40 increments from zero, not from what it held.
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 777); // global while rG = 32
+        mmix.set_special(SpecialReg::RG, 50);
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // INCL $40,5
+        mmix.write_tetra(0, 0xE7280005);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(40), 5);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 41);
+    }
+
+    #[test]
+    fn test_go_claims_its_destination_before_reading_its_address() {
+        // GO stores the return address in $X, so $X claims its locals — and
+        // the claim covers the stale marginal $40 it then reads for the
+        // branch address.
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+        mmix.set_special(SpecialReg::RG, 50);
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // GO $45,$40,4
+        mmix.write_tetra(0, 0x9F2D2804);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_pc(), 4, "$40 reads zero, so the target is 0+4");
+        assert_eq!(mmix.get_register(45), 4, "the tetra after the GO");
+        assert_eq!(mmix.get_special(SpecialReg::RL), 46);
+    }
+
+    #[test]
+    fn test_a_store_does_not_claim_its_x_register() {
+        // STO reads $X rather than writing it, so it leaves rL alone.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // STO $8,$0,0
+        mmix.write_tetra(0, 0xAD080000);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
     }
 
     #[test]
