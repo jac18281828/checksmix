@@ -1034,6 +1034,20 @@ impl MMix {
         self.special_regs[SpecialReg::RL as usize] = (reg as u64) + 1;
     }
 
+    /// True when `op_byte`'s X field names a general-register destination:
+    /// the floating-point and integer arithmetic and compare instructions,
+    /// the conditional- and zero-set instructions, the loads, GO, PUSHGO,
+    /// the bitwise and SETL-family instructions, PUSHJ, GETA, SAVE and GET.
+    /// Branches, stores, PUT, POP, UNSAVE and the opcodes with no register
+    /// operand are not; their X field, when present, names something other
+    /// than a general register.
+    fn writes_general_register_x(op_byte: u8) -> bool {
+        matches!(
+            op_byte,
+            0x01..=0x3F | 0x60..=0x99 | 0x9E..=0x9F | 0xBE..=0xEF | 0xF2..=0xF5 | 0xFA | 0xFE
+        )
+    }
+
     /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
     ///
     /// Only X+1 octas (the saved-and-marginal range) need to spill (MMIXAL
@@ -2482,6 +2496,14 @@ impl MMix {
         let opcode = Opcode::try_from(op_byte).unwrap_or_else(|_| {
             panic!("Invalid opcode {:#04x} at PC {:#018x}", op_byte, self.pc);
         });
+
+        // The destination register raises rL before the instruction runs,
+        // not after: a marginal $Y or $Z is still read as an operand while
+        // it is zero, so this can run once, ahead of every arm below,
+        // instead of splitting each arm's operand reads from its result.
+        if Self::writes_general_register_x(op_byte) {
+            self.claim_local(x);
+        }
 
         match opcode {
             // Floating Point instructions
@@ -5050,7 +5072,10 @@ mod tests {
 
         assert_eq!(mmix.frame_info_stack.len(), 1);
         assert_eq!(mmix.frame_info_stack[0].saved_x, 3);
-        assert_eq!(mmix.frame_info_stack[0].saved_rl, 3);
+        // X (3) is at the old rL (3), so it is marginal: the destination's
+        // rise claims it before push_frame runs, and saved_rl is the raised
+        // value (4), not the caller's rL when the instruction began.
+        assert_eq!(mmix.frame_info_stack[0].saved_rl, 4);
     }
 
     #[test]
@@ -8176,6 +8201,38 @@ Main\tSETI\t$1,100
         mmix.write_tetra(4, 0x20010400);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_get_of_rl_into_a_marginal_destination_sees_the_raised_value() {
+        // GET is the only opcode whose result depends on whether its
+        // destination's rise runs before or after the special-register
+        // read: the rise runs first, so GET reads the raised rL, not the
+        // value rL held when the instruction began.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RG, 32);
+        mmix.set_special(SpecialReg::RL, 5);
+
+        // GET $10,rL
+        mmix.write_tetra(0, 0xFE0A0014);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(10), 11);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 11);
+    }
+
+    #[test]
+    fn test_arithmetic_destination_rise_leaves_a_marginal_source_reading_zero() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // ADD $8,$6,$0 - $6 and $8 are both marginal; the destination's
+        // rise runs first, but the marginal source still reads zero.
+        mmix.write_tetra(0, 0x20080600);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(8), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 9);
     }
 
     #[test]

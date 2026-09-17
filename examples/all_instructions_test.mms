@@ -3737,6 +3737,26 @@ Test278d
         GET     Result,rL
         SET     Expect,50
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test279
+        JMP     TestFail
+
+% ========================================
+% Test 279: a destination register raises rL before the instruction runs
+% ========================================
+% $59 is marginal (rL = 50, rG = 60 from Test 278). GET $59,rL claims $59
+% first, raising rL to 60, and only then reads rL -- so it stores the
+% raised value, not the value rL held when the instruction began.
+% ========================================
+Test279 ADDUI   TestNum,TestNum,1
+        GET     $59,rL
+        SET     Expect,60
+        CMP     Temp,$59,Expect
+        PBZ     Temp,Test279b
+        JMP     TestFail
+Test279b
+        GET     Result,rL
+        SET     Expect,60
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
 
