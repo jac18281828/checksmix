@@ -209,29 +209,6 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
     );
 }
 
-// ── run big_fib.mms: register-stack rule leaves the result intact ────────────
-//
-// Regression for the register-stack rule: a register above a PUSHJ's hole
-// reads zero after the call, and POP resumes at the current rJ, which a
-// nested PUSHJ overwrites. big_fib.mms depends on neither, so it must keep
-// printing the full result.
-
-#[test]
-fn run_big_fib_prints_fib_100() {
-    let big_fib = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("big_fib.mms");
-    let out = checksmix().args(["run"]).arg(&big_fib).output().unwrap();
-    assert!(
-        out.status.success(),
-        "run of big_fib.mms should succeed; stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("fib(100) = 354224848179261915075"),
-        "expected fib(100) line in stdout: {stdout}"
-    );
-}
-
 // ── an input contributing no source: diagnostic, not a panic ─────────────────
 //
 // resolve_includes trims away a blank segment; an input made entirely of

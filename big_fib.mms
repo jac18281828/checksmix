@@ -1,19 +1,7 @@
 % ----------------------------------------------------
-% Fibonacci (Big Integer) - bounded arbitrary precision.
-% BigInt = MAXLIMBS little-endian 64-bit limbs.
-%
-% Cross-routine arguments and results travel through Arg0/Arg1/Arg2,
-% global registers allocated with GREG, so they survive any PUSHJ/POP
-% regardless of the callee's saved-window size.  Single-value returns
-% instead use the standard slide convention: caller does PUSHJ $K,
-% callee does POP 1,0, and the returned value lands at the caller's $K
-% (the "hole"). A routine that PUSHJs saves rJ with GET before the
-% call and restores it with PUT before its own POP, because POP
-% resumes at the current rJ and a nested PUSHJ overwrites it. Any
-% local register a routine reads after a PUSHJ it issues is numbered
-% below that PUSHJ's hole, so the register-stack rule leaves it alone.
-% Zero is a GREG, not $255: mmixal's postamble sets $255 to the address
-% of Main, so $255 is not the zero constant it defaults to elsewhere.
+% Fibonacci with big integers. fib(100) has 21 digits, far past 64 bits,
+% so each number lives in 32 limbs of 64 bits, lowest limb first.
+% A routine that calls another saves rJ with GET and restores it with PUT.
 % ----------------------------------------------------
 
 Zero    GREG    0
