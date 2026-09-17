@@ -72,7 +72,7 @@ Before marking work complete, run and report:
 6. `cargo check --lib --no-default-features --target wasm32-unknown-unknown`
 7. `cargo test --no-default-features`
 
-Do not mark work complete until all gates pass.
+If a gate stays red after a genuine fix, stop and report the error.
 
 ## Commits
 - Conventional Commits, signed, lower-case `type(scope): subject`, wrapped at
