@@ -1008,18 +1008,30 @@ impl MMix {
 
     /// Set the value of a general-purpose register.
     ///
-    /// Writing to a local register $i with i >= rL grows rL to i+1 (clamped to
-    /// rG-1). This matches MMIX hardware semantics, where the local register
-    /// frame implicitly extends to cover any local that has been written.
+    /// Writing to a local register $i with i >= rL grows rL to i+1 and zeroes
+    /// every register the growth exposes, so a register between the old and
+    /// new rL never reads a stale value.
     pub fn set_register(&mut self, reg: u8, value: u64) {
+        self.claim_local(reg);
         self.general_regs[reg as usize] = value;
+    }
+
+    /// Raise rL to cover `reg` when it names a marginal local register,
+    /// zeroing every register from the old rL through `reg`. A no-op when
+    /// `reg` is already local or is a global register (`reg >= rG`).
+    fn claim_local(&mut self, reg: u8) {
         let rg = self.special_regs[SpecialReg::RG as usize] as u8;
-        if reg < rg {
-            let rl = self.special_regs[SpecialReg::RL as usize] as u8;
-            if reg >= rl {
-                self.special_regs[SpecialReg::RL as usize] = (reg as u64) + 1;
-            }
+        if reg >= rg {
+            return;
         }
+        let rl = self.special_regs[SpecialReg::RL as usize] as u8;
+        if reg < rl {
+            return;
+        }
+        for marginal in rl..=reg {
+            self.general_regs[marginal as usize] = 0;
+        }
+        self.special_regs[SpecialReg::RL as usize] = (reg as u64) + 1;
     }
 
     /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
@@ -1171,7 +1183,23 @@ impl MMix {
         if reg == SpecialReg::RA && value > RA_MAX {
             return;
         }
+        if reg == SpecialReg::RL {
+            self.put_rl(value);
+            return;
+        }
         self.set_special(reg, value);
+    }
+
+    /// `PUT rL,z` only ever lowers rL, to `min(z, rL)`. The registers the
+    /// drop excludes from the local range become marginal and must read
+    /// zero.
+    fn put_rl(&mut self, z: u64) {
+        let rl_old = self.get_special(SpecialReg::RL);
+        let rl_new = z.min(rl_old);
+        for marginal in rl_new..rl_old {
+            self.general_regs[marginal as usize] = 0;
+        }
+        self.set_special(SpecialReg::RL, rl_new);
     }
 
     /// Read a byte from memory at the given address.
@@ -4495,6 +4523,7 @@ impl MMix {
             Opcode::PUT => {
                 // PUT rX, $Z - Put to special register
                 // X field specifies the special register, Z specifies source register
+                // rL is special-cased in put_special: it only ever lowers.
                 let special_reg_num = x;
                 let value = self.get_register(z);
                 // Map register number to SpecialReg enum
@@ -4506,6 +4535,7 @@ impl MMix {
             }
             Opcode::PUTI => {
                 // PUTI $X, YZ - Put to special register (immediate)
+                // rL is special-cased in put_special: it only ever lowers.
                 let special_reg_num = x;
                 let value = ((y as u64) << 8) | (z as u64);
                 if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
@@ -8099,6 +8129,53 @@ Main\tSETI\t$1,100
         mmix.write_tetra(0, 0xF7031234); // PUTI X=3 (rH), YZ=0x1234
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_special(SpecialReg::RH), 0x1234);
+    }
+
+    #[test]
+    fn test_set_register_zeros_a_stale_marginal_gap() {
+        // Raising rG is a raw write with no rL rules of its own, so it can
+        // leave a stale value in a register that becomes marginal. Writing
+        // a higher register must still zero it out when the write claims
+        // the range.
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+        mmix.set_special(SpecialReg::RG, 50); // $40 is now marginal, still 0xDEAD
+
+        mmix.set_register(45, 123);
+
+        assert_eq!(mmix.get_register(40), 0, "the gap zeros out");
+        assert_eq!(mmix.get_register(45), 123);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 46);
+    }
+
+    #[test]
+    fn test_put_rl_with_a_larger_z_leaves_rl_unchanged() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, 5);
+
+        // PUTI rL,10 - z > rL, so rL stays at min(10, 5) = 5.
+        mmix.write_tetra(0, 0xF714000A);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RL), 5);
+    }
+
+    #[test]
+    fn test_put_rl_zeros_the_registers_it_drops() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, 6);
+        mmix.set_register(4, 777);
+
+        // PUTI rL,3 - drops $3..$5 out of the local range.
+        mmix.write_tetra(0, 0xF7140003);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
+
+        // ADD $1,$4,$0 reads the dropped $4 with no intervening write: zero.
+        // $1 is already local (1 < 3), so its own destination rise is a
+        // no-op and does not confound this read.
+        mmix.write_tetra(4, 0x20010400);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0);
     }
 
     #[test]

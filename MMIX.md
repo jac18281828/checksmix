@@ -186,6 +186,11 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 
 ## Register stack
 
+Every register from `rL` through `rG-1` is marginal and reads zero. Writing
+a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL..$(X-1)`.
+`PUT rL,z` (and `PUTI`) only ever lowers `rL`, to `min(z, rL)`, and zeroes
+every register the drop excludes from the local range.
+
 `PUSHJ $X, addr` (and `PUSHJB`, `PUSHGO`, `PUSHGOI`) push the caller's local
 registers and slide the window down. For `X < rG`: `$0..$X` go to the
 register stack, the marginal slot at offset `X` and the following frame word

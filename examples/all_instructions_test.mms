@@ -3687,7 +3687,7 @@ Test277Return
 Test277Return2
         SET     Expect,701
         CMP     Temp,$5,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test278
         JMP     TestFail
 Test277Callee
         GET     $6,rJ
@@ -3698,6 +3698,47 @@ Test277Callee
 Test277Inner
         SET     $0,999
         POP     0,0
+
+% ========================================
+% Test 278: marginal registers stay zero
+% ========================================
+% PUT rG raises rG with no zeroing rule of its own (that belongs to a
+% later unit), so it can plant a stale value in what becomes a marginal
+% register: $50 holds #DEAD while global, then rG rises past it. Writing
+% a higher register must still zero that gap when it claims the range.
+% PUT rL only ever lowers rL, to min(z, rL), and zeroes every register
+% the drop excludes from the local range.
+% ========================================
+Test278 ADDUI   TestNum,TestNum,1
+        SET     $50,#DEAD         % global while rG = 32
+        SET     $10,60
+        PUT     rG,$10            % rG = 60; $50 is now marginal, still #DEAD
+        SET     $55,777           % claims $7..$55, zeroing the gap -- $50 too
+        SET     Expect,0
+        CMP     Temp,$50,Expect
+        PBZ     Temp,Test278b
+        JMP     TestFail
+Test278b
+        SET     Expect,777
+        CMP     Temp,$55,Expect
+        PBZ     Temp,Test278c
+        JMP     TestFail
+Test278c
+        SET     $54,999           % local; rL is now 56
+        SET     $10,50
+        PUT     rL,$10            % rL: min(50, 56) = 50; drops and zeros $50..$55
+        SET     Expect,0
+        CMP     Temp,$54,Expect
+        PBZ     Temp,Test278d
+        JMP     TestFail
+Test278d
+        SET     $10,999
+        PUT     rL,$10            % z > rL: rL stays at 50
+        GET     Result,rL
+        SET     Expect,50
+        CMP     Temp,Result,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
 
 % ========================================
 % Intentional coverage exceptions
