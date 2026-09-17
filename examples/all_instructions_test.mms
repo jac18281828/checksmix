@@ -3629,13 +3629,13 @@ Test275c
         JMP     TestFail
 
 % ========================================
-% Test 276: POP's Knuth-canonical hole and marginal registers
+% Test 276: POP's hole and marginal registers
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
 % $1-$4 (settled decision 9). rL is pinned to 9 so the window slide is
 % exact: PUSHJ $5 carries caller's $6,$7,$8 into the callee's $0,$1,$2.
-% POP 2,1 then checks Knuth's "curious permutation" (the hole gets the
-% callee's last output, $0 lands one slot above it) and that $8, above
+% POP 2,1 then checks that the hole gets the callee's last output, with
+% $0 landing one slot above it, and that $8, above
 % x+X, reads zero rather than its pre-call value.
 % ========================================
 Test276 ADDUI   TestNum,TestNum,1

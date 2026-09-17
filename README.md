@@ -219,18 +219,22 @@ MMIX is Knuth's own "pretty clean" machine architecture, and he documented it hi
 
 - [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html) — the
   canonical home: design rationale, current news, and why MIX was retired.
-- [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
-  — the complete specification, with Knuth's own assembler and simulator
-  (Springer LNCS 1750, 1999).
 - [*The Art of Computer Programming*](https://www-cs-faculty.stanford.edu/~knuth/taocp.html),
   Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005) — the
   instruction set as Knuth teaches it, and the shortest path in.
-- [The MMIX Home Page](http://mmix.cs.hm.edu/) — Martin Ruckert's collection at Munich
-  University of Applied Sciences: documentation, sources, binaries, worked examples,
-  and *The MMIX Supplement*.
 
 `checksmix` follows the same instruction set, so a program written from any of these
 runs here — and in [playmmix](https://playmmix.2ad.com) without installing anything.
+
+## Related projects
+
+- [The MMIX Home Page](http://mmix.cs.hm.edu/) — Martin Ruckert's collection at Munich
+  University of Applied Sciences: documentation, sources, binaries, worked examples,
+  and *The MMIX Supplement*.
+- [Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/) — the Home Page's
+  per-instruction reference.
+- [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
+  — an assembler and simulator for the architecture (Springer LNCS 1750, 1999).
 
 ## Tribute
 

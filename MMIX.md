@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; Knuth reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
+MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
 
 ## Memory access
 
@@ -55,7 +55,7 @@ unaligned access a load through that label rounds back down past the datum.
 ### INCLUDE
 
 `INCLUDE file` (also `.INCLUDE`, case-insensitive) is a **checksmix extension**,
-not part of Knuth's MMIXAL. It is a preprocessor stage, not a grammar rule: the
+not part of MMIXAL. It is a preprocessor stage, not a grammar rule: the
 named file is inserted as its own translation unit(s), so errors inside it
 report *its own* filename and line numbers rather than the includer's. The path
 resolves relative to the including file's own directory (like C's
@@ -138,7 +138,7 @@ Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, 
 
 ### rA event flags
 
-Arithmetic operations OR event flags into `rA`; they are never cleared automatically. The bit values are Knuth's (`D_BIT` … `X_BIT`, MMIXAL §69).
+Arithmetic operations OR event flags into `rA`; they are never cleared automatically. The bit values match MMIXAL's predefined symbols `D_BIT` … `X_BIT`.
 
 | Flag | rA bit | Kind | Raised when |
 | --- | --- | --- | --- |
@@ -157,7 +157,7 @@ Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
 ### Epsilon instructions (FCMPE / FUNE / FEQLE)
 
-`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. Knuth defines an ε-neighborhood `Nε(u)` around each compared value, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; and `Nε(±∞)` depends on whether `ε` is below 1, in `[1, 2)`, or at least 2. `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
+`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. An ε-neighborhood `Nε(u)` is defined around each compared value, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; and `Nε(±∞)` depends on whether `ε` is below 1, in `[1, 2)`, or at least 2. `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
 
 `FCMPE` and `FEQLE` force their result to `0` and raise `I` when `$Y`, `$Z`, or `rE` is NaN, or `rE` is negative — never on an ordinary inequality. `FUNE` reports `1` on exactly that same exceptional condition and `0` otherwise; it says nothing about proximity, and raises no flag either way.
 
@@ -196,8 +196,8 @@ both hold `X`; the caller's `$(X+1)..$(rL-1)` become the callee's
 
 `POP X, YZ` returns from a `PUSHJ $x` frame whose callee has `rL = L`. If `X
 > L`, `X` becomes `L+1` and the hole gets zero. The caller's `$0..$(x-1)`
-restore from the register stack; `$x` gets the callee's `$(X-1)` (Knuth's
-"curious permutation" — the *last* output lands in the hole), or zero when
+restore from the register stack; `$x` gets the callee's `$(X-1)` (the *last*
+output lands in the hole), or zero when
 `X = 0` or the clamp fired; `$(x+1)..$(x+X-1)` get the callee's `$0..$(X-2)`.
 `rL` becomes `min(x+X, rG)`; every register from the new `rL` through `rG-1`
 reads zero.
@@ -482,8 +482,8 @@ Measured on MMIXware (`mmix-20131017.tgz`):
 | `SYNCIDI` | `SYNCID $X, $Y, Z` | Synchronize instruction and data cache (immediate) |
 
 checksmix parses the `X` operand of `PRELD`, `PREGO`, `PREST`, `SYNCD` and
-`SYNCID` as a register. Knuth specifies an immediate byte count there, so
-source written to the specification does not assemble.
+`SYNCID` as a register. The specification uses an immediate byte count
+there, so source written to the specification does not assemble.
 
 `LDA`/`LDAI $X, addr` resolve at assemble time by whether `addr` fits a byte.
 An `addr` of 0 to 255 assembles to a single tetra: `LDAI` correctly emits a

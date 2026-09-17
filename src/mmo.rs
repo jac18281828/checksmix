@@ -4,7 +4,7 @@
 //! The MMO format consists of records (not instructions) that specify how to load
 //! code and data into memory at arbitrary 64-bit addresses.
 //!
-//! ## Format Specification (from MMOTYPE)
+//! ## Format Specification
 //!
 //! ### Record Structure
 //! - All records begin with MM escape code (0x98)
@@ -16,7 +16,7 @@
 //! Any tetrabyte NOT preceded by MM (0x98) is loaded as data at cur_loc,
 //! then cur_loc += 4. This is the primary way to load instruction/data bytes.
 //!
-//! ### Lopcodes (verified against mmotype.pdf)
+//! ### Lopcodes
 //! - 0x00 (lop_quote): Quote single tetrabyte (YZ must = 1)
 //! - 0x01 (lop_loc): Set current location
 //! - 0x02 (lop_skip): Skip YZ bytes forward
@@ -30,8 +30,6 @@
 //! - 0x0A (lop_post): Postamble (Y=0, Z>=32)
 //! - 0x0B (lop_stab): Symbol table
 //! - 0x0C (lop_end): End of file (YZ=symbol table length)
-//!
-//! Reference: MMIXWARE documentation by Donald Knuth, mmotype.pdf
 
 use crate::mmixal::MMixInstruction;
 use std::collections::HashMap;
@@ -42,8 +40,7 @@ use crate::encode::encode_instruction_bytes;
 /// MMO escape code - all MMO files must start with this
 pub const MM: u8 = 0x98;
 
-/// MMO record types (lopcodes) as defined in the MMIXAL specification
-/// Reference: MMIXWARE documentation, Section on MMO Format
+/// MMO record types (lopcodes) (MMIXAL reference)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(clippy::enum_variant_names)]

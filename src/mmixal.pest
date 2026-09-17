@@ -58,7 +58,8 @@ directive_greg = @{ ^"GREG" ~ word_end }
 directive_prefix = @{ ^"PREFIX" ~ word_end }
 
 // PREFIX argument: any identifier-like sequence allowing ':' so users can
-// write `PREFIX foo:` (Knuth idiom) or `PREFIX :` (reset to root namespace).
+// write `PREFIX foo:` (the conventional trailing colon) or `PREFIX :`
+// (reset to root namespace).
 prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
 // A data directive takes a list of strings and/or expressions.
@@ -214,7 +215,7 @@ mnemonic_feql = @{ ^"FEQL" ~ word_end }
 mnemonic_fune = @{ ^"FUNE" ~ word_end }
 mnemonic_fun = @{ ^"FUN" ~ word_end }
 
-// Bitwise operations (§10) - ordered longest first for exact matching
+// Bitwise operations - ordered longest first for exact matching
 mnemonic_andni = @{ ^"ANDNI" ~ word_end }
 mnemonic_andn = @{ ^"ANDN" ~ word_end }
 mnemonic_andi = @{ ^"ANDI" ~ word_end }
@@ -270,7 +271,7 @@ mnemonic_zsn = @{ ^"ZSN" ~ word_end }
 mnemonic_zsz = @{ ^"ZSZ" ~ word_end }
 mnemonic_zsp = @{ ^"ZSP" ~ word_end }
 
-// Bit fiddling operations (§11-12) - ordered longest first
+// Bit fiddling operations - ordered longest first
 mnemonic_bdifi = @{ ^"BDIFI" ~ word_end }
 mnemonic_bdif = @{ ^"BDIF" ~ word_end }
 mnemonic_wdifi = @{ ^"WDIFI" ~ word_end }
@@ -286,7 +287,7 @@ mnemonic_mxor = @{ ^"MXOR" ~ word_end }
 mnemonic_mori = @{ ^"MORI" ~ word_end }
 mnemonic_mor = @{ ^"MOR" ~ word_end }
 
-// Shift instructions (§14) - ordered longest first
+// Shift instructions - ordered longest first
 mnemonic_slui = @{ ^"SLUI" ~ word_end }
 mnemonic_slu = @{ ^"SLU" ~ word_end }
 mnemonic_sli = @{ ^"SLI" ~ word_end }
@@ -500,8 +501,8 @@ inst_float_rrr = {
 }
 
 // FIX/FIXU/FSQRT/FINT take a single register operand plus an optional Y
-// rounding-mode override (a pure value, never a register — Knuth's Y is a
-// mode number, not $Y). The 3-operand form is tried first: PEG commits to
+// rounding-mode override (a pure value, never a register — Y is a mode
+// number, not $Y). The 3-operand form is tried first: PEG commits to
 // the first alternative that matches, and the shorter 2-operand form would
 // otherwise swallow the register-looking Y symbol and strand the comma.
 inst_float_round_rrz = {
@@ -560,7 +561,7 @@ inst_bitwise_rri = {
     operand_reg_reg_imm
 }
 
-// Bit fiddling operations (§11-12) - base mnemonics auto-select RRR/RRI by Z.
+// Bit fiddling operations - base mnemonics auto-select RRR/RRI by Z.
 inst_bitfiddle_auto = {
     (mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
     operand_reg_reg_z
@@ -571,7 +572,7 @@ inst_bitfiddle_rri = {
     operand_reg_reg_imm
 }
 
-// Shift instructions (§14) - base mnemonics auto-select RRR/RRI by Z.
+// Shift instructions - base mnemonics auto-select RRR/RRI by Z.
 inst_shift_auto = {
     (mnemonic_slu | mnemonic_sru |
      mnemonic_sl | mnemonic_sr) ~

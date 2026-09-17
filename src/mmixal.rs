@@ -140,7 +140,7 @@ pub enum MMixInstruction {
     STSF(u8, u8, u8),   // STSF $X, $Y, $Z - store short float
     STSFI(u8, u8, u8),  // STSF $X, $Y, Z - store short float (immediate)
 
-    // Arithmetic - Add and Subtract (§9)
+    // Arithmetic - Add and Subtract
     ADD(u8, u8, u8),     // ADD $X, $Y, $Z - add with overflow
     ADDI(u8, u8, u8),    // ADD $X, $Y, Z - add immediate with overflow
     ADDU(u8, u8, u8),    // ADDU $X, $Y, $Z - add unsigned (same as LDA)
@@ -204,7 +204,7 @@ pub enum MMixInstruction {
 
     INCL(u8, u16), // INCL $X, YZ - increment low wyde
 
-    // Bitwise operations (§10)
+    // Bitwise operations
     AND(u8, u8, u8),   // AND $X, $Y, $Z - bitwise and
     ANDI(u8, u8, u8),  // AND $X, $Y, Z - bitwise and immediate
     OR(u8, u8, u8),    // OR $X, $Y, $Z - bitwise or
@@ -224,7 +224,7 @@ pub enum MMixInstruction {
     MUX(u8, u8, u8),   // MUX $X, $Y, $Z - bitwise multiplex
     MUXI(u8, u8, u8),  // MUX $X, $Y, Z - bitwise multiplex immediate
 
-    // Bit fiddling operations (§11-12)
+    // Bit fiddling operations
     BDIF(u8, u8, u8),  // BDIF $X, $Y, $Z - byte difference
     BDIFI(u8, u8, u8), // BDIF $X, $Y, Z - byte difference immediate
     WDIF(u8, u8, u8),  // WDIF $X, $Y, $Z - wyde difference
@@ -240,7 +240,7 @@ pub enum MMixInstruction {
     MXOR(u8, u8, u8),  // MXOR $X, $Y, $Z - multiple exclusive-or
     MXORI(u8, u8, u8), // MXOR $X, $Y, Z - multiple exclusive-or immediate
 
-    // Shift instructions (§14)
+    // Shift instructions
     SL(u8, u8, u8),   // SL $X, $Y, $Z - shift left
     SLI(u8, u8, u8),  // SL $X, $Y, Z - shift left immediate
     SLU(u8, u8, u8),  // SLU $X, $Y, $Z - shift left unsigned
@@ -1196,7 +1196,7 @@ impl MMixAssembler {
         }
 
         // Y rounding-mode override values for FIX, FIXU, FSQRT, FINT, and the
-        // FLOT/SFLOT families (mmixal.w:2003-2012). Numbered independently of
+        // FLOT/SFLOT families (MMIXAL reference). Numbered independently of
         // rA's own persistent-mode field (`RA_ROUND_SHIFT`): rA's ROUND_NEAR
         // is 0, but Y's is 4, since Y=0 is reserved to mean "no override".
         for (name, mode) in [
@@ -1851,8 +1851,8 @@ impl MMixAssembler {
     }
 
     /// Resolve `SET`'s source operand into the instruction it selects: a
-    /// register reference copies, anything else sets the low wyde. Knuth's
-    /// SET is one tetra, so the immediate form carries 16 bits.
+    /// register reference copies, anything else sets the low wyde. `SET`
+    /// is one tetra, so the immediate form carries 16 bits.
     fn lower_set_source(
         &self,
         dest: u8,
@@ -4723,7 +4723,7 @@ mod tests {
         assert_eq!(asm.instructions[0].1, MMixInstruction::MUX(1, 2, 3));
     }
 
-    // Bit fiddling operations tests (§11-12)
+    // Bit fiddling operations tests
     #[test]
     fn test_parse_bdif() {
         let mut asm = MMixAssembler::new("BDIF $1, $2, $3", "<test>");
@@ -4822,7 +4822,7 @@ mod tests {
         assert_eq!(asm.instructions[0].1, MMixInstruction::MXORI(1, 2, 64));
     }
 
-    // Shift instruction parsing tests (§14)
+    // Shift instruction parsing tests
     #[test]
     fn test_parse_sl() {
         let mut asm = MMixAssembler::new("SL $3, $1, $2", "<test>");
@@ -5798,7 +5798,7 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_round_mode_symbols_resolve_to_documented_values() {
-        // mmixal.w:2003-2012's predefined-symbol table, independent of
+        // The predefined-symbol table (MMIXAL reference), independent of
         // rA's own persistent-mode numbering (decision 8).
         let asm = MMixAssembler::new("", "<test>");
         for (name, value) in [

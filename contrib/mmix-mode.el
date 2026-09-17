@@ -5,8 +5,8 @@
 ;;; Commentary:
 
 ;; Syntax highlighting, indentation and instruction help for `.mms' files,
-;; following the MMIXAL dialect checksmix assembles rather than Knuth's.
-;; Where the two differ this mode follows checksmix:
+;; following the MMIXAL dialect checksmix assembles rather than canonical
+;; MMIXAL. Where the two differ this mode follows checksmix:
 ;;
 ;;   - `%' and `;' both start a comment that runs to the end of the line.
 ;;   - A string literal has no escapes; a character literal accepts

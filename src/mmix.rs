@@ -403,8 +403,8 @@ macro_rules! sub_ri {
     }};
 }
 
-/// rA event-flag bits, matching Knuth's predefined symbols `D_BIT` through
-/// `X_BIT` (MMIXAL §69). Layout (low → high): X Z U O I W V D.
+/// rA event-flag bits, matching the predefined symbols `D_BIT` through
+/// `X_BIT`. Layout (low → high): X Z U O I W V D.
 ///
 /// `V` and `D` are the integer events; the other six are floating-point.
 /// MMIX has no denormalized-operand event — a subnormal operand raises
@@ -776,7 +776,7 @@ impl Host for StdHost {
 
 /// One frame's bookkeeping on the register stack.
 ///
-/// # Register Stack (MMIXware §1.4 / Knuth)
+/// # Register Stack (MMIXAL reference)
 ///
 /// PUSHJ $X, RA (X < rG):
 ///   - Pushes the X+1 octas $0..$X to memory at rO + 8·rS.
@@ -795,8 +795,8 @@ impl Host for StdHost {
 ///   - X clamps to L+1 when X > L.
 ///   - Restores caller's $0..$(x-1) from memory, skipping any index at or
 ///     above the current rG.
-///   - $x gets the callee's $(X-1) (Knuth's "curious permutation": the last
-///     output lands in the hole), or zero when X = 0 or the clamp fired.
+///   - $x gets the callee's $(X-1) (the last output lands in the hole), or
+///     zero when X = 0 or the clamp fired.
 ///     $(x+1)..$(x+X-1) get the callee's $0..$(X-2).
 ///   - rL := min(x + X, rG); every register from the new rL through rG-1
 ///     reads zero.
@@ -1026,13 +1026,14 @@ impl MMix {
 
     /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
     ///
-    /// Knuth's spec only spills X+1 octas (the saved-and-marginal range) and keeps
-    /// the rest in the ring buffer; we approximate the ring by spilling the full
-    /// active local frame so the slide-back on POP can restore everything. The
-    /// frame on the stack is therefore `max(X+1, rL) + 1` octas (saved + frame
-    /// word), with the marginal at offset X always overwriting that slot. POP
-    /// restores only `$0..$(x-1)` from it — the rest exists so `rS` and the
-    /// stack's memory image match what a real spill would leave.
+    /// Only X+1 octas (the saved-and-marginal range) need to spill (MMIXAL
+    /// reference); the rest stays in a ring buffer. We approximate the ring
+    /// by spilling the full active local frame so the slide-back on POP can
+    /// restore everything. The frame on the stack is therefore
+    /// `max(X+1, rL) + 1` octas (saved + frame word), with the marginal at
+    /// offset X always overwriting that slot. POP restores only
+    /// `$0..$(x-1)` from it — the rest exists so `rS` and the stack's
+    /// memory image match what a real spill would leave.
     fn frame_octas(saved_x: u8, saved_rl: u8) -> u64 {
         std::cmp::max(saved_x as u64 + 1, saved_rl as u64)
     }
@@ -1041,8 +1042,8 @@ impl MMix {
     fn push_frame(&mut self, x: u8) {
         let rg = self.get_special(SpecialReg::RG) as u8;
         let rl_old = self.get_special(SpecialReg::RL) as u8;
-        // Knuth: PUSHJ $X with X >= G pushes all of $0..$(rL-1) and starts
-        // the callee at rL = 0; the hole for the later POP is rL, not X.
+        // PUSHJ $X with X >= rG pushes all of $0..$(rL-1) and starts the
+        // callee at rL = 0; the hole for the later POP is rL, not X.
         let x = if x >= rg { rl_old } else { x };
         let ro = self.get_special(SpecialReg::RO);
         let rs = self.get_special(SpecialReg::RS);
@@ -1063,7 +1064,7 @@ impl MMix {
             let addr = stack_addr.wrapping_add(i.wrapping_mul(8));
             self.write_octa(addr, val);
         }
-        // Frame-size word (Knuth: value X) immediately after the saved range.
+        // Frame-size word (value X) immediately after the saved range.
         let frame_word_addr = stack_addr.wrapping_add(frame_octas.wrapping_mul(8));
         self.write_octa(frame_word_addr, x as u64);
 
@@ -1101,8 +1102,8 @@ impl MMix {
         let rs = self.get_special(SpecialReg::RS);
         let l = self.get_special(SpecialReg::RL) as u16;
 
-        // Knuth: if X > L, X becomes L+1 and the hole gets zero regardless
-        // of what the callee left there.
+        // If X > L, X becomes L+1 and the hole gets zero regardless of what
+        // the callee left there.
         let clamped = (n as u16) > l;
         let count = if clamped { l + 1 } else { n as u16 };
 
@@ -1129,8 +1130,8 @@ impl MMix {
             }
         }
 
-        // Knuth's "curious permutation": the hole $x gets the last output;
-        // $(x+1)..$(x+count-1) get the rest, in their original order.
+        // The hole $x gets the last output; the rest,
+        // $(x+1)..$(x+count-1), get the callee's remaining outputs in order.
         let hole = if count == 0 || clamped {
             0
         } else {
@@ -1167,9 +1168,10 @@ impl MMix {
         self.special_regs[reg as usize] = value;
     }
 
-    /// Apply a `PUT` write. rA holds 18 bits and Knuth rejects any wider value;
-    /// he treats the attempt as an error, while `PUT` here has no fault channel,
-    /// so the write is dropped and execution continues.
+    /// Apply a `PUT` write. rA holds 18 bits; a wider value is an
+    /// impermissible `PUT` and causes an illegal-instruction interrupt.
+    /// `PUT` here has no fault channel, so the write is dropped and
+    /// execution continues.
     fn put_special(&mut self, reg: SpecialReg, value: u64) {
         if reg == SpecialReg::RA && value > RA_MAX {
             return;
@@ -1261,7 +1263,7 @@ impl MMix {
     }
 
     /// Read a wyde (2 bytes) from memory at the address rounded down to a
-    /// multiple of 2, per Knuth's `M_2[A] = M_2[2*floor(A/2)]`.
+    /// multiple of 2: `M_2[A] = M_2[2*floor(A/2)]` (MMIXAL reference).
     pub fn read_wyde(&self, addr: u64) -> u16 {
         let addr = addr & !1;
         let b0 = self.read_byte(addr) as u16;
@@ -1270,7 +1272,7 @@ impl MMix {
     }
 
     /// Write a wyde (2 bytes) to memory at the address rounded down to a
-    /// multiple of 2, per Knuth's `M_2[A] = M_2[2*floor(A/2)]`.
+    /// multiple of 2: `M_2[A] = M_2[2*floor(A/2)]`.
     pub fn write_wyde(&mut self, addr: u64, value: u16) {
         let addr = addr & !1;
         self.write_byte(addr, (value >> 8) as u8);
@@ -1278,7 +1280,7 @@ impl MMix {
     }
 
     /// Read a tetra (4 bytes) from memory at the address rounded down to a
-    /// multiple of 4, per Knuth's `M_4[A] = M_4[4*floor(A/4)]`.
+    /// multiple of 4: `M_4[A] = M_4[4*floor(A/4)]`.
     pub fn read_tetra(&self, addr: u64) -> u32 {
         let addr = addr & !3;
         let b0 = self.read_byte(addr) as u32;
@@ -1289,7 +1291,7 @@ impl MMix {
     }
 
     /// Write a tetra (4 bytes) to memory at the address rounded down to a
-    /// multiple of 4, per Knuth's `M_4[A] = M_4[4*floor(A/4)]`.
+    /// multiple of 4: `M_4[A] = M_4[4*floor(A/4)]`.
     pub fn write_tetra(&mut self, addr: u64, value: u32) {
         let addr = addr & !3;
         self.write_byte(addr, (value >> 24) as u8);
@@ -1299,7 +1301,7 @@ impl MMix {
     }
 
     /// Read an octa (8 bytes) from memory at the address rounded down to a
-    /// multiple of 8, per Knuth's `M_8[A] = M_8[8*floor(A/8)]`.
+    /// multiple of 8: `M_8[A] = M_8[8*floor(A/8)]`.
     pub fn read_octa(&self, addr: u64) -> u64 {
         let addr = addr & !7;
         let b0 = self.read_byte(addr) as u64;
@@ -1314,7 +1316,7 @@ impl MMix {
     }
 
     /// Write an octa (8 bytes) to memory at the address rounded down to a
-    /// multiple of 8, per Knuth's `M_8[A] = M_8[8*floor(A/8)]`.
+    /// multiple of 8: `M_8[A] = M_8[8*floor(A/8)]`.
     pub fn write_octa(&mut self, addr: u64, value: u64) {
         let addr = addr & !7;
         self.write_byte(addr, (value >> 56) as u8);
@@ -1438,13 +1440,13 @@ impl MMix {
         }
     }
 
-    /// `u ∈ Nε(v)`, Knuth's ε-neighborhood (`mmix-doc.w`, "MMIX goes beyond
-    /// the IEEE standard..."). The radius scales by `v`'s own binade: `e` is
-    /// `v`'s raw IEEE-754 biased exponent field, `0` for zero and
-    /// subnormals, `1..=2046` for a normal double. `v == 0` and `v == ±∞`
-    /// are their own cases, not the scaled formula. Callers exclude NaN
-    /// operands and a NaN or negative `ε` beforehand (the shared exception
-    /// condition, `epsilon_exceptional`) — `v` and `ε` are never NaN here.
+    /// `u ∈ Nε(v)`, the ε-neighborhood. The radius scales by `v`'s own
+    /// binade: `e` is `v`'s raw IEEE-754 biased exponent field, `0` for
+    /// zero and subnormals, `1..=2046` for a normal double. `v == 0` and
+    /// `v == ±∞` are their own cases, not the scaled formula. Callers
+    /// exclude NaN operands and a NaN or negative `ε` beforehand (the shared
+    /// exception condition, `epsilon_exceptional`) — `v` and `ε` are never
+    /// NaN here.
     #[inline]
     fn in_epsilon_neighborhood(u: f64, v: f64, epsilon: f64) -> bool {
         if v.is_infinite() {
@@ -1477,9 +1479,9 @@ impl MMix {
         }
     }
 
-    /// The shared exceptional condition for `FCMPE`/`FEQLE`/`FUNE`
-    /// (`mmix-doc.w`): either compared value is NaN, or `rE` is NaN or
-    /// negative. `-0.0 < 0.0` is `false`, so `rE = -0.0` is not negative.
+    /// The shared exceptional condition for `FCMPE`/`FEQLE`/`FUNE`: either
+    /// compared value is NaN, or `rE` is NaN or negative. `-0.0 < 0.0` is
+    /// `false`, so `rE = -0.0` is not negative.
     #[inline]
     fn epsilon_exceptional(y_val: f64, z_val: f64, epsilon: f64) -> bool {
         y_val.is_nan() || z_val.is_nan() || epsilon.is_nan() || epsilon < 0.0
@@ -1698,11 +1700,11 @@ impl MMix {
     }
 
     /// Resolve the `Y` rounding-mode override that `FIX`, `FIXU`, `FSQRT`,
-    /// `FINT`, and the `FLOT`/`SFLOT` families carry (`mmix-doc.w`). `Y == 0`
-    /// defers to rA's own persistent mode (`RA_ROUND_SHIFT`); `Y` in `1..=4`
-    /// forces a mode via `Y & 3` — this maps `Y=4` (`ROUND_NEAR`) onto rA's
-    /// mode `0`, since the two numberings are not related by a simple
-    /// offset (`MMIX.md`'s rounding-mode table). `Y > 4` is Knuth's
+    /// `FINT`, and the `FLOT`/`SFLOT` families carry.
+    /// `Y == 0` defers to rA's own persistent mode (`RA_ROUND_SHIFT`); `Y`
+    /// in `1..=4` forces a mode via `Y & 3` — this maps `Y=4` (`ROUND_NEAR`)
+    /// onto rA's mode `0`, since the two numberings are not related by a
+    /// simple offset (`MMIX.md`'s rounding-mode table). `Y > 4` is the
     /// illegal-instruction condition; `Err` and the caller halts.
     #[inline]
     fn resolved_round_mode(&self, y: u8) -> Result<u64, ()> {
@@ -1713,9 +1715,9 @@ impl MMix {
         }
     }
 
-    /// `Y > 4` on an instruction that takes a rounding-mode override
-    /// (`mmix-doc.w`): an illegal-instruction interrupt this VM has no
-    /// vector for. Mirrors `Opcode::TRIP`'s halt-with-diagnostic precedent.
+    /// `Y > 4` on an instruction that takes a rounding-mode override is an
+    /// illegal-instruction interrupt this VM has no vector for. Mirrors
+    /// `Opcode::TRIP`'s halt-with-diagnostic precedent.
     fn illegal_round_mode(&mut self, mnemonic: &str, y: u8) -> bool {
         self.host.diagnostic(&format!(
             "{mnemonic}: illegal Y={y} at PC={:#018x} (Y must be 0-4)",
@@ -2684,7 +2686,7 @@ impl MMix {
                 true
             }
             Opcode::FCMPE => {
-                // FCMPE $X, $Y, $Z - Knuth's ε-relation: −1 (≺), 0 (∼, an
+                // FCMPE $X, $Y, $Z - the ε-relation: −1 (≺), 0 (∼, an
                 // epsilon-close pair), or +1 (≻). Forces 0 and raises I on
                 // an exceptional input; never both -1/+1 and I.
                 let y_val = Self::u64_to_f64(self.get_register(y));
@@ -2710,8 +2712,8 @@ impl MMix {
                 // FUNE $X, $Y, $Z - reports only whether $Y, $Z, or rE is
                 // exceptional (NaN operand, or rE NaN/negative); says
                 // nothing about proximity, unlike FCMPE/FEQLE's ∼. Exempt
-                // from the invalid exception Knuth raises on that same
-                // condition for FCMPE/FEQLE — raises no flag either way.
+                // from the invalid exception FCMPE/FEQLE raise on that same
+                // condition — raises no flag either way.
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
@@ -2725,8 +2727,8 @@ impl MMix {
                 true
             }
             Opcode::FEQLE => {
-                // FEQLE $X, $Y, $Z - Knuth's ≈: both directions of Nε
-                // membership must hold, stronger than FCMPE's ∼.
+                // FEQLE $X, $Y, $Z - ≈: both directions of Nε membership
+                // must hold, stronger than FCMPE's ∼.
                 let y_val = Self::u64_to_f64(self.get_register(y));
                 let z_val = Self::u64_to_f64(self.get_register(z));
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
@@ -3156,8 +3158,8 @@ impl MMix {
                     self.write_octa(addr, self.get_register(x));
                     self.set_register(x, 1); // Success
                 } else {
-                    // Values don't match: give the caller the current value to
-                    // retry with, per Knuth's rP <- M8[$Y+$Z] on failure.
+                    // Values don't match: on failure rP <- M8[$Y+$Z], giving the
+                    // caller the current value to retry with.
                     self.set_special(SpecialReg::RP, mem_value);
                     self.set_register(x, 0); // Failure
                 }
@@ -3174,8 +3176,8 @@ impl MMix {
                     self.write_octa(addr, self.get_register(x));
                     self.set_register(x, 1); // Success
                 } else {
-                    // Values don't match: give the caller the current value to
-                    // retry with, per Knuth's rP <- M8[$Y+Z] on failure.
+                    // Values don't match: on failure rP <- M8[$Y+Z], giving the
+                    // caller the current value to retry with.
                     self.set_special(SpecialReg::RP, mem_value);
                     self.set_register(x, 0); // Failure
                 }
@@ -3515,7 +3517,7 @@ impl MMix {
                 self.set_pc(target);
                 true
             }
-            // Arithmetic instructions (§9) - MUL/DIV opcodes 0x18-0x1F
+            // Arithmetic instructions - MUL/DIV opcodes 0x18-0x1F
             Opcode::MUL => {
                 // MUL $X, $Y, $Z - Multiply signed with overflow
                 mul_rr!(self, x, y, z)
@@ -3676,7 +3678,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            // Shift instructions (§14) - opcodes 0x38-0x3F
+            // Shift instructions - opcodes 0x38-0x3F
             Opcode::SL => {
                 // SL $X, $Y, $Z - Shift left with overflow check
                 let val_y = self.get_register(y) as i64;
@@ -3780,7 +3782,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            // Branch instructions (§15) - opcodes 0x40-0x5F
+            // Branch instructions - opcodes 0x40-0x5F
             Opcode::BN => {
                 // BN $X, $Y, Z - Branch if negative
                 let cond = (self.get_register(x) as i64) < 0;
@@ -3973,7 +3975,7 @@ impl MMix {
                 self.branch_backward(cond, y, z);
                 true
             }
-            // Conditional Set instructions (§16) - opcodes 0x60-0x6F
+            // Conditional Set instructions - opcodes 0x60-0x6F
             Opcode::CSN => {
                 // CSN $X, $Y, $Z - Conditional Set if Negative (checks $Y)
                 let cond = (self.get_register(y) as i64) < 0;
@@ -4169,7 +4171,7 @@ impl MMix {
                 true
             }
 
-            // Bitwise operations (§10) - opcodes 0xC0-0xCF, 0xD8-0xD9
+            // Bitwise operations - opcodes 0xC0-0xCF, 0xD8-0xD9
             Opcode::OR => {
                 // OR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a, b| a | b)
@@ -4234,7 +4236,7 @@ impl MMix {
                 // NXORI $X, $Y, Z
                 binop_ri!(self, x, y, z, |a: u64, b: u64| !(a ^ b))
             }
-            // Bit fiddling operations (§11-12) - opcodes 0xD0-0xDF
+            // Bit fiddling operations - opcodes 0xD0-0xDF
             Opcode::BDIF => {
                 // BDIF $X, $Y, $Z - Byte difference
                 let val_y = self.get_register(y);
@@ -4447,7 +4449,7 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            // Jump/Stack/System instructions (§17-19) - opcodes 0xF0-0xFF
+            // Jump/Stack/System instructions - opcodes 0xF0-0xFF
             Opcode::JMP => {
                 // JMP XYZ - Jump to PC + 4*XYZ.
                 let xyz = ((x as u32) << 16) | ((y as u32) << 8) | (z as u32);
@@ -5054,7 +5056,7 @@ mod tests {
 
     #[test]
     fn test_pushj_window_slide_return_value() {
-        // Knuth: POP 1 lands the single return value at the caller's hole position $X.
+        // POP 1 lands the single return value at the caller's hole position $X.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_special(SpecialReg::RL, 5);
@@ -5103,7 +5105,7 @@ mod tests {
 
     #[test]
     fn test_pop_with_return_value_shift() {
-        // PUSHJ $3 + POP 2: Knuth puts the last output in the hole.
+        // PUSHJ $3 + POP 2: the last output lands in the hole.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_special(SpecialReg::RL, 4);
@@ -5316,8 +5318,8 @@ mod tests {
     fn test_pop_mmixware_program2_matches_measured_values() {
         // Measured on MMIXware and checksmix at 91d207f. POP 2 puts the
         // callee's last output ($1) in the hole and the first ($0) above
-        // it — Knuth's "curious permutation" — and registers above the
-        // outputs read zero rather than their pre-call values.
+        // it, and registers above the outputs read zero rather than their
+        // pre-call values.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_register(0, 10);
@@ -5386,8 +5388,8 @@ mod tests {
 
     #[test]
     fn test_pop_x_greater_than_l_clamps_and_zeros_the_hole() {
-        // Knuth: if X > L, X becomes L+1 and the hole gets zero regardless
-        // of what the callee left there.
+        // If X > L, X becomes L+1 and the hole gets zero regardless of what
+        // the callee left there.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_register(0, 100);
@@ -5416,8 +5418,8 @@ mod tests {
 
     #[test]
     fn test_pushj_x_at_or_above_rg_saves_all_locals_and_pops_at_the_hole() {
-        // Knuth: PUSHJ $X with X >= G pushes $0..$(rL-1), the callee starts
-        // at rL = 0, and the hole for POP is the caller's rL, not X.
+        // PUSHJ $X with X >= rG pushes $0..$(rL-1), the callee starts at
+        // rL = 0, and the hole for POP is the caller's rL, not X.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_special(SpecialReg::RG, 10);
@@ -6008,7 +6010,7 @@ mod tests {
     fn test_setl_zero_clears_whole_register() {
         let mut mmix = MMix::new();
         mmix.set_register(1, u64::MAX);
-        // SETL $1, 0 - Knuth's one-instruction register clear
+        // SETL $1, 0 - a one-instruction register clear
         mmix.write_tetra(0, 0xE3010000);
 
         mmix.execute_instruction();
@@ -6465,7 +6467,7 @@ mod tests {
         assert_eq!(mmix.read_tetra(808), 0x13579246); // High 32 bits
     }
 
-    // Arithmetic instruction tests - Add and Subtract (§9)
+    // Arithmetic instruction tests - Add and Subtract
 
     #[test]
     fn test_add_positive_numbers() {
@@ -7144,7 +7146,7 @@ mod tests {
         assert_eq!(mmix.get_register(3), 0);
     }
 
-    // Shift instruction tests (§14)
+    // Shift instruction tests
     #[test]
     fn test_sl() {
         let mut mmix = MMix::new();
@@ -8396,7 +8398,7 @@ Main\tSETI\t$1,100
     #[test]
     fn test_fcmp_unordered() {
         let mut mmix = MMix::new();
-        // FCMP $1, $2, $3 - Compare with NaN. Both of Knuth's predicates are
+        // FCMP $1, $2, $3 - Compare with NaN. Both of FCMP's comparisons are
         // false on an unordered pair, so $X is 0; I reports the NaN.
         mmix.set_register(2, f64::NAN.to_bits());
         mmix.set_register(3, 5.0f64.to_bits());
@@ -9219,8 +9221,8 @@ Main\tSETI\t$1,100
     #[test]
     fn octa_load_reads_the_aligned_base_from_any_address_in_the_block() {
         // LDO $1,$2,$3 with $3 sweeping the octabyte's own aligned block:
-        // every one of the 8 addresses must resolve to the same value,
-        // per Knuth's M8[A] = M8[8*floor(A/8)].
+        // every one of the 8 addresses must resolve to the same value:
+        // M8[A] = M8[8*floor(A/8)].
         let base = 800u64;
         let value = 0x1122334455667788u64;
         for offset in 0u64..8 {
@@ -10909,7 +10911,7 @@ Main\tSETI\t$1,100
 
     #[test]
     fn test_fixu_wraps_mod_two_to_the_64() {
-        // Knuth: u($X) <- int(f($Z)) mod 2^64. A value whose ulp reaches 2^64
+        // u($X) <- int(f($Z)) mod 2^64. A value whose ulp reaches 2^64
         // therefore yields zero rather than saturating.
         let cases: [(f64, u64); 10] = [
             (-1.0, 0xFFFF_FFFF_FFFF_FFFF),
@@ -11313,12 +11315,12 @@ Sub\tSETI\t$0,3
             );
         }
     }
-    // ============== Knuth's rA layout and the integer events ==============
+    // ============== rA layout and the integer events ==============
 
     #[test]
     fn test_ra_bits_match_knuth_predefs() {
-        // MMIXAL §69: D_BIT=#80 V_BIT=#40 W_BIT=#20 I_BIT=#10
-        //             O_BIT=#08 U_BIT=#04 Z_BIT=#02 X_BIT=#01
+        // The predefined symbols: D_BIT=#80 V_BIT=#40 W_BIT=#20 I_BIT=#10
+        //                         O_BIT=#08 U_BIT=#04 Z_BIT=#02 X_BIT=#01
         assert_eq!(RA_D, 0x80);
         assert_eq!(RA_V, 0x40);
         assert_eq!(RA_W, 0x20);

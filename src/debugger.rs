@@ -1499,7 +1499,7 @@ Main\tTRAP\t0,Halt,0
     }
 
     /// `set` writes `rA` directly through `set_special`, bypassing
-    /// `put_special`'s Knuth-defined clamp at `RA_MAX` (`#3FFFF`) that the
+    /// `put_special`'s clamp at `RA_MAX` (`#3FFFF`) that the
     /// assembled `PUT` instruction honors -- deliberate: `set` is a raw
     /// debugger poke, not a `PUT` simulation, and this is the one target
     /// where that distinction is actually observable.

@@ -886,8 +886,7 @@ mod tests {
     use super::*;
     use crate::mmixal::MMixInstruction;
 
-    /// Test all MMIX instruction opcodes match the official specification
-    /// Reference: https://www-cs-faculty.stanford.edu/~knuth/mmop.html
+    // Every MMIX opcode matches its assigned value.
 
     #[test]
     fn test_trap_encoding() {
