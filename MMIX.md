@@ -187,16 +187,18 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 ## Register stack
 
 Every register from `rL` through `rG-1` is marginal and reads zero, with one
-exception: a raw write to `rG` or `rL` — `PUT rG` raising `rG`, or `UNSAVE`
-restoring a context — moves the boundary without clearing anything, so a
-register it makes marginal keeps its old contents until something claims it.
-Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL` through
-`$X`; for
-an instruction whose `X` field is a general-register destination, this rise
-happens before the instruction runs, so `GET $X,rL` stores the raised `rL`,
-not the value it held when the instruction began. `PUT rL,z` (and `PUTI`)
-only ever lowers `rL`, to `min(z, rL)`, and zeroes every register the drop
-excludes from the local range.
+exception: a raw write to `rG` or `rL` moves the boundary without clearing
+anything, so a register it strands keeps its old contents until something
+claims it. `PUT rG` and `UNSAVE` both write raw. Lowering `rG` below `rL`
+leaves `rL` naming registers the global range owns; `rL` then stays where it
+is, since nothing below `rG` is marginal any more.
+
+Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
+through `$X`. For an instruction whose `X` field is a general-register
+destination, this rise happens before the instruction runs, so `GET $X,rL`
+stores the raised `rL`, not the value it held when the instruction began.
+`PUT rL,z` (and `PUTI`) only ever lowers `rL`, to `min(z, rL)`, and zeroes
+every register the drop excludes from the local range.
 
 `PUSHJ $X, addr` (and `PUSHJB`, `PUSHGO`, `PUSHGOI`) push the caller's local
 registers and slide the window down. For `X < rG`: `$0..$X` go to the
