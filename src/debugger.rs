@@ -1419,10 +1419,9 @@ AddFunc\tADDU\t$0,$0,$1
         // the two SETIs grow rL to 3 ($1, then $2, each >= the then-current
         // rL); PUSHJ $0 slides caller's $1, $2 (40, 2) down to callee's $0,
         // $1; POP 1 places the callee's $0 (the sum) at the caller's hole
-        // $0, and restores rL to max(saved_rl, saved_x + n) = max(3, 0 + 1)
-        // = 3.
+        // $0, and sets rL = min(x + n, rG) = min(0 + 1, 254) = 1.
         assert_eq!(dbg.mmix.get_register(0), 42);
-        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 3);
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 1);
         assert_eq!(dbg.mmix.get_register(255), 42);
         assert_eq!(dbg.mmix.get_exit_code(), 42);
     }

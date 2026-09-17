@@ -184,6 +184,37 @@ Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
 Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined symbols).
 
+## Register stack
+
+`PUSHJ $X, addr` (and `PUSHJB`, `PUSHGO`, `PUSHGOI`) push the caller's local
+registers and slide the window down. For `X < rG`: `$0..$X` go to the
+register stack, the marginal slot at offset `X` and the following frame word
+both hold `X`; the caller's `$(X+1)..$(rL-1)` become the callee's
+`$0..$(rL-X-2)`; `rL` becomes `saturating_sub(rL, X+1)`. For `X ≥ rG`: all of
+`$0..$(rL-1)` push, followed by the marker `rL`, and the callee starts with
+`rL = 0` — the hole for the later `POP` is `rL`, not `X`.
+
+`POP X, YZ` returns from a `PUSHJ $x` frame whose callee has `rL = L`. If `X
+> L`, `X` becomes `L+1` and the hole gets zero. The caller's `$0..$(x-1)`
+restore from the register stack; `$x` gets the callee's `$(X-1)` (Knuth's
+"curious permutation" — the *last* output lands in the hole), or zero when
+`X = 0` or the clamp fired; `$(x+1)..$(x+X-1)` get the callee's `$0..$(X-2)`.
+`rL` becomes `min(x+X, rG)`; every register from the new `rL` through `rG-1`
+reads zero.
+
+Measured on MMIXware (`mmix-20131017.tgz`):
+
+| Program | Register | MMIXware |
+|---|---|---|
+| Caller sets `$1..$5` = 111..555; `PUSHJ $0`; callee sets `$0`=999, `$1`=777; `POP 1,0` | `$0` | 999 |
+| | `$1..$5` | 0 |
+| | `rL` | 1 |
+| Caller sets `$0..$6` = 10..70; `PUSHJ $3`; callee sets `$0,$1,$2` = 801,802,803; `POP 2,0` | `$0..$2` | 10, 20, 30 |
+| | `$3` (hole) | 802 |
+| | `$4` | 801 |
+| | `$5, $6` | 0, 0 |
+| | `rL` | 5 |
+
 ## Instruction table
 
 | Mnemonic | Operands | Description |
@@ -423,7 +454,7 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 | `PUSHJB` | `PUSHJB $X, addr` | Push registers and jump (backward hint) |
 | `PUSHGO` | `PUSHGO $X, $Y, $Z` | Push registers and jump to `$Y + $Z` |
 | `PUSHGOI` | `PUSHGO $X, $Y, Z` | Push registers and jump to `$Y + Z` |
-| `POP` | `POP X, YZ` | Pop registers and return; X values returned |
+| `POP` | `POP X, YZ` | Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order |
 | `GO` | `GO $X, $Y, $Z` | Jump to `$Y + $Z`; save next PC in `$X` |
 | `GOI` | `GO $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
 | `GETA` | `GETA $X, addr` | Get relative address into `$X` |

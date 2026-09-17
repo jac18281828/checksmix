@@ -1083,7 +1083,7 @@ Leave one space when the text before POSITION already reaches COLUMN."
     (("PUSHGOI" "PUSHGO") "PUSHGO $X, $Y, Z"
      "Push registers and jump to $Y + Z")
     (("POP") "POP X, YZ"
-     "Pop registers and return; X values returned")
+     "Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order")
     (("GO") "GO $X, $Y, $Z"
      "Jump to $Y + $Z; save next PC in $X")
     (("GOI" "GO") "GO $X, $Y, Z"

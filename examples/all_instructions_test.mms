@@ -3625,6 +3625,44 @@ Test275c
         LDOU    Result,$10,8      % unit 1: 'C' zero-extended to an octa
         SET     Expect,#43
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test276
+        JMP     TestFail
+
+% ========================================
+% Test 276: POP's Knuth-canonical hole and marginal registers
+% ========================================
+% X=$5 keeps the pushed frame's marginal register clear of the harness's
+% $1-$4 (settled decision 9). rL is pinned to 9 so the window slide is
+% exact: PUSHJ $5 carries caller's $6,$7,$8 into the callee's $0,$1,$2.
+% POP 2,1 then checks Knuth's "curious permutation" (the hole gets the
+% callee's last output, $0 lands one slot above it) and that $8, above
+% x+X, reads zero rather than its pre-call value.
+% ========================================
+Test276 ADDUI   TestNum,TestNum,1
+        SET     $10,9
+        PUT     rL,$10
+        SET     $6,600
+        SET     $7,700
+        SET     $8,800
+        PUSHJ   $5,Test276Callee
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        SET     Expect,700
+        CMP     Temp,$5,Expect
+        PBZ     Temp,Test276b
+        JMP     TestFail
+Test276Callee
+        SET     $0,701
+        SET     $1,700
+        POP     2,1
+        JMP     TestFail          % only reached if POP fails to return
+Test276b
+        SET     Expect,701
+        CMP     Temp,$6,Expect
+        PBZ     Temp,Test276c
+        JMP     TestFail
+Test276c
+        SET     Expect,0
+        CMP     Temp,$8,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
 
