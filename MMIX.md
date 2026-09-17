@@ -186,12 +186,15 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 
 ## Register stack
 
-Every register from `rL` through `rG-1` is marginal and reads zero, with one
-exception: a raw write to `rG` or `rL` moves the boundary without clearing
-anything, so a register it strands keeps its old contents until something
-claims it. `PUT rG` and `UNSAVE` both write raw. Lowering `rG` below `rL`
-leaves `rL` naming registers the global range owns; `rL` then stays where it
-is, since nothing below `rG` is marginal any more.
+Every register from `rL` through `rG-1` is marginal and reads zero. `PUT rG`
+in MMIX accepts a value `z` only for `32 ≤ z ≤ 255` with `z ≥ rL`, and
+zeroes the registers released when lowering `rG`. checksmix validates none of
+these constraints; it accepts any `PUT rG` value, and does not zero registers
+when `rG` is lowered.
+
+`UNSAVE` restores `rL` and `rG` from memory. A raw write to either register
+moves its boundary without clearing anything; a register it strands keeps its
+old contents until something claims it.
 
 Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
 through `$X`. For an instruction whose `X` field is a general-register

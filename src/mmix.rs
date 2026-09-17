@@ -1042,9 +1042,8 @@ impl MMix {
     /// the floating-point and integer arithmetic and compare instructions,
     /// the conditional- and zero-set instructions, the loads, GO, PUSHGO,
     /// the bitwise and SETL-family instructions, PUSHJ, GETA, SAVE and GET.
-    /// Branches, stores, PUT, POP, UNSAVE and the opcodes with no register
-    /// operand are not; their X field, when present, names something other
-    /// than a general register.
+    /// Branches read a register as a source (not a destination) and are excluded.
+    /// Stores, PUT, POP, UNSAVE and the opcodes with no register operand are not.
     fn writes_general_register_x(op_byte: u8) -> bool {
         matches!(
             op_byte,
@@ -2510,9 +2509,8 @@ impl MMix {
             panic!("Invalid opcode {:#04x} at PC {:#018x}", op_byte, self.pc);
         });
 
-        // The destination register raises rL before the instruction runs,
-        // not after: a marginal $Y or $Z is still read as an operand while
-        // it is zero, so the rise belongs ahead of every arm below.
+        // Operands are read before the destination raises rL. A marginal $Y
+        // or $Z still reads as zero when the instruction executes.
         if Self::writes_general_register_x(op_byte) {
             self.claim_local(x);
         }
@@ -8249,7 +8247,7 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_save_writes_the_context_after_its_destination_rises() {
+    fn test_save_with_destination_below_rg_rejected() {
         let mut mmix = MMix::new();
         mmix.set_register(40, 0xDEAD); // global while rG = 32
         mmix.set_special(SpecialReg::RG, 50);
@@ -8290,7 +8288,7 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_put_rl_leaves_the_globals_alone_when_rg_sits_below_rl() {
+    fn test_put_rl_with_rg_below_rl_rejected() {
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RG, 60);
         mmix.set_register(55, 777); // local while rG = 60, so rL rises to 56

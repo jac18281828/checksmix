@@ -3702,8 +3702,8 @@ Test277Inner
 % ========================================
 % Test 278: marginal registers stay zero
 % ========================================
-% PUT rG raises rG with no zeroing rule of its own (that belongs to a
-% later unit), so it can plant a stale value in what becomes a marginal
+% PUT rG raises rG without zeroing, so it can plant a stale value in what
+% becomes a marginal
 % register: $50 holds #DEAD while global, then rG rises past it. Writing
 % a higher register must still zero that gap when it claims the range.
 % PUT rL only ever lowers rL, to min(z, rL), and zeroes every register
@@ -3761,8 +3761,8 @@ Test279b
         JMP     TestFail
 Test279c
         SET     $10,32
-        PUT     rL,$10            % restore the default split so a test
-        PUT     rG,$10            % appended here starts from rL = rG = 32
+        PUT     rL,$10            % set rL = rG = 32 for the next test
+        PUT     rG,$10
         JMP     TestPass
 
 % ========================================
