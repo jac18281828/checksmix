@@ -8236,6 +8236,39 @@ Main\tSETI\t$1,100
     }
 
     #[test]
+    fn test_pop_rg_guard_preserves_a_global_set_after_a_mid_call_shrink() {
+        // Caller has rG=40, rL=38 and calls PUSHJ $36; the callee shrinks
+        // rG to 32 with PUT rG, then sets the newly-global $34 before
+        // POP 0,0. Without the rG guard, POP would restore the caller's
+        // stale $34 from the spilled frame and clobber the callee's global
+        // write.
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RG, 40);
+        mmix.set_special(SpecialReg::RL, 38);
+
+        // PUSHJ $36, +1
+        mmix.write_tetra(0x100, 0xF2240001);
+        assert!(mmix.execute_instruction());
+
+        // PUTI rG,32
+        mmix.write_tetra(0x104, 0xF7130020);
+        assert!(mmix.execute_instruction());
+
+        // SETL $34,999
+        mmix.write_tetra(0x108, 0xE32203E7);
+        assert!(mmix.execute_instruction());
+
+        // POP 0,0
+        mmix.write_tetra(0x10C, 0xF8000000);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(34), 999);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 32);
+    }
+
+    #[test]
     fn test_pop() {
         let mut mmix = MMix::new();
         // Set return address in rJ
