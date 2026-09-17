@@ -61,6 +61,9 @@ cargo run --bin checksmix -- target/hello_world.mmo
   so the caller's `$X+1,$X+2` arrive as the callee's `$0,$1`, and `POP 1` returns a value
   to the caller's hole.
 - `examples/fibonacci.mms`: that convention applied to an iterative `fib(20)`.
+- `examples/big_fib.mms`: fib(100) in multi-precision arithmetic. It shows nested calls:
+  saving `rJ` with `GET`/`PUT`, keeping live locals below a call's hole, and passing
+  arguments in `GREG` registers.
 - `examples/prime.mms`: trial-division primality test that prints its verdict and exits
   0 if prime, 1 if composite. It bounds the scan with `D > N/D`, reusing the quotient
   `DIVU` already computed, so the test cannot overflow the way `D*D > N` does.

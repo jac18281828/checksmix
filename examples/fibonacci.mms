@@ -1,6 +1,11 @@
 % ----------------------------------------------------
-% Fibonacci - iterative; demonstrates the standard MMIX
-% calling convention with the register-stack window slide.
+% Fibonacci - iterative.
+%
+% Caller stages arguments at $X+1, $X+2, ...; PUSHJ $X saves $0..$X-1
+% and the callee sees the arguments as $0, $1, ....
+% POP 1,0 puts the callee's $0 in the caller's $X (the hole), restores
+% $0..$X-1, and every register above $X reads zero.
+% POP 2,0 is not in order: the hole gets the callee's $1, $X+1 gets $0.
 % ----------------------------------------------------
 
         LOC     #100

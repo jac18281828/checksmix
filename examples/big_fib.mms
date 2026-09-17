@@ -1,7 +1,18 @@
 % ----------------------------------------------------
-% Fibonacci with big integers. fib(100) has 21 digits, far past 64 bits,
-% so each number lives in 32 limbs of 64 bits, lowest limb first.
-% A routine that calls another saves rJ with GET and restores it with PUT.
+% Fibonacci with big integers: prints fib(100) = 354224848179261915075.
+% That value needs 69 bits, more than one octa holds, so a number is
+% MAXLIMBS octas, least significant first.
+%
+% Register rules this file follows:
+% - Arguments travel in the global registers Arg0-Arg2, not through the
+%   register window. Any call may overwrite them.
+% - PUSHJ $X saves $0..$X-1 and POP restores them; every register above
+%   the returned values then reads zero. A value a routine needs after a
+%   call sits below that call's hole $X.
+% - PUSHJ sets rJ to its return address and POP jumps through rJ, so a
+%   routine that calls another saves rJ with GET on entry and restores it
+%   with PUT before its POP.
+% - Zero is a GREG because $255 is not zero at startup on MMIXware.
 % ----------------------------------------------------
 
 Zero    GREG    0
@@ -11,11 +22,12 @@ Arg2    GREG    0
 MAXLIMBS IS     32
 
 % ----------------------------------------------------
-% Data Segment
+% Working storage. It sits in the text segment, not Data_Segment, so
+% GETA can reach it from code at #100. BufA, BufB and TempBuf each hold
+% at least MAXLIMBS octas (#100 bytes); keep the LOC gaps in step.
 % ----------------------------------------------------
         LOC     #1000
-
-ResultMsg BYTE	"fib(100) = ",0
+ResultMsg BYTE  "fib(100) = ",0
 Newline BYTE    10,0
 
         LOC     #2000
@@ -90,8 +102,8 @@ ZeroDone POP    0,0
 % Fibonacci - compute fib(n) in BigInt form.
 % Input:  Arg0 = n, Arg1 = bufA (zeroed), Arg2 = bufB (zeroed).
 % Output: Arg2 = pointer to the buffer holding fib(n).
-% Locals: $0 = n, $5 = A pointer, $6 = B pointer, $7 = swap tmp,
-%         $8 = rJ saved across MPAddWithCarry calls.
+% Locals: $0 = n, $3 = i, $5 = A, $6 = B, $7 = swap tmp, $8 = saved rJ;
+%         all below the call's hole, so all survive it.
 % ----------------------------------------------------
 Fibonacci GET   $8,rJ
         SET     $0,Arg0                 % n
@@ -164,7 +176,8 @@ MPADone POP     0,0
 % ----------------------------------------------------
 % BigIntToDecStr - convert a BigInt to a decimal string.
 % Input: Arg0 = pointer to BigInt
-%        Arg1 = pointer to NUL-terminated output buffer.
+%        Arg1 = pointer to the output buffer; receives a NUL-terminated
+%        string.
 % Locals: $1 = output pointer, $2 = digit count, both numbered below
 %         DivBy10's PUSHJ hole ($9) so they survive its calls; $3 =
 %         rJ saved across those calls.
