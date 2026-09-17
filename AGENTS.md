@@ -2,6 +2,12 @@
 
 These guidelines apply to all AI-assisted code changes in this repository.
 
+## Canonical Instruction Reference
+
+Establish functionality from canonical reference prior to implementation
+
+[Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/)
+
 ## Workflow
 1. Summarize current behavior and invariants before proposing edits.
 2. **Ask each time** — `Cargo.toml` deps, cross-module or public-API refactors, file deletions,
