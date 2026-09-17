@@ -8246,6 +8246,31 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_special(SpecialReg::RL), 3);
     }
 
+    /// UNSAVE restores rG from guest memory, so rG can name a register the
+    /// file does not have. `claim_local` must compare against it at full
+    /// width: a byte-narrowed comparison turns a real local, sitting below
+    /// the true rG but above its truncated low byte, into a global that is
+    /// never claimed. `PUT rG` carries no validation yet, so this state is
+    /// reachable today; C7's validation may close it later.
+    #[test]
+    fn test_register_claims_local_when_rg_names_no_real_register() {
+        let mut mmix = MMix::new();
+        mmix.set_register(150, 0xDEAD); // global while rG = 32 (the default)
+        mmix.set_special(SpecialReg::RG, 300); // beyond the register file
+        mmix.set_special(SpecialReg::RL, 3);
+
+        // $150 is now marginal (3 <= 150 < 300); claiming $200 sweeps it.
+        mmix.set_register(200, 777);
+
+        assert_eq!(mmix.get_special(SpecialReg::RL), 201);
+        assert_eq!(
+            mmix.get_register(150),
+            0,
+            "the claim zeroed the marginal range"
+        );
+        assert_eq!(mmix.get_register(200), 777);
+    }
+
     #[test]
     fn test_save_claims_its_destination_in_a_state_mmix_rejects() {
         let mut mmix = MMix::new();
