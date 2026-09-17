@@ -237,7 +237,7 @@ runs here — and in [playmmix](https://playmmix.2ad.com) without installing any
 - [Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/) — the Home Page's
   per-instruction reference.
 - [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
-  — an assembler and simulator for the architecture (Springer LNCS 1750, 1999).
+  — the full definition of MMIX, with an assembler and simulator (Springer LNCS 1750, 1999).
 
 ## Tribute
 

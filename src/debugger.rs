@@ -1486,9 +1486,9 @@ Main\tTRAP\t0,Halt,0
         assert_eq!(dbg.mmix.get_register(3), value);
     }
 
-    /// Pins the corrected settled decision: a register-aliasing symbol
-    /// (here `Sp`, from `STACK_PROGRAM`'s `GREG` directive) is a settable
-    /// `set` target, and writes the same register `print`/`p` reads.
+    /// Pins that a register-aliasing symbol (here `Sp`, from
+    /// `STACK_PROGRAM`'s `GREG` directive) is a settable `set` target,
+    /// and writes the same register `print`/`p` reads.
     #[test]
     fn set_writes_through_a_greg_aliased_symbol_name() {
         let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
@@ -1524,8 +1524,8 @@ Main\tTRAP\t0,Halt,0
     }
 
     /// `set` writes `rA` directly through `set_special`, bypassing
-    /// `put_special`'s clamp at `RA_MAX` (`#3FFFF`) that the
-    /// assembled `PUT` instruction honors -- deliberate: `set` is a raw
+    /// `put_special`, which drops a `PUT` of any value above `RA_MAX`
+    /// (`#3FFFF`) and leaves rA unchanged -- deliberate: `set` is a raw
     /// debugger poke, not a `PUT` simulation, and this is the one target
     /// where that distinction is actually observable.
     #[test]

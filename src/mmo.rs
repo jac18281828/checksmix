@@ -40,7 +40,7 @@ use crate::encode::encode_instruction_bytes;
 /// MMO escape code - all MMO files must start with this
 pub const MM: u8 = 0x98;
 
-/// MMO record types (lopcodes) (MMIXAL reference)
+/// MMO record types (lopcodes), as the MMIXAL reference defines them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(clippy::enum_variant_names)]

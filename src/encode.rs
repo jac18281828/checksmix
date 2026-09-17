@@ -886,7 +886,8 @@ mod tests {
     use super::*;
     use crate::mmixal::MMixInstruction;
 
-    // Every MMIX opcode matches its assigned value.
+    // Each test pins one instruction's bytes: the opcode from the MMIX
+    // opcode table, then X, Y, Z — e.g. TRAP 1,2,3 → #00 01 02 03.
 
     #[test]
     fn test_trap_encoding() {

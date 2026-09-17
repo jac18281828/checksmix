@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal — `SET $1,010` loads 8 here, 10 in MMIXAL), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
 
 ## Memory access
 
@@ -157,7 +157,7 @@ Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
 ### Epsilon instructions (FCMPE / FUNE / FEQLE)
 
-`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. An ε-neighborhood `Nε(u)` is defined around each compared value, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; and `Nε(±∞)` depends on whether `ε` is below 1, in `[1, 2)`, or at least 2. `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
+`FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. Each compared value `u` has an ε-neighborhood `Nε(u)`, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; `Nε(+∞)` is `{+∞}` when `ε < 1`, every value except `−∞` when `1 ≤ ε < 2`, and every value when `ε ≥ 2` (mirrored for `−∞`). `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
 
 `FCMPE` and `FEQLE` force their result to `0` and raise `I` when `$Y`, `$Z`, or `rE` is NaN, or `rE` is negative — never on an ordinary inequality. `FUNE` reports `1` on exactly that same exceptional condition and `0` otherwise; it says nothing about proximity, and raises no flag either way.
 
@@ -218,7 +218,7 @@ reads zero. `POP` branches to `rJ + 4·YZ` and leaves `rJ` unchanged; a
 subroutine that calls another saves `rJ` (`GET $k,rJ`) and restores it
 (`PUT rJ,$k`) before its own `POP`.
 
-Measured on MMIXware (`mmix-20131017.tgz`):
+Measured on MMIXware:
 
 | Program | Register | MMIXware |
 |---|---|---|
@@ -498,8 +498,10 @@ Measured on MMIXware (`mmix-20131017.tgz`):
 | `SYNCIDI` | `SYNCID $X, $Y, Z` | Synchronize instruction and data cache (immediate) |
 
 checksmix parses the `X` operand of `PRELD`, `PREGO`, `PREST`, `SYNCD` and
-`SYNCID` as a register. The specification uses an immediate byte count
-there, so source written to the specification does not assemble.
+`SYNCID` as a register. In MMIX, `X` is an immediate byte count: `PRELD
+X,$Y,$Z` covers the `X+1` bytes `M[$Y+$Z]` through `M[$Y+$Z+X]`. So
+`PRELD 7,$1,$2` fails to assemble here; write `PRELD $7,$1,$2`, which
+emits the same tetra `#9A070102`.
 
 `LDA`/`LDAI $X, addr` resolve at assemble time by whether `addr` fits a byte.
 An `addr` of 0 to 255 assembles to a single tetra: `LDAI` correctly emits a

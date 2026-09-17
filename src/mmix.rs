@@ -776,7 +776,7 @@ impl Host for StdHost {
 
 /// One frame's bookkeeping on the register stack.
 ///
-/// # Register Stack (MMIXAL reference)
+/// # Register Stack
 ///
 /// PUSHJ $X, RA (X < rG):
 ///   - Pushes the X+1 octas $0..$X to memory at rO + 8·rS.
@@ -1054,8 +1054,8 @@ impl MMix {
 
     /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
     ///
-    /// Only X+1 octas (the saved-and-marginal range) need to spill (MMIXAL
-    /// reference); the rest stays in a ring buffer. We approximate the ring
+    /// Only X+1 octas (the saved-and-marginal range) need to spill; the
+    /// rest stays in a ring buffer. We approximate the ring
     /// by spilling the full active local frame so the slide-back on POP can
     /// restore everything. The frame on the stack is therefore
     /// `max(X+1, rL) + 1` octas (saved + frame word), with the marginal at
@@ -1309,7 +1309,8 @@ impl MMix {
     }
 
     /// Read a wyde (2 bytes) from memory at the address rounded down to a
-    /// multiple of 2: `M_2[A] = M_2[2*floor(A/2)]` (MMIXAL reference).
+    /// multiple of 2: `M_2[A] = M_2[2*floor(A/2)]`.
+    /// Example: a wyde at #103 reads bytes #102..#103.
     pub fn read_wyde(&self, addr: u64) -> u16 {
         let addr = addr & !1;
         let b0 = self.read_byte(addr) as u16;
@@ -1348,6 +1349,7 @@ impl MMix {
 
     /// Read an octa (8 bytes) from memory at the address rounded down to a
     /// multiple of 8: `M_8[A] = M_8[8*floor(A/8)]`.
+    /// Example: any address in #100..#107 reads bytes #100..#107.
     pub fn read_octa(&self, addr: u64) -> u64 {
         let addr = addr & !7;
         let b0 = self.read_byte(addr) as u64;
@@ -1486,13 +1488,15 @@ impl MMix {
         }
     }
 
-    /// `u ∈ Nε(v)`, the ε-neighborhood. The radius scales by `v`'s own
-    /// binade: `e` is `v`'s raw IEEE-754 biased exponent field, `0` for
-    /// zero and subnormals, `1..=2046` for a normal double. `v == 0` and
-    /// `v == ±∞` are their own cases, not the scaled formula. Callers
-    /// exclude NaN operands and a NaN or negative `ε` beforehand (the shared
-    /// exception condition, `epsilon_exceptional`) — `v` and `ε` are never
-    /// NaN here.
+    /// `u ∈ Nε(v)`: `|u − v| ≤ 2^(e−1022)·ε`, where `e` is `v`'s biased
+    /// exponent field for a normal `v` and is taken as `1` for a
+    /// subnormal `v` (radius `2^−1021·ε`). `Nε(0) = {0}`. `Nε(+∞)` is
+    /// `{+∞}` when `ε < 1`, everything except `−∞` when `1 ≤ ε < 2`, and
+    /// everything when `ε ≥ 2`; `Nε(−∞)` mirrors it. Example: `v = 1.0`
+    /// has `e = 1023`, so with `ε = 0.5` the radius is `1.0` and `u =
+    /// 1.9 ∈ Nε(1.0)`. Callers exclude NaN operands and a NaN or
+    /// negative `ε` beforehand (the shared exception condition,
+    /// `epsilon_exceptional`) — `v` and `ε` are never NaN here.
     #[inline]
     fn in_epsilon_neighborhood(u: f64, v: f64, epsilon: f64) -> bool {
         if v.is_infinite() {
@@ -8806,8 +8810,8 @@ Main\tSETI\t$1,100
     #[test]
     fn test_fcmp_unordered() {
         let mut mmix = MMix::new();
-        // FCMP $1, $2, $3 - Compare with NaN. Both of FCMP's comparisons are
-        // false on an unordered pair, so $X is 0; I reports the NaN.
+        // FCMP computes $X = [$Y > $Z] − [$Y < $Z]; with a NaN operand
+        // both brackets are 0, so $X = 0, and I reports the NaN.
         mmix.set_register(2, f64::NAN.to_bits());
         mmix.set_register(3, 5.0f64.to_bits());
         mmix.write_tetra(0, 0x01010203); // FCMP $1,$2,$3
@@ -9724,8 +9728,8 @@ Main\tSETI\t$1,100
 
     #[test]
     fn byte_access_at_an_odd_address_still_reads_that_byte() {
-        // A byte is its own alignment (decision 3): read_byte/write_byte
-        // take no mask, unlike the wider accessors above. There is no fix
+        // A byte is its own alignment: read_byte/write_byte take no mask,
+        // unlike the wider accessors above. There is no fix
         // to revert here — this guards against someone later "helpfully"
         // masking read_byte to match its wider siblings.
         let mut mmix = MMix::new();
@@ -10595,8 +10599,8 @@ Main\tSETI\t$1,100
 
     #[test]
     fn test_fsqrt_y_greater_than_four_halts_with_diagnostic() {
-        // The Y>4 halt is wired at four distinct read sites (decision 9);
-        // FLOTI above pins the FLOT/i2f_conv_ri! site, this pins FSQRT's
+        // The Y>4 halt is wired at four distinct read sites; FLOTI
+        // above pins the FLOT/i2f_conv_ri! site, this pins FSQRT's
         // separate finalize_fp_unop site.
         let (host, handle) = CaptureHost::new();
         let mut mmix = MMix::with_host(host);
@@ -10611,11 +10615,11 @@ Main\tSETI\t$1,100
     #[test]
     fn test_fix_y_two_selects_round_up_not_round_off() {
         // Y=2 (ROUND_UP) must map to rA mode 2, not `Y-1`'s mode 1
-        // (ROUND_OFF) — decision 8's forbidden mapping. rA holds ROUND_OFF
-        // already, so the two mappings coincide unless Y's own value (2)
-        // is honored: ceil(2.5)=3 under the correct mapping's ROUND_UP,
-        // trunc(2.5)=2 under the forbidden Y-1 mapping (indistinguishable
-        // from rA's own ROUND_OFF, i.e. Y ignored).
+        // (ROUND_OFF). rA holds ROUND_OFF already, so the two mappings
+        // coincide unless Y's own value (2) is honored: ceil(2.5)=3 under
+        // the correct mapping's ROUND_UP, trunc(2.5)=2 under the
+        // forbidden Y-1 mapping (indistinguishable from rA's own
+        // ROUND_OFF, i.e. Y ignored).
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RA, 1 << RA_ROUND_SHIFT); // ROUND_OFF
         mmix.set_register(2, 2.5f64.to_bits());

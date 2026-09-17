@@ -4108,9 +4108,9 @@ mod tests {
 
     // ---- Mnemonic word-boundary guard: whitespace-adjacency behavior -
     // The guard has two known, intentional side effects on whitespace-
-    // adjacent constructs (settled decision 6). Both are real behavior
-    // changes, tested in both directions here rather than left to surface
-    // only as an unexplained corpus diff.
+    // adjacent constructs. Both are real behavior changes, tested in
+    // both directions here rather than left to surface only as an
+    // unexplained corpus diff.
 
     #[test]
     fn test_boundary_guard_rejects_zero_whitespace_before_operand() {
@@ -5703,8 +5703,8 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_auto_float_conversion_full_coverage() {
-        // Y is a rounding-mode value, not a register (decision 6); 0 here
-        // exercises Z's register/immediate auto-select, this test's point.
+        // Y is a rounding-mode value, not a register; 0 here exercises
+        // Z's register/immediate auto-select, this test's point.
         let cases: &[(&str, MMixInstruction)] = &[
             ("FLOT $1,0,$3", MMixInstruction::FLOT(1, 0, 3)),
             ("FLOT $1,0,5", MMixInstruction::FLOTI(1, 0, 5)),
@@ -5837,10 +5837,10 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_flot_rejects_register_in_y_slot() {
-        // Decision 6 narrows Y from `register` to `expr_value`-only; the
-        // retired register-Y spelling this task displaced must now fail
-        // to parse, not silently reinterpret $2's register number as a
-        // rounding-mode value. `is_err()` alone survives a re-widened
+        // Y in FLOT's grammar is `expr_value`-only, not `register`; a
+        // register-Y spelling must now fail to parse, not silently
+        // reinterpret $2's register number as a rounding-mode value.
+        // `is_err()` alone survives a re-widened
         // grammar that admits the register but still leaves a trailing
         // token elsewhere, so pin the exact rejection: the 3-operand form
         // fails to match at Y (a register isn't `expr_value`), and the
@@ -5855,7 +5855,7 @@ ZSEVI $7,$8,128
     #[test]
     fn test_round_mode_symbols_resolve_to_documented_values() {
         // The predefined-symbol table (MMIXAL reference), independent of
-        // rA's own persistent-mode numbering (decision 8).
+        // rA's own persistent-mode numbering.
         let asm = MMixAssembler::new("", "<test>");
         for (name, value) in [
             ("ROUND_CURRENT", 0u64),
@@ -6022,8 +6022,8 @@ ZSEVI $7,$8,128
         // FIX/FIXU and FLOT/FLOTI/FLOTU/FLOTUI and SFLOT/SFLOTI/SFLOTU/
         // SFLOTUI: FIX must not steal FIXU's literal, FLOT must not steal
         // FLOTU's/FLOTI's/FLOTUI's, and likewise for SFLOT. Y is a
-        // rounding-mode value, not a register (decision 6); 0 here is
-        // orthogonal to what this test exercises.
+        // rounding-mode value, not a register; 0 here is orthogonal to
+        // what this test exercises.
         assert_first_instruction("FIX $1,0,$3", MMixInstruction::FIX(1, 0, 3));
         assert_first_instruction("FIXU $1,0,$3", MMixInstruction::FIXU(1, 0, 3));
         assert_first_instruction("FLOT $1,0,$3", MMixInstruction::FLOT(1, 0, 3));

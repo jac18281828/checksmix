@@ -3297,8 +3297,8 @@ Test258GoiTarget
 % Test 259: PUSHJ / PUSHJB / POP - Push registers and jump, then return
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
-% $1-$4 (settled decision 9); POP 1,1 returns one value to $5 and skips
-% the "JMP TestFail" landing pad (target = rJ + 4*1). PUSHJB needs its
+% $1-$4; POP 1,1 returns one value to $5 and skips the "JMP TestFail"
+% landing pad (target = rJ + 4*1). PUSHJB needs its
 % callee behind it, so the second half jumps over the callee to reach it.
 % ========================================
 Test259 ADDUI   TestNum,TestNum,1
@@ -3632,7 +3632,7 @@ Test275c
 % Test 276: POP's hole and marginal registers
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
-% $1-$4 (settled decision 9). rL is pinned to 9 so the window slide is
+% $1-$4. rL is pinned to 9 so the window slide is
 % exact: PUSHJ $5 carries caller's $6,$7,$8 into the callee's $0,$1,$2.
 % POP 2,1 then checks that the hole gets the callee's last output, with
 % $0 landing one slot above it, and that $8, above
@@ -3769,8 +3769,7 @@ Test279c
 % Intentional coverage exceptions
 % ========================================
 % The following grammar-defined mnemonics are deliberately not exercised
-% above (see checksmix-prompt-corpus-coverage-audit.md, settled
-% decisions 3, 4, 9, 10 for the full rationale):
+% above:
 %   TRIP    - Opcode::TRIP unconditionally returns false ("for now, just
 %             halt") with no pass/fail signal this harness can observe;
 %             unlike HALT it has no existing intentional termination point
@@ -3793,7 +3792,7 @@ TestPass        SETI $255,PassMsg
         TRAP    0,Fputs,StdOut
         SETI    Result,#FFFF    % Success marker
         SETI    $255, 0
-        HALT                    % settled decision 3: byte-identical to
+        HALT                    % byte-identical to
                                  % TRAP 0,Halt,0, but exercises HALT's own
                                  % assembler path (mnemonic_halt) directly
 
