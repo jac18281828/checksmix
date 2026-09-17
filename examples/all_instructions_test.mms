@@ -3670,13 +3670,9 @@ Test276c
 % Test 277: POP leaves rJ unchanged; a nested call needs its own save/restore
 % ========================================
 % Test277Callee saves rJ with GET before its own nested call and restores
-% it with PUT before its own POP. Back at Test277Return, GET of rJ must
-% still read Test277After's address -- the instruction after the outer
-% PUSHJ -- proving Test277Callee's own POP left rJ exactly as it found it,
-% with nothing to restore. A POP that instead restored the caller's
-% pre-call rJ (the behavior this fix removes) would leave some ancestor's
-% return address there instead, failing this check even though the
-% top-level return in $5 below still lands correctly either way.
+% it with PUT before its own POP. Back at Test277Return, GET of rJ reads
+% Test277After's address -- the instruction after the outer PUSHJ --
+% proving Test277Callee's own POP left rJ exactly as it found it.
 % ========================================
 Test277 ADDUI   TestNum,TestNum,1
         PUSHJ   $5,Test277Callee

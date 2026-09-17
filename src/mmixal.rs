@@ -942,9 +942,13 @@ struct SourceUnit {
     preprocessed: String,
     /// Original, un-preprocessed source text as the user wrote it.
     original: String,
-    /// `original.lines().count()`: the exact boundary between real user
-    /// lines and compiler-generated lines appended by preprocessing.
-    original_line_count: usize,
+    /// Preprocessed line N (1-based; `line_map[N - 1]`) is the original
+    /// line it came from. A `debug` directive expands to two preprocessed
+    /// lines that both map to its own original line; every other line
+    /// maps to itself. A preprocessed line past the end of this map is
+    /// compiler-generated code (the appended `debug` subroutine block)
+    /// with no original line at all.
+    line_map: Vec<usize>,
 }
 
 pub struct MMixAssembler {
@@ -968,8 +972,8 @@ pub struct MMixAssembler {
     pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
     /// Index into `sources` of the translation unit currently being walked
     /// during pass 2 (command-line order). Used, rather than `current_filename`
-    /// alone, to resolve `original_line_count` unambiguously even when two
-    /// inputs share a filename.
+    /// alone, to resolve `line_map` unambiguously even when two inputs share
+    /// a filename.
     current_unit_index: usize,
     /// Address -> original source location, populated during pass 2.
     /// Only addresses whose statement came from a real user line (not the
@@ -986,154 +990,93 @@ pub struct SourceLoc {
     pub line: usize,
 }
 
-/// A `debug "text"` directive found on one source line.
-struct DebugSite {
-    /// The line's own label: the user's prefix, trimmed, or an invented
-    /// one when the line carries none. Names the call instruction below.
-    call_label: String,
-    /// Label of the generated subroutine that prints `text`.
-    stub_label: String,
-    text: String,
-}
-
 impl MMixAssembler {
-    /// Preprocess the source to expand `debug "text"` directives.
+    /// Preprocess the source to expand `debug "text"` directives, returning
+    /// the preprocessed text and its line map (`SourceUnit::line_map`).
     ///
-    /// Each directive becomes one `JMP` to a generated subroutine, keeping
-    /// the preprocessed line count equal to the original's (`debug_info`
-    /// maps preprocessed line N to original line N and cannot tolerate a
-    /// directive growing into more than one line). The subroutine writes
-    /// `text` and a newline to `StdOut` and returns leaving every register
-    /// exactly as it found it:
+    /// `debug "text"` becomes a `JMP` to a generated subroutine and, right
+    /// after it on its own line, a `SWYM` no-op labelled with a fresh
+    /// `DbgRet_NNNN` -- the landing pad the subroutine jumps back to.
+    /// Neither instruction inspects or depends on anything past the
+    /// directive's own line, so whatever follows -- end of file, a blank or
+    /// comment line, another label, a `GREG` or `IS` line -- assembles
+    /// exactly as if `debug` were not there. `DbgRet_NNNN` shares its
+    /// reserved prefix family with the stub label `DbgStr_NNNN`, so it
+    /// cannot collide with a name the source defines.
     ///
-    /// - `SAVE` snapshots all 256 general registers and every special
-    ///   register (`rL`, `rG`, `rA`, `rJ` included) before anything runs.
-    /// - `GETA`/`TRAP` clobber only the global registers `$254`/`$255`,
-    ///   already captured above.
-    /// - `UNSAVE` restores every general register and every special
-    ///   register but `rJ` from that snapshot.
-    /// - A final `JMP` back to the statement after the call leaves `rJ`
-    ///   untouched, since nothing in this sequence ever writes it.
-    ///
-    /// `PUSHJ`/`POP` are unusable here: `PUSHJ` always writes `rJ` and
-    /// slides the register window by its own `X` operand, and `POP` always
-    /// recomputes `rL` from its own operands rather than restoring the
-    /// exact prior value -- either would corrupt state a caller mid-call
-    /// still needs. Using them would also leave an unpopped frame on the
-    /// call stack if `POP` were skipped to avoid that, desynchronizing every
-    /// later `POP` in the program. `GET`/`PUT` are avoided for the same
-    /// reason `SAVE`/`UNSAVE` are used instead: writing a special register's
-    /// value into a general register at or above the current `rL` reads as
-    /// a normal local write and raises `rL` to fit it, corrupting the very
-    /// value being sampled when that value is `rL` itself.
-    ///
-    /// The `JMP` back needs a label at the return address, which MMIXAL
-    /// cannot express as "call site plus one instruction" -- the grammar
-    /// has no arithmetic on labels. Instead it reuses the label already on
-    /// the following statement, or invents and attaches one when that
-    /// statement has none.
-    fn preprocess_debug(source: &str) -> String {
-        use regex::Regex;
+    /// The subroutine `SAVE`s the full machine state before printing and
+    /// `UNSAVE`s it after, so every general register and every special
+    /// register but `rJ` -- `rL` and `rG` included, whatever their values
+    /// -- comes back exactly as it was; `rJ` is simply never written, by
+    /// either instruction the directive expands to.
+    fn preprocess_debug(source: &str) -> (String, Vec<usize>) {
+        // A directive, optionally preceded by its own label. A fixed,
+        // valid pattern compiled once per call: infallible.
+        let debug_re = regex::Regex::new(r#"(?m)^([^\s]*\s+)?debug\s+"([^"]*)"\s*$"#).unwrap();
 
-        // A directive, optionally preceded by its own label.
-        let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?debug\s+"([^"]*)"\s*$"#).unwrap();
-        // A line's existing label: a leading identifier followed by whitespace.
-        let label_re = Regex::new(r"^([A-Za-z_][A-Za-z0-9_]*):?\s").unwrap();
-
-        let lines: Vec<&str> = source.lines().collect();
-
-        // Pass 1: recognize every directive and settle its own address's name.
-        let mut sites: Vec<Option<DebugSite>> = Vec::with_capacity(lines.len());
-        let mut counter = 0usize;
-        for line in &lines {
-            let site = debug_re.captures(line).map(|caps| {
-                counter += 1;
-                let prefix = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-                let call_label = if prefix.is_empty() {
-                    format!("DbgCall_{counter:04}")
-                } else {
-                    prefix.to_string()
-                };
-                DebugSite {
-                    call_label,
-                    stub_label: format!("DbgStr_{counter:04}"),
-                    text: caps[2].to_string(),
-                }
-            });
-            sites.push(site);
-        }
-
-        // Pass 2: settle each directive's return address -- the label on the
-        // following statement, reusing a site's own call_label when that
-        // statement is itself a directive, else the line's existing label,
-        // else one invented and recorded here to attach in pass 3.
-        let mut injected_labels: HashMap<usize, String> = HashMap::new();
-        let mut return_labels: Vec<Option<String>> = vec![None; lines.len()];
-        for i in 0..lines.len() {
-            if sites[i].is_none() {
-                continue;
-            }
-            let next = i + 1;
-            let return_label = match sites.get(next) {
-                Some(Some(next_site)) => next_site.call_label.clone(),
-                _ => match lines.get(next) {
-                    Some(next_line) => match label_re.captures(next_line) {
-                        Some(caps) => caps[1].to_string(),
-                        None => {
-                            let synth = format!("DbgRet_{:04}", i + 1);
-                            injected_labels.insert(next, synth.clone());
-                            synth
-                        }
-                    },
-                    None => panic!(
-                        "a `debug` directive cannot be the source's last statement \
-                         (line {}): nothing follows to return to",
-                        i + 1
-                    ),
-                },
-            };
-            return_labels[i] = Some(return_label);
-        }
-
-        // Pass 3: emit the call sites, injected labels, and generated stubs.
         let mut result = String::new();
+        let mut line_map = Vec::new();
         let mut stubs = Vec::new();
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(site) = &sites[i] {
-                result.push_str(&site.call_label);
-                result.push('\t');
-                result.push_str(&format!("JMP\t{}\n", site.stub_label));
-                stubs.push((
-                    site.stub_label.clone(),
-                    site.text.clone(),
-                    return_labels[i].clone().expect("settled in pass 2"),
-                ));
-            } else if let Some(label) = injected_labels.get(&i) {
-                result.push_str(label);
-                result.push('\t');
-                result.push_str(line);
-                result.push('\n');
-            } else {
-                result.push_str(line);
-                result.push('\n');
+        let mut counter = 0usize;
+
+        for (index, line) in source.lines().enumerate() {
+            let original_line = index + 1;
+            match debug_re.captures(line) {
+                Some(caps) => {
+                    counter += 1;
+                    let label = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                    let stub_label = format!("DbgStr_{counter:04}");
+                    let ret_label = format!("DbgRet_{counter:04}");
+                    Self::emit_debug_call(&mut result, label, &stub_label, &ret_label);
+                    line_map.push(original_line);
+                    line_map.push(original_line);
+                    stubs.push((stub_label, caps[2].to_string(), ret_label));
+                }
+                None => {
+                    result.push_str(line);
+                    result.push('\n');
+                    line_map.push(original_line);
+                }
             }
         }
 
         if !stubs.is_empty() {
             result.push('\n');
-            result.push_str("; Debug subroutines generated by preprocessor\n");
-            for (stub_label, text, return_label) in stubs {
-                result.push_str(&format!("{stub_label}\tSAVE\t$254,0\n"));
-                result.push_str(&format!("\tGETA\t$255,{stub_label}Str\n"));
-                result.push_str("\tTRAP\t0,Fputs,StdOut\n");
-                result.push_str("\tUNSAVE\t0,$254\n");
-                result.push_str(&format!("\tJMP\t{return_label}\n"));
-                result.push_str(&format!("{stub_label}Str\tBYTE\t\"{text}\",#a,0\n"));
+            result.push_str("; debug subroutines generated by the preprocessor\n");
+            // A program that falls off its own last real statement with no
+            // explicit HALT -- `debug` as that statement included -- must
+            // not fall into a stub instead: SAVE/GETA/TRAP/UNSAVE misreads
+            // whatever state is live there, and the final JMP back to its
+            // own landing pad loops forever. Guard the block with a halt
+            // no well-formed program ever reaches.
+            result.push_str("\tTRAP\t0,Halt,0\n");
+            for (stub_label, text, ret_label) in &stubs {
+                Self::emit_debug_stub(&mut result, stub_label, text, ret_label);
             }
         }
 
         debug!("Preprocessed source:\n{}", result);
-        result
+        (result, line_map)
+    }
+
+    /// The two lines that replace one `debug` directive: its own label, if
+    /// any, on a jump to `stub_label`, then the no-op labelled `ret_label`
+    /// that the stub jumps back to.
+    fn emit_debug_call(out: &mut String, label: &str, stub_label: &str, ret_label: &str) {
+        out.push_str(label);
+        out.push_str(&format!("\tJMP\t{stub_label}\n"));
+        out.push_str(&format!("{ret_label}\tSWYM\n"));
+    }
+
+    /// The generated subroutine for one `debug` directive: print `text`,
+    /// restore the state `SAVE` captured, and jump back to `ret_label`.
+    fn emit_debug_stub(out: &mut String, stub_label: &str, text: &str, ret_label: &str) {
+        out.push_str(&format!("{stub_label}\tSAVE\t$254,0\n"));
+        out.push_str(&format!("\tGETA\t$255,{stub_label}Str\n"));
+        out.push_str("\tTRAP\t0,Fputs,StdOut\n");
+        out.push_str("\tUNSAVE\t0,$254\n");
+        out.push_str(&format!("\tJMP\t{ret_label}\n"));
+        out.push_str(&format!("{stub_label}Str\tBYTE\t\"{text}\",#a,0\n"));
     }
 
     /// Count the actual number of bytes in a string literal, accounting for escape sequences
@@ -1287,14 +1230,14 @@ impl MMixAssembler {
         }
 
         // Preprocess the source to expand debug directives
-        let preprocessed_source = Self::preprocess_debug(source);
+        let (preprocessed_source, line_map) = Self::preprocess_debug(source);
 
         Self {
             sources: vec![SourceUnit {
                 filename: filename.to_string(),
                 preprocessed: preprocessed_source,
                 original: source.to_string(),
-                original_line_count: source.lines().count(),
+                line_map,
             }],
             current_filename: filename.to_string(),
             current_prefix: String::new(),
@@ -1315,12 +1258,12 @@ impl MMixAssembler {
     /// are added; symbols, labels, GREG state, and `current_addr` carry over,
     /// so the result is identical to assembling the concatenation of inputs.
     pub fn add_source(&mut self, source: &str, filename: &str) {
-        let preprocessed = Self::preprocess_debug(source);
+        let (preprocessed, line_map) = Self::preprocess_debug(source);
         self.sources.push(SourceUnit {
             filename: filename.to_string(),
             preprocessed,
             original: source.to_string(),
-            original_line_count: source.lines().count(),
+            line_map,
         });
     }
 
@@ -1611,9 +1554,8 @@ impl MMixAssembler {
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn second_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
         // Captured before `into_inner()` consumes `pair`: the statement's
-        // line in the ACTIVE translation unit's preprocessed text, which
-        // (after `preprocess_debug` was made line-count preserving) equals
-        // the original line for every real user line.
+        // line in the ACTIVE translation unit's PREPROCESSED text.
+        // `record_debug_info` maps it back to the original source line.
         let (line, _) = pair.line_col();
         let mut label_name: Option<String> = None;
         let mut inst: Option<MMixInstruction> = None;
@@ -1695,17 +1637,24 @@ impl MMixAssembler {
         Ok(())
     }
 
-    /// Record `addr`'s source location for `line` in the active translation
-    /// unit (`current_unit_index`), unless `line` falls beyond that unit's
-    /// original line count -- i.e. it belongs to compiler-generated code
-    /// (the appended debug-subroutine block), which gets no entry.
+    /// Record `addr`'s source location in the active translation unit
+    /// (`current_unit_index`): `line`'s preprocessed position translated
+    /// through `line_map` back to its original line. A `line` past the end
+    /// of that map is compiler-generated code (the appended debug-subroutine
+    /// block), which gets no entry.
     fn record_debug_info(&mut self, addr: u64, line: usize) {
         let unit = &self.sources[self.current_unit_index];
-        if line > unit.original_line_count {
+        let Some(&original_line) = unit.line_map.get(line - 1) else {
             return;
-        }
+        };
         let file = unit.filename.clone();
-        self.debug_info.insert(addr, SourceLoc { file, line });
+        self.debug_info.insert(
+            addr,
+            SourceLoc {
+                file,
+                line: original_line,
+            },
+        );
     }
 
     /// Peek at instruction type to determine size without modifying state

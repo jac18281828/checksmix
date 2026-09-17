@@ -920,6 +920,31 @@ Text\tBYTE\t\"Hi\",0
         }
     }
 
+    /// A program whose only special statement is a `debug` line, followed
+    /// by two ordinary ones. `Main` is line 2, `SETI` line 3, `TRAP` line 4.
+    const DEBUG_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tdebug\t\"hi\"
+\tSETI\t$1,7
+\tTRAP\t0,Halt,0
+";
+
+    /// `next` steps clean over a whole `debug` expansion -- the `JMP`, the
+    /// generated subroutine, and the `SWYM` landing pad it jumps back to --
+    /// in one call, landing on the next real source line.
+    #[test]
+    fn next_steps_over_a_debug_line_in_one_go() {
+        let recorder = Recorder::default();
+        let mut dbg =
+            Debugger::load_with_host(assemble(DEBUG_PROGRAM, "debug.mms"), recorder.clone());
+        let stop = dbg.execute(Command::Next).join("\n");
+        assert!(
+            stop.starts_with("debug.mms:3\t"),
+            "next must land on line 3 (SETI), got {stop:?}"
+        );
+        assert_eq!(&*recorder.0.borrow(), b"hi\n");
+    }
+
     /// `stepi` advances one instruction and still names the line it is
     /// inside, with the address in front.
     #[test]

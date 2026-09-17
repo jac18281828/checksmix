@@ -5567,8 +5567,8 @@ mod tests {
 
     /// A callee that makes a nested call without saving `rJ` first has its
     /// own `POP` branch to the address after the *nested* `PUSHJ`, not back
-    /// to its own caller -- the breaking change this fix makes: a
-    /// subroutine that calls another must save and restore `rJ` itself.
+    /// to its own caller: a subroutine that calls another must save and
+    /// restore `rJ` itself.
     #[test]
     fn test_pop_without_saving_rj_returns_to_the_nested_call_site() {
         let mut mmix = MMix::new();
@@ -5599,8 +5599,7 @@ mod tests {
     }
 
     /// A callee that saves `rJ` before its nested call and restores it
-    /// after, before its own `POP`, returns correctly to its own caller --
-    /// the convention `mmix.rs`'s doc block now documents.
+    /// after, before its own `POP`, returns correctly to its own caller.
     #[test]
     fn test_pop_returns_correctly_when_rj_is_saved_and_restored() {
         let mut mmix = MMix::new();
@@ -11864,5 +11863,127 @@ Nested\tSET\t$0,42
         // TRAP's own handler advances pc past itself before halting.
         assert_eq!(mmix.get_pc(), main_addr + 12, "halt address");
         assert!(mmix.frame_info_stack.is_empty());
+    }
+
+    /// Assembles `source`, runs it under a fresh `CaptureHost` for up to
+    /// `budget` instructions, and returns the machine, the run's outcome,
+    /// and captured stdout. Shared by the `debug`-expansion regression
+    /// tests below.
+    fn assemble_and_run_bounded(source: &str, budget: usize) -> (MMix, Stop, String) {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().expect("program must assemble");
+
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(entry_point(&asm));
+        let (_, stop) = mmix.run_bounded(budget);
+
+        let stdout = String::from_utf8(handle.stdout()).expect("valid utf8");
+        (mmix, stop, stdout)
+    }
+
+    /// A `debug` line followed by a trailing blank line at end of file, with
+    /// nothing after it to halt on: the guard ahead of the generated block
+    /// (`preprocess_debug`) halts the program instead of looping through the
+    /// stub forever, and the text prints exactly once.
+    #[test]
+    fn test_debug_directive_followed_by_a_blank_line_at_eof() {
+        let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n\n";
+        let (_, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted, "must not loop, got {stdout:?}");
+        assert_eq!(stdout, "hi\n");
+    }
+
+    /// A `debug` line followed by a trailing comment line at end of file.
+    #[test]
+    fn test_debug_directive_followed_by_a_comment_line_at_eof() {
+        let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n; nothing else follows\n";
+        let (_, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted, "must not loop, got {stdout:?}");
+        assert_eq!(stdout, "hi\n");
+    }
+
+    /// A `debug` line as the source's last statement, with nothing after
+    /// it at all -- not even a blank or comment line.
+    #[test]
+    fn test_debug_directive_as_the_last_statement() {
+        let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n";
+        let (_, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted, "must not loop, got {stdout:?}");
+        assert_eq!(stdout, "hi\n");
+    }
+
+    /// An `IS` line right after `debug`: unrelated to the call's own return
+    /// address, it binds its own constant and every later instruction
+    /// still runs in order.
+    #[test]
+    fn test_debug_directive_followed_by_an_is_line() {
+        let source = "\
+\tLOC\t#100
+Main\tdebug\t\"hi\"
+Ret2\tIS\t#10C
+\tSET\t$1,7
+\tSET\t$2,Ret2
+\tTRAP\t0,Halt,0
+";
+        let (mmix, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(stdout, "hi\n");
+        assert_eq!(mmix.get_register(1), 7);
+        assert_eq!(mmix.get_register(2), 0x10C, "Ret2 must still bind #10C");
+    }
+
+    /// A `GREG` line right after `debug`: it allocates its own register
+    /// exactly as it would without `debug` in front of it.
+    #[test]
+    fn test_debug_directive_followed_by_a_greg_line() {
+        let source = "\
+\tLOC\t#100
+Main\tdebug\t\"hi\"
+Foo\tGREG\t@
+\tSET\tFoo,42
+\tSET\t$1,Foo
+\tTRAP\t0,Halt,0
+";
+        let (mmix, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(stdout, "hi\n");
+        assert_eq!(mmix.get_register(1), 42, "Foo must still hold 42");
+    }
+
+    /// A label-only line (no instruction) right after `debug`.
+    #[test]
+    fn test_debug_directive_followed_by_a_label_only_line() {
+        let source = "\
+\tLOC\t#100
+Main\tdebug\t\"hi\"
+Done
+\tSET\t$1,7
+\tTRAP\t0,Halt,0
+";
+        let (mmix, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(stdout, "hi\n");
+        assert_eq!(mmix.get_register(1), 7);
+    }
+
+    /// A `:`-prefixed (global-namespace) label-only line right after `debug`.
+    #[test]
+    fn test_debug_directive_followed_by_a_colon_prefixed_label() {
+        let source = "\
+\tLOC\t#100
+Main\tdebug\t\"hi\"
+:Done
+\tSET\t$1,7
+\tTRAP\t0,Halt,0
+";
+        let (mmix, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(stdout, "hi\n");
+        assert_eq!(mmix.get_register(1), 7);
     }
 }
