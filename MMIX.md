@@ -29,14 +29,13 @@ Main    SETL    $0,42       % your code here
 | `IS` | `Name IS expr` | Define a numeric or register alias constant |
 | `PREFIX` | `PREFIX str` | Qualify subsequent unqualified names as `str<name>`; names beginning with `:` opt out |
 | `BYTE` | `BYTE expr,...` | Emit one byte per operand |
-| `WYDE` | `WYDE expr` | Emit one 16-bit wyde |
-| `TETRA` | `TETRA expr` | Emit one 32-bit tetra |
-| `OCTA` | `OCTA expr` | Emit one 64-bit octa |
+| `WYDE` | `WYDE expr,...` | Emit one 16-bit wyde per operand |
+| `TETRA` | `TETRA expr,...` | Emit one 32-bit tetra per operand |
+| `OCTA` | `OCTA expr,...` | Emit one 64-bit octa per operand |
 | `INCLUDE` | `INCLUDE file` | Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error |
 
-`WYDE`, `TETRA` and `OCTA` take exactly one operand. This is a known gap
-against Knuth, whose MMIXAL takes a comma-separated list for all four data
-directives, `BYTE` included.
+A string operand assembles one unit per character. The directive aligns
+once, before the first unit; a list does not realign between items.
 
 The assembler aligns before it places an item: it rounds the location counter
 up to the item's natural width — 4 for an instruction, 2, 4 or 8 for `WYDE`,

@@ -3596,6 +3596,35 @@ Test274Fwd
 Test274Done
         SET     Expect,#B00
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test275
+        JMP     TestFail
+
+% ========================================
+% Test 275: WYDE, TETRA and OCTA value lists
+% ========================================
+% Each directive now takes a list of numbers and strings; GETA loads a
+% list's base address, then LDWU/LDTU/LDOU with an immediate offset --
+% the two-operand LDWU $X,Label form does not assemble -- reads a unit
+% past the first to confirm the list aligns and sizes correctly.
+Test275 ADDUI   TestNum,TestNum,1
+        GETA    $10,List275Wyde
+        LDWU    Result,$10,2      % unit 1: 'C', the string's first byte
+        SET     Expect,#43
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test275b
+        JMP     TestFail
+Test275b
+        GETA    $10,List275Tetra
+        LDTU    Result,$10,4      % unit 1: 'C' zero-extended to a tetra
+        SET     Expect,#43
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test275c
+        JMP     TestFail
+Test275c
+        GETA    $10,List275Octa
+        LDOU    Result,$10,8      % unit 1: 'C' zero-extended to an octa
+        SET     Expect,#43
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
 
@@ -3697,6 +3726,17 @@ PreloadData
         OCTA    #2222222222222222
         OCTA    #3333333333333333
         OCTA    #4444444444444444
+
+% Data for Test 275: WYDE, TETRA and OCTA value lists (numbers and a string)
+        OCTA    0
+List275Wyde
+        WYDE    #4242,"CD",#8484
+        OCTA    0
+List275Tetra
+        TETRA   #42424242,"CD",#84848484
+        OCTA    0
+List275Octa
+        OCTA    #4242424242424242,"CD",#8484848484848484
 
 % Save area for SAVE/UNSAVE tests (needs space for saved registers)
         OCTA    0

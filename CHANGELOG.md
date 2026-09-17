@@ -1,6 +1,7 @@
 0.3.9 (2026-09-16)
 
 * **Breaking: `JE`, `JNE`, `JL` and `JG` no longer assemble as MMIX.** MMIXAL never had them — they are MIX's compare-and-jump mnemonics, which test `CMPA`'s comparison indicator, and MMIX has no such indicator. They entered the grammar as aliases of `BZ`, `BNZ`, `BN` and `BP` respectively; source that used them must now spell the branch it means. The `0.3.6` entry documenting the four as checksmix extensions is superseded
+* `WYDE`, `TETRA` and `OCTA` take a comma-separated list of expressions and strings, matching `BYTE` and closing the gap the `0.3.6` entry recorded. A string operand assembles one unit per character, zero-extended to the directive's width; each directive aligns once, before the first unit, and a list does not realign between items
 
 0.3.8 (2026-09-16)
 

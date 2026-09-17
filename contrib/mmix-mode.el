@@ -604,12 +604,12 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Qualify subsequent unqualified names as str<name>; names beginning with : opt out")
     (("BYTE" ".BYTE") "BYTE expr,..."
      "Emit one byte per operand")
-    (("WYDE" ".WYDE") "WYDE expr"
-     "Emit one 16-bit wyde")
-    (("TETRA" ".TETRA") "TETRA expr"
-     "Emit one 32-bit tetra")
-    (("OCTA" ".OCTA" "QUAD" ".QUAD") "OCTA expr"
-     "Emit one 64-bit octa")
+    (("WYDE" ".WYDE") "WYDE expr,..."
+     "Emit one 16-bit wyde per operand")
+    (("TETRA" ".TETRA") "TETRA expr,..."
+     "Emit one 32-bit tetra per operand")
+    (("OCTA" ".OCTA" "QUAD" ".QUAD") "OCTA expr,..."
+     "Emit one 64-bit octa per operand")
     (("INCLUDE" ".INCLUDE") "INCLUDE file"
      "Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error")
     (("SET") "SET $X, $Y / SET $X, imm"

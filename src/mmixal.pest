@@ -42,7 +42,7 @@ identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 // optionally followed by a trailing colon (legacy MMIXAL syntax).
 label_def = { global_id ~ ":"? }
 
-// String literal for BYTE directive
+// String literal for a data directive's value list
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 // Data directives (with or without leading dot) - must be complete words
@@ -61,15 +61,15 @@ directive_prefix = @{ ^"PREFIX" ~ word_end }
 // write `PREFIX foo:` (Knuth idiom) or `PREFIX :` (reset to root namespace).
 prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
-// BYTE can take strings or comma-separated values
-byte_value = { string_literal | expr_value }
-byte_values = { byte_value ~ ("," ~ byte_value)* }
+// A data directive takes a list of strings and/or expressions.
+data_value = { string_literal | expr_value }
+data_values = { data_value ~ ("," ~ data_value)* }
 
 data_directive = {
-    directive_byte ~ byte_values |
-    directive_wyde ~ expr_value |
-    directive_tetra ~ expr_value |
-    directive_octa ~ expr_value
+    directive_byte ~ data_values |
+    directive_wyde ~ data_values |
+    directive_tetra ~ data_values |
+    directive_octa ~ data_values
 }
 
 greg_directive = { directive_greg ~ expr_value }

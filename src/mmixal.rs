@@ -1064,11 +1064,12 @@ impl MMixAssembler {
         Self::decode_byte_string(content).len()
     }
 
-    /// Decode a `BYTE` string literal's content into the bytes it represents,
-    /// resolving the escape sequences `\n`, `\r`, `\t`, `\0`, `\\`, `\'`, `\"`.
-    /// Any other escaped character decodes to that character's own byte value.
-    /// Pass-1 (`count_string_bytes`) and pass-2 (`parse_data_directive`) both
-    /// go through this single function so they cannot disagree on size.
+    /// Decode a data directive's string literal content into the bytes it
+    /// represents, resolving the escape sequences `\n`, `\r`, `\t`, `\0`,
+    /// `\\`, `\'`, `\"`. Any other escaped character decodes to that
+    /// character's own byte value. Pass-1 (`count_string_bytes`) and pass-2
+    /// (`parse_data_directive`) both go through this single function so they
+    /// cannot disagree on size.
     fn decode_byte_string(content: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut chars = content.chars().peekable();
@@ -1704,42 +1705,43 @@ impl MMixAssembler {
         }
     }
 
-    /// Calculate the actual size of a data directive (accounting for string expansion)
+    /// Calculate the actual size of a data directive: its unit width times
+    /// its unit count, where a string contributes one unit per decoded byte.
     fn data_directive_size(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let mut parts = pair.clone().into_inner();
         let directive = parts.next().ok_or("Empty data directive")?;
 
-        match directive.as_rule() {
-            Rule::directive_byte => {
-                // Count total bytes from all values (strings expand, escape sequences counted correctly)
-                let mut total_size = 0u64;
-                let byte_values = parts.next().ok_or("Missing byte values")?;
+        let unit_width = Self::data_directive_unit_width(directive.as_rule())?;
+        let values = parts.next().ok_or("Missing data values")?;
 
-                for byte_value in byte_values.into_inner() {
-                    let mut value_parts = byte_value.into_inner();
-                    let first = value_parts.next().unwrap();
+        let mut unit_count = 0u64;
+        for value in values.into_inner() {
+            let first = value.into_inner().next().unwrap();
 
-                    if first.as_rule() == Rule::string_literal {
-                        // String: count bytes accounting for escape sequences
-                        let text = first.as_str();
-                        // Remove surrounding quotes
-                        let content = &text[1..text.len() - 1];
-                        let byte_count = Self::count_string_bytes(content);
-                        total_size += byte_count as u64;
-                        debug!("BYTE string: \"{}\" = {} bytes", content, byte_count);
-                    } else {
-                        // Single value (number or expr)
-                        total_size += 1;
-                        debug!("BYTE value: 1 byte");
-                    }
-                }
-                debug!("Total BYTE size: {} bytes", total_size);
-                Ok(total_size)
+            if first.as_rule() == Rule::string_literal {
+                let text = first.as_str();
+                let content = &text[1..text.len() - 1]; // Remove surrounding quotes
+                unit_count += Self::count_string_bytes(content) as u64;
+            } else {
+                unit_count += 1;
             }
+        }
+        let total_size = unit_width * unit_count;
+        debug!(
+            "Data directive size: {} units x {} bytes = {} bytes",
+            unit_count, unit_width, total_size
+        );
+        Ok(total_size)
+    }
+
+    /// The unit width, in bytes, that a data directive assembles per value.
+    fn data_directive_unit_width(directive_kind: Rule) -> Result<u64, String> {
+        match directive_kind {
+            Rule::directive_byte => Ok(1),
             Rule::directive_wyde => Ok(2),
             Rule::directive_tetra => Ok(4),
             Rule::directive_octa => Ok(8),
-            _ => Err(format!("Unknown data directive: {:?}", directive.as_rule())),
+            _ => Err(format!("Unknown data directive: {:?}", directive_kind)),
         }
     }
 
@@ -3467,54 +3469,44 @@ impl MMixAssembler {
         Ok(MMixInstruction::SYNC(xyz))
     }
 
-    /// Parse a data directive and expand it to potentially multiple instructions
-    /// (e.g., BYTE "Hello" becomes multiple BYTE instructions)
+    /// Build the data unit a directive assembles from one value, truncating
+    /// to the directive's unit width.
+    fn data_directive_unit(directive_kind: Rule, value: u64) -> Result<MMixInstruction, String> {
+        match directive_kind {
+            Rule::directive_byte => Ok(MMixInstruction::BYTE(value as u8)),
+            Rule::directive_wyde => Ok(MMixInstruction::WYDE(value as u16)),
+            Rule::directive_tetra => Ok(MMixInstruction::TETRA(value as u32)),
+            Rule::directive_octa => Ok(MMixInstruction::OCTA(value)),
+            _ => Err(format!("Unknown data directive: {:?}", directive_kind)),
+        }
+    }
+
+    /// Parse a data directive and expand its value list to one instruction
+    /// per unit (e.g. `BYTE "Hello"` becomes five `BYTE` instructions).
     fn parse_data_directive(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<MMixInstruction>, String> {
         let mut parts = pair.into_inner();
-        let directive = parts.next().unwrap();
+        let directive_kind = parts.next().unwrap().as_rule();
+        let values_pair = parts.next().unwrap();
 
-        match directive.as_rule() {
-            Rule::directive_byte => {
-                let mut result = Vec::new();
-                let values_pair = parts.next().unwrap(); // This is byte_values
+        let mut result = Vec::new();
+        for value in values_pair.into_inner() {
+            let actual_value = value.into_inner().next().unwrap(); // string_literal or expr_value
 
-                let values: Vec<_> = values_pair.into_inner().collect();
-
-                for byte_value in values.into_iter() {
-                    let actual_value = byte_value.into_inner().next().unwrap(); // string_literal or number
-
-                    if actual_value.as_rule() == Rule::string_literal {
-                        // String literal - expand to one BYTE per decoded byte
-                        let s = actual_value.as_str();
-                        let s = &s[1..s.len() - 1]; // Remove quotes
-                        for b in Self::decode_byte_string(s) {
-                            result.push(MMixInstruction::BYTE(b));
-                        }
-                    } else {
-                        let val = self.parse_number(actual_value)? as u8;
-                        result.push(MMixInstruction::BYTE(val));
-                    }
+            if actual_value.as_rule() == Rule::string_literal {
+                let s = actual_value.as_str();
+                let s = &s[1..s.len() - 1]; // Remove quotes
+                for b in Self::decode_byte_string(s) {
+                    result.push(Self::data_directive_unit(directive_kind, b as u64)?);
                 }
-                Ok(result)
+            } else {
+                let val = self.parse_number(actual_value)?;
+                result.push(Self::data_directive_unit(directive_kind, val)?);
             }
-            Rule::directive_wyde => {
-                let val = self.parse_number(parts.next().unwrap())? as u16;
-                Ok(vec![MMixInstruction::WYDE(val)])
-            }
-            Rule::directive_tetra => {
-                let val = self.parse_number(parts.next().unwrap())? as u32;
-                Ok(vec![MMixInstruction::TETRA(val)])
-            }
-            Rule::directive_octa => {
-                let value_pair = parts.next().unwrap();
-                let val = self.parse_number(value_pair)?;
-                Ok(vec![MMixInstruction::OCTA(val)])
-            }
-            _ => Err(format!("Unknown data directive: {:?}", directive.as_rule())),
         }
+        Ok(result)
     }
 
     fn parse_loc_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
@@ -4239,6 +4231,84 @@ mod tests {
             ]
         );
         assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(12));
+    }
+
+    #[test]
+    fn test_wyde_list_mixes_numbers_and_string_pass1_pass2_agree() {
+        // A leading BYTE leaves the counter unaligned so List's WYDE must
+        // round up. The forward OCTA reads pass 1's size for the list;
+        // pass 2 must compute the same size or Next's address disagrees.
+        let mut asm = MMixAssembler::new(
+            "OCTA Next\nBYTE 1\nList WYDE 10,\"ab\",20\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("List"), Some(&10));
+        let list: Vec<_> = asm.instructions[2..6]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (10, MMixInstruction::WYDE(10)),
+                (12, MMixInstruction::WYDE(b'a' as u16)),
+                (14, MMixInstruction::WYDE(b'b' as u16)),
+                (16, MMixInstruction::WYDE(20)),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&18));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(18));
+    }
+
+    #[test]
+    fn test_tetra_list_mixes_numbers_and_string_pass1_pass2_agree() {
+        let mut asm = MMixAssembler::new(
+            "OCTA Next\nBYTE 1\nList TETRA 10,\"ab\",20\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("List"), Some(&12));
+        let list: Vec<_> = asm.instructions[2..6]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (12, MMixInstruction::TETRA(10)),
+                (16, MMixInstruction::TETRA(b'a' as u32)),
+                (20, MMixInstruction::TETRA(b'b' as u32)),
+                (24, MMixInstruction::TETRA(20)),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&28));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(28));
+    }
+
+    #[test]
+    fn test_octa_list_mixes_numbers_and_string_pass1_pass2_agree() {
+        let mut asm = MMixAssembler::new(
+            "OCTA Next\nBYTE 1\nList OCTA 10,\"ab\",20\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("List"), Some(&16));
+        let list: Vec<_> = asm.instructions[2..6]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (16, MMixInstruction::OCTA(10)),
+                (24, MMixInstruction::OCTA(b'a' as u64)),
+                (32, MMixInstruction::OCTA(b'b' as u64)),
+                (40, MMixInstruction::OCTA(20)),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&48));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(48));
     }
 
     #[test]
@@ -6600,12 +6670,11 @@ ZSP  $3,$4,2
 
     /// A data directive that emits multiple words maps every emitted address
     /// to the same source line, and `addr_for_line` returns the lowest one.
-    /// (`OCTA` in this grammar takes a single value per directive -- only
-    /// `BYTE` accepts a comma-separated list -- so `BYTE` is used here to
-    /// exercise the "N addresses, one line" invariant.)
+    /// Checked for `BYTE` (1-byte units) and `OCTA` (8-byte units), so the
+    /// invariant is shown to hold independent of unit width.
     #[test]
     fn test_multi_word_data_directive_maps_to_one_line() {
-        let source = "Data\tBYTE\t1,2,3\n";
+        let source = "Data\tBYTE\t1,2,3\nWide\tOCTA\t1,2,3\n";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
 
@@ -6617,6 +6686,16 @@ ZSP  $3,$4,2
             assert_eq!(loc.line, 1);
         }
         assert_eq!(asm.addr_for_line("<test>", 1), Some(base_addr));
+
+        let wide_addr = *asm.labels.get("Wide").unwrap();
+        for offset in 0..3 {
+            let addr = wide_addr + offset * 8;
+            let loc = asm
+                .source_loc(addr)
+                .unwrap_or_else(|| panic!("no source_loc at unit {offset}"));
+            assert_eq!(loc.line, 2);
+        }
+        assert_eq!(asm.addr_for_line("<test>", 2), Some(wide_addr));
     }
 
     /// A stack program with both a data and a text region, so `source_loc`
