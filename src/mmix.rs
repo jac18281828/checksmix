@@ -1210,7 +1210,10 @@ impl MMix {
     fn put_rl(&mut self, z: u64) {
         let rl_old = self.get_special(SpecialReg::RL);
         let rl_new = z.min(rl_old);
-        for marginal in rl_new..rl_old {
+        // UNSAVE restores rL straight from guest memory, so it can name a
+        // register the file does not have. Zero only what exists.
+        let drop_end = rl_old.min(self.general_regs.len() as u64);
+        for marginal in rl_new..drop_end {
             self.general_regs[marginal as usize] = 0;
         }
         self.set_special(SpecialReg::RL, rl_new);
@@ -8201,6 +8204,23 @@ Main\tSETI\t$1,100
         mmix.write_tetra(4, 0x20010400);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(1), 0);
+    }
+
+    #[test]
+    fn test_put_rl_survives_an_rl_beyond_the_register_file() {
+        // UNSAVE copies rL out of guest memory without checking it, so a
+        // program can reach PUT rL with an rL no register answers to. The
+        // drop must still lower rL instead of running off the file.
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, u64::MAX);
+        mmix.general_regs[200] = 42;
+
+        // PUTI rL,3
+        mmix.write_tetra(0, 0xF7140003);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
+        assert_eq!(mmix.get_register(200), 0, "the whole file drops out");
     }
 
     #[test]
