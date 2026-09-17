@@ -5841,9 +5841,9 @@ ZSEVI $7,$8,128
         // Y in FLOT's grammar is `expr_value`-only, not `register`; a
         // register-Y spelling must now fail to parse, not silently
         // reinterpret $2's register number as a rounding-mode value.
-        // `is_err()` alone survives a re-widened
-        // grammar that admits the register but still leaves a trailing
-        // token elsewhere, so pin the exact rejection: the 3-operand form
+        // `is_err()` alone survives a re-widened grammar that admits the
+        // register but still leaves a trailing token elsewhere, so pin the
+        // exact rejection: the 3-operand form
         // fails to match at Y (a register isn't `expr_value`), and the
         // 2-operand form then consumes only `$1,$2`, stranding `,$3`.
         let mut asm = MMixAssembler::new("FLOT $1,$2,$3", "<test>");

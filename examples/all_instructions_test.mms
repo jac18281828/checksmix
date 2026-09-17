@@ -3298,8 +3298,8 @@ Test258GoiTarget
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
 % $1-$4; POP 1,1 returns one value to $5 and skips the "JMP TestFail"
-% landing pad (target = rJ + 4*1). PUSHJB needs its
-% callee behind it, so the second half jumps over the callee to reach it.
+% landing pad (target = rJ + 4*1). PUSHJB needs its callee behind it, so
+% the second half jumps over the callee to reach it.
 % ========================================
 Test259 ADDUI   TestNum,TestNum,1
         PUSHJ   $5,Test259Callee
@@ -3632,8 +3632,8 @@ Test275c
 % Test 276: POP's hole and marginal registers
 % ========================================
 % X=$5 keeps the pushed frame's marginal register clear of the harness's
-% $1-$4. rL is pinned to 9 so the window slide is
-% exact: PUSHJ $5 carries caller's $6,$7,$8 into the callee's $0,$1,$2.
+% $1-$4. rL is pinned to 9 so the window slide is exact: PUSHJ $5 carries
+% caller's $6,$7,$8 into the callee's $0,$1,$2.
 % POP 2,1 then checks that the hole gets the callee's last output, with
 % $0 landing one slot above it, and that $8, above
 % x+X, reads zero rather than its pre-call value.
@@ -3792,9 +3792,9 @@ TestPass        SETI $255,PassMsg
         TRAP    0,Fputs,StdOut
         SETI    Result,#FFFF    % Success marker
         SETI    $255, 0
-        HALT                    % byte-identical to
-                                 % TRAP 0,Halt,0, but exercises HALT's own
-                                 % assembler path (mnemonic_halt) directly
+        HALT                    % byte-identical to TRAP 0,Halt,0, and
+                                % exercises HALT's own assembler path
+                                % (mnemonic_halt) directly
 
 % ========================================
 % Test failed

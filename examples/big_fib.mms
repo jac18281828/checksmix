@@ -1,7 +1,7 @@
 % ----------------------------------------------------
 % Fibonacci with big integers: prints fib(100) = 354224848179261915075.
-% That value needs 69 bits, more than one octa holds, so a number is
-% MAXLIMBS octas, least significant first.
+% That value needs 69 bits, more than one octa holds. A number is MAXLIMBS
+% octas, least significant first, with room to spare.
 %
 % Register rules this file follows:
 % - Arguments travel in the global registers Arg0-Arg2, not through the

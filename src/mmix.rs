@@ -1054,10 +1054,10 @@ impl MMix {
 
     /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
     ///
-    /// Only X+1 octas (the saved-and-marginal range) need to spill; the
-    /// rest stays in a ring buffer. We approximate the ring
-    /// by spilling the full active local frame so the slide-back on POP can
-    /// restore everything. The frame on the stack is therefore
+    /// Only X+1 octas (the saved-and-marginal range) need to spill; the rest
+    /// stays in a ring buffer. We approximate the ring by spilling the full
+    /// active local frame so the slide-back on POP can restore everything.
+    /// The frame on the stack is therefore
     /// `max(X+1, rL) + 1` octas (saved + frame word), with the marginal at
     /// offset X always overwriting that slot. POP restores only
     /// `$0..$(x-1)` from it — the rest exists so `rS` and the stack's
@@ -9729,9 +9729,9 @@ Main\tSETI\t$1,100
     #[test]
     fn byte_access_at_an_odd_address_still_reads_that_byte() {
         // A byte is its own alignment: read_byte/write_byte take no mask,
-        // unlike the wider accessors above. There is no fix
-        // to revert here — this guards against someone later "helpfully"
-        // masking read_byte to match its wider siblings.
+        // unlike the wider accessors above. There is no fix to revert here —
+        // this guards against someone later "helpfully" masking read_byte to
+        // match its wider siblings.
         let mut mmix = MMix::new();
         mmix.write_byte(801, 0x42);
         assert_eq!(mmix.read_byte(801), 0x42);
@@ -10599,9 +10599,9 @@ Main\tSETI\t$1,100
 
     #[test]
     fn test_fsqrt_y_greater_than_four_halts_with_diagnostic() {
-        // The Y>4 halt is wired at four distinct read sites; FLOTI
-        // above pins the FLOT/i2f_conv_ri! site, this pins FSQRT's
-        // separate finalize_fp_unop site.
+        // The Y>4 halt is wired at every rounding-mode read site; FLOTI
+        // above pins the FLOT/i2f_conv_ri! site, this pins FSQRT's separate
+        // finalize_fp_unop site.
         let (host, handle) = CaptureHost::new();
         let mut mmix = MMix::with_host(host);
         mmix.write_tetra(0, 0x15010502); // FSQRT $1,5,$2 (Y=5, illegal)
