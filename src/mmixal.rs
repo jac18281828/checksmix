@@ -986,72 +986,149 @@ pub struct SourceLoc {
     pub line: usize,
 }
 
+/// A `debug "text"` directive found on one source line.
+struct DebugSite {
+    /// The line's own label: the user's prefix, trimmed, or an invented
+    /// one when the line carries none. Names the call instruction below.
+    call_label: String,
+    /// Label of the generated subroutine that prints `text`.
+    stub_label: String,
+    text: String,
+}
+
 impl MMixAssembler {
-    /// Preprocess the source code to expand debug directives
-    /// Transforms: debug "text"
-    /// Into: GETA t,DbgStr_NNNN
-    ///       TRAP 0,Fputs,StdOut
-    ///       DbgStr_NNNN BYTE "text",#a,0
+    /// Preprocess the source to expand `debug "text"` directives.
+    ///
+    /// Each directive becomes one `JMP` to a generated subroutine, keeping
+    /// the preprocessed line count equal to the original's (`debug_info`
+    /// maps preprocessed line N to original line N and cannot tolerate a
+    /// directive growing into more than one line). The subroutine writes
+    /// `text` and a newline to `StdOut` and returns leaving every register
+    /// exactly as it found it:
+    ///
+    /// - `SAVE` snapshots all 256 general registers and every special
+    ///   register (`rL`, `rG`, `rA`, `rJ` included) before anything runs.
+    /// - `GETA`/`TRAP` clobber only the global registers `$254`/`$255`,
+    ///   already captured above.
+    /// - `UNSAVE` restores every general register and every special
+    ///   register but `rJ` from that snapshot.
+    /// - A final `JMP` back to the statement after the call leaves `rJ`
+    ///   untouched, since nothing in this sequence ever writes it.
+    ///
+    /// `PUSHJ`/`POP` are unusable here: `PUSHJ` always writes `rJ` and
+    /// slides the register window by its own `X` operand, and `POP` always
+    /// recomputes `rL` from its own operands rather than restoring the
+    /// exact prior value -- either would corrupt state a caller mid-call
+    /// still needs. Using them would also leave an unpopped frame on the
+    /// call stack if `POP` were skipped to avoid that, desynchronizing every
+    /// later `POP` in the program. `GET`/`PUT` are avoided for the same
+    /// reason `SAVE`/`UNSAVE` are used instead: writing a special register's
+    /// value into a general register at or above the current `rL` reads as
+    /// a normal local write and raises `rL` to fit it, corrupting the very
+    /// value being sampled when that value is `rL` itself.
+    ///
+    /// The `JMP` back needs a label at the return address, which MMIXAL
+    /// cannot express as "call site plus one instruction" -- the grammar
+    /// has no arithmetic on labels. Instead it reuses the label already on
+    /// the following statement, or invents and attaches one when that
+    /// statement has none.
     fn preprocess_debug(source: &str) -> String {
         use regex::Regex;
 
-        // Match debug directive anywhere on a line (after label or standalone)
-        // Captures: optional label, the debug keyword, and the quoted string
+        // A directive, optionally preceded by its own label.
         let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?debug\s+"([^"]*)"\s*$"#).unwrap();
-        let mut counter = 0;
-        let mut result = String::new();
-        let mut debug_strings = Vec::new();
+        // A line's existing label: a leading identifier followed by whitespace.
+        let label_re = Regex::new(r"^([A-Za-z_][A-Za-z0-9_]*):?\s").unwrap();
 
-        for line in source.lines() {
-            if let Some(caps) = debug_re.captures(line) {
-                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                let text = &caps[2];
+        let lines: Vec<&str> = source.lines().collect();
+
+        // Pass 1: recognize every directive and settle its own address's name.
+        let mut sites: Vec<Option<DebugSite>> = Vec::with_capacity(lines.len());
+        let mut counter = 0usize;
+        for line in &lines {
+            let site = debug_re.captures(line).map(|caps| {
                 counter += 1;
-                let label = format!("DbgStr_{:04}", counter);
-
-                debug!(
-                    "Preprocessing debug directive: \"{}\" -> label {}",
-                    text, label
-                );
-
-                // Emit any label/prefix and the generated PUSHJ on a single line so
-                // the preprocessed line count matches the original: label followed
-                // by an instruction is one statement to the second pass.
-                if !prefix.trim().is_empty() {
-                    result.push_str(prefix.trim());
-                    result.push(' ');
+                let prefix = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                let call_label = if prefix.is_empty() {
+                    format!("DbgCall_{counter:04}")
+                } else {
+                    prefix.to_string()
+                };
+                DebugSite {
+                    call_label,
+                    stub_label: format!("DbgStr_{counter:04}"),
+                    text: caps[2].to_string(),
                 }
+            });
+            sites.push(site);
+        }
 
-                // Generate call to debug subroutine using SAVE/UNSAVE for full context preservation
-                // PUSHJ manages return address via rJ special register
-                result.push_str(&format!("\tPUSHJ\t$0,{}\n", label));
+        // Pass 2: settle each directive's return address -- the label on the
+        // following statement, reusing a site's own call_label when that
+        // statement is itself a directive, else the line's existing label,
+        // else one invented and recorded here to attach in pass 3.
+        let mut injected_labels: HashMap<usize, String> = HashMap::new();
+        let mut return_labels: Vec<Option<String>> = vec![None; lines.len()];
+        for i in 0..lines.len() {
+            if sites[i].is_none() {
+                continue;
+            }
+            let next = i + 1;
+            let return_label = match sites.get(next) {
+                Some(Some(next_site)) => next_site.call_label.clone(),
+                _ => match lines.get(next) {
+                    Some(next_line) => match label_re.captures(next_line) {
+                        Some(caps) => caps[1].to_string(),
+                        None => {
+                            let synth = format!("DbgRet_{:04}", i + 1);
+                            injected_labels.insert(next, synth.clone());
+                            synth
+                        }
+                    },
+                    None => panic!(
+                        "a `debug` directive cannot be the source's last statement \
+                         (line {}): nothing follows to return to",
+                        i + 1
+                    ),
+                },
+            };
+            return_labels[i] = Some(return_label);
+        }
 
-                // Store the subroutine definition for later
-                debug_strings.push((label, text.to_string()));
+        // Pass 3: emit the call sites, injected labels, and generated stubs.
+        let mut result = String::new();
+        let mut stubs = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(site) = &sites[i] {
+                result.push_str(&site.call_label);
+                result.push('\t');
+                result.push_str(&format!("JMP\t{}\n", site.stub_label));
+                stubs.push((
+                    site.stub_label.clone(),
+                    site.text.clone(),
+                    return_labels[i].clone().expect("settled in pass 2"),
+                ));
+            } else if let Some(label) = injected_labels.get(&i) {
+                result.push_str(label);
+                result.push('\t');
+                result.push_str(line);
+                result.push('\n');
             } else {
                 result.push_str(line);
                 result.push('\n');
             }
         }
 
-        // Append all debug subroutines and strings at the end
-        if !debug_strings.is_empty() {
+        if !stubs.is_empty() {
             result.push('\n');
             result.push_str("; Debug subroutines generated by preprocessor\n");
-            for (label, text) in debug_strings {
-                // Each debug subroutine:
-                // 1. SAVE context to memory (address returned in $254)
-                // 2. Load string address into $0
-                // 3. Call Fputs TRAP
-                // 4. UNSAVE restores context (Note: rJ is NOT in context, so return address is safe)
-                // 5. POP returns via rJ
-                result.push_str(&format!("{}  \tSAVE\t$254,0\n", label));
-                result.push_str(&format!("\tGETA\t$0,{}Str\n", label));
+            for (stub_label, text, return_label) in stubs {
+                result.push_str(&format!("{stub_label}\tSAVE\t$254,0\n"));
+                result.push_str(&format!("\tGETA\t$255,{stub_label}Str\n"));
                 result.push_str("\tTRAP\t0,Fputs,StdOut\n");
                 result.push_str("\tUNSAVE\t0,$254\n");
-                result.push_str("\tPOP\t0,0\n"); // Return via rJ
-                // String data right after the subroutine
-                result.push_str(&format!("{}Str\tBYTE\t\"{}\",#a,0\n", label, text));
+                result.push_str(&format!("\tJMP\t{return_label}\n"));
+                result.push_str(&format!("{stub_label}Str\tBYTE\t\"{text}\",#a,0\n"));
             }
         }
 

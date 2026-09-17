@@ -200,7 +200,9 @@ restore from the register stack; `$x` gets the callee's `$(X-1)` (the *last*
 output lands in the hole), or zero when
 `X = 0` or the clamp fired; `$(x+1)..$(x+X-1)` get the callee's `$0..$(X-2)`.
 `rL` becomes `min(x+X, rG)`; every register from the new `rL` through `rG-1`
-reads zero.
+reads zero. `POP` branches to `rJ + 4·YZ` and leaves `rJ` unchanged; a
+subroutine that calls another saves `rJ` (`GET $k,rJ`) and restores it
+(`PUT rJ,$k`) before its own `POP`.
 
 Measured on MMIXware (`mmix-20131017.tgz`):
 

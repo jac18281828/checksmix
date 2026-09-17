@@ -3663,8 +3663,45 @@ Test276b
 Test276c
         SET     Expect,0
         CMP     Temp,$8,Expect
+        PBZ     Temp,Test277
+        JMP     TestFail
+
+% ========================================
+% Test 277: POP leaves rJ unchanged; a nested call needs its own save/restore
+% ========================================
+% Test277Callee saves rJ with GET before its own nested call and restores
+% it with PUT before its own POP. Back at Test277Return, GET of rJ must
+% still read Test277After's address -- the instruction after the outer
+% PUSHJ -- proving Test277Callee's own POP left rJ exactly as it found it,
+% with nothing to restore. A POP that instead restored the caller's
+% pre-call rJ (the behavior this fix removes) would leave some ancestor's
+% return address there instead, failing this check even though the
+% top-level return in $5 below still lands correctly either way.
+% ========================================
+Test277 ADDUI   TestNum,TestNum,1
+        PUSHJ   $5,Test277Callee
+Test277After
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+Test277Return
+        GETA    $10,Test277After
+        GET     $6,rJ
+        CMP     Temp,$6,$10
+        PBZ     Temp,Test277Return2
+        JMP     TestFail
+Test277Return2
+        SET     Expect,701
+        CMP     Temp,$5,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
+Test277Callee
+        GET     $6,rJ
+        PUSHJ   $7,Test277Inner
+        PUT     rJ,$6
+        SET     $0,701
+        POP     1,1              % yz=1 skips the unreachable JMP TestFail
+Test277Inner
+        SET     $0,999
+        POP     0,0
 
 % ========================================
 % Intentional coverage exceptions

@@ -800,7 +800,7 @@ impl Host for StdHost {
 ///     $(x+1)..$(x+X-1) get the callee's $0..$(X-2).
 ///   - rL := min(x + X, rG); every register from the new rL through rG-1
 ///     reads zero.
-///   - rS -= (spill octas + 1); pc := callee_rJ + 4·YZ; rJ := saved_rj.
+///   - rS -= (spill octas + 1); pc := rJ + 4·YZ; rJ is left unchanged.
 #[derive(Debug, Clone)]
 struct FrameInfo {
     /// The hole PUSHJ left in the caller's frame: its X operand, or rL when
@@ -810,8 +810,6 @@ struct FrameInfo {
     /// Caller's rL when PUSHJ ran. Sizes the register-stack spill
     /// (`frame_octas`); POP's restore range comes from `saved_x`, not this.
     saved_rl: u64,
-    /// Caller's rJ value to restore on POP.
-    saved_rj: u64,
 }
 
 /// The MMIX computer architecture.
@@ -1081,7 +1079,6 @@ impl MMix {
         self.frame_info_stack.push(FrameInfo {
             saved_x: x,
             saved_rl: rl_old as u64,
-            saved_rj: self.get_special(SpecialReg::RJ),
         });
 
         self.set_special(SpecialReg::RS, rs.wrapping_add(frame_octas + 1));
@@ -1095,7 +1092,6 @@ impl MMix {
         let frame = self.frame_info_stack.pop()?;
         let x = frame.saved_x;
         let saved_rl = frame.saved_rl as u8;
-        let saved_rj = frame.saved_rj;
 
         let rg = self.get_special(SpecialReg::RG) as u8;
         let ro = self.get_special(SpecialReg::RO);
@@ -1153,7 +1149,6 @@ impl MMix {
         self.set_special(SpecialReg::RL, new_rl);
 
         let return_pc = self.get_special(SpecialReg::RJ);
-        self.set_special(SpecialReg::RJ, saved_rj);
 
         Some(return_pc.wrapping_add((yz as u64) * 4))
     }
@@ -4523,7 +4518,8 @@ impl MMix {
                 // POP X, YZ - Pop frame and return.
                 // Puts the callee's last output in the hole and the rest
                 // above it in order, restores caller's locals below the
-                // hole, and branches to callee_rJ + 4·YZ.
+                // hole, and branches to rJ + 4·YZ. rJ itself is untouched;
+                // a subroutine that calls another must save and restore it.
                 let yz = ((y as u16) << 8) | z as u16;
                 if let Some(target) = self.pop_frame(x, yz) {
                     self.pc = target;
@@ -5544,6 +5540,102 @@ mod tests {
         // Caller's $0, $1 restored.
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
+        assert!(mmix.frame_info_stack.is_empty());
+    }
+
+    /// `POP` never writes `rJ`: it only reads it for the branch target.
+    /// Set a distinct, nonzero `rJ` before the call so a restore, if `POP`
+    /// still did one, would be visible.
+    #[test]
+    fn test_pop_leaves_rj_as_pushj_set_it() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RJ, 0x999);
+        mmix.write_tetra(0x100, 0xF2000002); // PUSHJ $0,2 -> 0x108, rJ := 0x104
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
+
+        mmix.write_tetra(0x108, 0xF8000000); // POP 0,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RJ),
+            0x104,
+            "POP must leave rJ exactly as PUSHJ set it, not restore 0x999"
+        );
+        assert_eq!(mmix.get_pc(), 0x104);
+    }
+
+    /// A callee that makes a nested call without saving `rJ` first has its
+    /// own `POP` branch to the address after the *nested* `PUSHJ`, not back
+    /// to its own caller -- the breaking change this fix makes: a
+    /// subroutine that calls another must save and restore `rJ` itself.
+    #[test]
+    fn test_pop_without_saving_rj_returns_to_the_nested_call_site() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        // Top-level caller: PUSHJ $0,2 -> callee at 0x108; rJ := 0x104.
+        mmix.write_tetra(0x100, 0xF2000002);
+        assert!(mmix.execute_instruction());
+
+        // Callee makes a nested call without saving rJ: PUSHJ $0,4 ->
+        // nested callee at 0x118; rJ := 0x10C.
+        mmix.write_tetra(0x108, 0xF2000004);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 0x10C);
+
+        // Nested callee returns immediately: POP 0,0 branches to rJ + 0,
+        // landing back at 0x10C.
+        mmix.write_tetra(0x118, 0xF8000000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x10C);
+
+        // The callee's own POP, resumed right there, reads the SAME stale
+        // rJ (0x10C) and branches to it again -- the address after its
+        // nested PUSHJ, not the address after the top-level PUSHJ (0x104).
+        mmix.write_tetra(0x10C, 0xF8000000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x10C);
+        assert!(mmix.frame_info_stack.is_empty());
+    }
+
+    /// A callee that saves `rJ` before its nested call and restores it
+    /// after, before its own `POP`, returns correctly to its own caller --
+    /// the convention `mmix.rs`'s doc block now documents.
+    #[test]
+    fn test_pop_returns_correctly_when_rj_is_saved_and_restored() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        // Top-level caller: PUSHJ $0,2 -> callee at 0x108; rJ := 0x104.
+        mmix.write_tetra(0x100, 0xF2000002);
+        assert!(mmix.execute_instruction());
+
+        // Callee saves rJ: GET $1,rJ.
+        mmix.write_tetra(0x108, 0xFE010004);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 0x104);
+
+        // Callee makes a nested call: PUSHJ $2,3 -- the hole must clear
+        // rJ's stash at $1, or the slide swallows it into the nested
+        // callee's own $0 -- nested callee at 0x118; rJ := 0x110.
+        mmix.write_tetra(0x10C, 0xF2020003);
+        assert!(mmix.execute_instruction());
+
+        // Nested callee returns immediately: POP 0,0 branches to rJ + 0,
+        // landing back at 0x110.
+        mmix.write_tetra(0x118, 0xF8000000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x110);
+
+        // Callee restores rJ: PUT rJ,$1.
+        mmix.write_tetra(0x110, 0xF6040001);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
+
+        // Callee's own POP now branches to the address after the
+        // top-level PUSHJ, not the nested one.
+        mmix.write_tetra(0x114, 0xF8010000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x104);
         assert!(mmix.frame_info_stack.is_empty());
     }
 
@@ -11710,5 +11802,67 @@ Sub\tSETI\t$0,3
         mmix.write_tetra(0, 0xF6010001); // PUT rD,$1
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_special(SpecialReg::RD), u64::MAX);
+    }
+
+    /// End-to-end proof of the `debug` contract: a subroutine that sets
+    /// locals, prints, makes a nested call with `rJ` saved and restored,
+    /// prints again, then returns, leaves its caller's locals, `rL`, `rJ`
+    /// and the returned value exactly as an equivalent program without the
+    /// two `debug` lines would.
+    #[test]
+    fn test_debug_preserves_every_register_around_a_nested_call() {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        const SOURCE: &str = "\
+\tLOC\t#100
+Main\tSET\t$1,11
+\tPUSHJ\t$2,Sub
+\tTRAP\t0,Halt,0
+Sub\tSET\t$0,5
+\tSET\t$1,7
+\tdebug\t\"first\"
+\tGET\t$2,rJ
+\tPUSHJ\t$3,Nested
+\tPUT\trJ,$2
+\tdebug\t\"second\"
+\tPOP\t1,0
+Nested\tSET\t$0,42
+\tPOP\t0,0
+";
+        let mut asm = MMixAssembler::new(SOURCE, "<test>");
+        asm.parse().expect("program must assemble");
+        let main_addr = *asm.labels.get("Main").expect("Main label");
+
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(entry_point(&asm));
+
+        let (_, stop) = mmix.run_bounded(10_000);
+        assert_eq!(stop, Stop::Halted);
+
+        let stdout = String::from_utf8(handle.stdout()).expect("valid utf8");
+        assert!(stdout.contains("first\n"), "got {stdout:?}");
+        assert!(stdout.contains("second\n"), "got {stdout:?}");
+        assert!(
+            stdout.find("first").unwrap() < stdout.find("second").unwrap(),
+            "the two debug lines must print in order, got {stdout:?}"
+        );
+
+        // Main's own local, staged below PUSHJ's hole, survives Sub's whole
+        // call -- including both debug lines and the nested call inside it.
+        assert_eq!(mmix.get_register(1), 11, "caller's local $1 must survive");
+        // Sub's $0, set before either debug line, is what POP 1,0 returns
+        // to the hole -- proof debug left it untouched across both calls.
+        assert_eq!(mmix.get_register(2), 5, "returned value");
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3);
+        // rJ lands back on Main's own PUSHJ (the second instruction) + 4:
+        // Sub's own POP read it straight, with nothing to restore, since
+        // nothing after Sub's own GET/PUT round trip ever touched it.
+        assert_eq!(mmix.get_special(SpecialReg::RJ), main_addr + 8);
+        // TRAP's own handler advances pc past itself before halting.
+        assert_eq!(mmix.get_pc(), main_addr + 12, "halt address");
+        assert!(mmix.frame_info_stack.is_empty());
     }
 }
