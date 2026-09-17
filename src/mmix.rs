@@ -774,44 +774,6 @@ impl Host for StdHost {
     }
 }
 
-/// One frame's bookkeeping on the register stack.
-///
-/// # Register Stack
-///
-/// PUSHJ $X, RA (X < rG):
-///   - Pushes the X+1 octas $0..$X to memory at rO + 8·rS.
-///     The marginal slot at offset X stores the value X (the "hole" marker).
-///   - Writes a frame-size word (value X) at offset X+1.
-///   - Slides the live register window: caller's $(X+1)..$(rL-1) become callee's $0..$(rL-X-2).
-///     Vacated slots up through rG-1 are zeroed so freshly-allocated callee locals read as zero.
-///   - rL := saturating_sub(rL, X + 1)
-///   - rS += X + 2
-///   - rJ := pc + 4; pc := target.
-///
-/// PUSHJ $X, RA (X ≥ rG): the hole is rL, not X. All of $0..$(rL-1) push to
-/// memory, followed by the marker rL; the callee starts with rL = 0.
-///
-/// POP X, YZ, from a PUSHJ $x frame whose callee has rL = L:
-///   - X clamps to L+1 when X > L.
-///   - Restores caller's $0..$(x-1) from memory, skipping any index at or
-///     above the current rG.
-///   - $x gets the callee's $(X-1) (the last output lands in the hole), or
-///     zero when X = 0 or the clamp fired.
-///     $(x+1)..$(x+X-1) get the callee's $0..$(X-2).
-///   - rL := min(x + X, rG); every register from the new rL through rG-1
-///     reads zero.
-///   - rS -= (spill octas + 1); pc := rJ + 4·YZ; rJ is left unchanged.
-#[derive(Debug, Clone)]
-struct FrameInfo {
-    /// The hole PUSHJ left in the caller's frame: its X operand, or rL when
-    /// that operand was ≥ rG. POP restores the caller's registers below it
-    /// and places its last output there.
-    saved_x: u8,
-    /// Caller's rL when PUSHJ ran. Sizes the register-stack spill
-    /// (`frame_octas`); POP's restore range comes from `saved_x`, not this.
-    saved_rl: u64,
-}
-
 /// The MMIX computer architecture.
 ///
 /// MMIX has:
@@ -848,9 +810,10 @@ pub struct MMix {
     /// Program counter (location of next instruction)
     pc: u64,
 
-    /// Frame metadata stack for PUSHJ/POP bookkeeping
-    /// Actual register values live in main memory at rO + 8×rS
-    frame_info_stack: Vec<FrameInfo>,
+    /// Count of PUSHJ/PUSHGO frames not yet popped. The registers
+    /// themselves live in memory at rO; this is bookkeeping only, backing
+    /// [`MMix::call_depth`] and POP's no-frame fallback.
+    frame_depth: usize,
 
     /// Open file handles for TRAP calls
     /// Maps file descriptor numbers to File objects
@@ -917,7 +880,7 @@ impl MMix {
             special_regs: [0; 32],
             memory: HashMap::new(),
             pc: 0,
-            frame_info_stack: Vec::new(),
+            frame_depth: 0,
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
@@ -994,11 +957,11 @@ impl MMix {
         // Initialize rL (local threshold register) - number of local registers in use
         // Start with 0, will be updated by PUSHJ/POP
         self.set_special(SpecialReg::RL, 0);
-        // Initialize rO (register stack offset) - base address of register stack in memory
-        // Use segment 6 per MMIX convention: 0x6000000000000000
+        // rO and rS both start at the register stack's base, segment 6 per
+        // MMIX convention. PUSHJ/POP store eagerly, so the two stay equal
+        // and move together for the life of the machine.
         self.set_special(SpecialReg::RO, 0x6000000000000000);
-        // Initialize rS (register stack pointer) - depth in octabytes
-        self.set_special(SpecialReg::RS, 0);
+        self.set_special(SpecialReg::RS, 0x6000000000000000);
     }
 
     /// Get the value of a general-purpose register.
@@ -1051,21 +1014,18 @@ impl MMix {
         )
     }
 
-    /// Number of octas a PUSHJ frame spills, given its hole and the caller's rL.
+    /// Push a frame onto the register stack in memory and slide the window
+    /// down.
     ///
-    /// Only X+1 octas (the saved-and-marginal range) need to spill; the rest
-    /// stays in a ring buffer. We approximate the ring by spilling the full
-    /// active local frame so the slide-back on POP can restore everything.
-    /// The frame on the stack is therefore
-    /// `max(X+1, rL) + 1` octas (saved + frame word), with the marginal at
-    /// offset X always overwriting that slot. POP restores only
-    /// `$0..$(x-1)` from it — the rest exists so `rS` and the stack's
-    /// memory image match what a real spill would leave.
-    fn frame_octas(saved_x: u8, saved_rl: u8) -> u64 {
-        std::cmp::max(saved_x as u64 + 1, saved_rl as u64)
-    }
-
-    /// Push a frame onto the register stack and slide the window down.
+    /// `PUSHJ $X` (`X < rG`) pushes `X+1` entries at the current `rO`:
+    /// `M8[rO+8i] = $i` for `i < X`, and `M8[rO+8X] = X` — the hole, which
+    /// `POP` reads back to know how much to restore. `rO` and `rS` both
+    /// advance to `rO + 8(X+1)`; nothing else on the stack is written.
+    /// `X ≥ rG` pushes all of `$0..$(rL-1)` instead, with `rL` as the hole.
+    ///
+    /// The live window then slides: caller's `$(X+1)..$(rL-1)` become
+    /// callee's `$0..`, every vacated slot up through `rG-1` zeroes so a
+    /// fresh local reads zero, and `rJ := pc + 4`.
     fn push_frame(&mut self, x: u8) {
         let rg = self.get_special(SpecialReg::RG) as u8;
         let rl_old = self.get_special(SpecialReg::RL) as u8;
@@ -1073,27 +1033,13 @@ impl MMix {
         // callee at rL = 0; the hole for the later POP is rL, not X.
         let x = if x >= rg { rl_old } else { x };
         let ro = self.get_special(SpecialReg::RO);
-        let rs = self.get_special(SpecialReg::RS);
 
-        let stack_addr = ro.wrapping_add(rs.wrapping_mul(8));
-        let frame_octas = Self::frame_octas(x, rl_old);
-
-        // Spill the full local frame so the upper slots can be restored on POP.
-        // For slots beyond rL_old (which read as zero in MMIX), the saved value
-        // is whatever the flat array holds; that's harmless because POP only
-        // ever reads back $0..$(x-1) from this spill.
-        for i in 0..frame_octas {
-            let val = if i == x as u64 {
-                x as u64 // marginal at offset X = X
-            } else {
-                self.general_regs[i as usize]
-            };
-            let addr = stack_addr.wrapping_add(i.wrapping_mul(8));
-            self.write_octa(addr, val);
+        for i in 0..x {
+            let addr = ro.wrapping_add((i as u64).wrapping_mul(8));
+            self.write_octa(addr, self.general_regs[i as usize]);
         }
-        // Frame-size word (value X) immediately after the saved range.
-        let frame_word_addr = stack_addr.wrapping_add(frame_octas.wrapping_mul(8));
-        self.write_octa(frame_word_addr, x as u64);
+        let hole_addr = ro.wrapping_add((x as u64).wrapping_mul(8));
+        self.write_octa(hole_addr, x as u64);
 
         // Slide live window: caller's $(x+1)..$(rL-1) become callee's $0.. .
         let new_rl = rl_old.saturating_sub(x).saturating_sub(1);
@@ -1105,27 +1051,34 @@ impl MMix {
             self.general_regs[i] = 0;
         }
 
-        self.frame_info_stack.push(FrameInfo {
-            saved_x: x,
-            saved_rl: rl_old as u64,
-        });
-
-        self.set_special(SpecialReg::RS, rs.wrapping_add(frame_octas + 1));
+        let new_ro = ro.wrapping_add((x as u64 + 1).wrapping_mul(8));
+        self.set_special(SpecialReg::RO, new_ro);
+        self.set_special(SpecialReg::RS, new_ro);
         self.set_special(SpecialReg::RL, new_rl as u64);
         self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
+        self.frame_depth += 1;
     }
 
-    /// Pop a frame from the register stack and slide return values back.
-    /// Returns the branch target (callee_rJ + 4·yz).
+    /// Pop a frame from the register stack in memory and slide return
+    /// values back. Returns the branch target (`rJ + 4·yz`), or `None` when
+    /// no frame remains — `frame_depth` backs [`MMix::call_depth`] and
+    /// decides that fallback.
+    ///
+    /// The hole comes from memory: `x = M8[rO-8] mod 256`. The caller's
+    /// `$0..$(x-1)` restore from `M8[rO-8(x+1)..]`, skipping any index at or
+    /// above the current `rG`. `rO` and `rS` retract to `rO - 8(x+1)` —
+    /// exactly where the matching `PUSHJ` found them. `rJ` is left
+    /// unchanged.
     fn pop_frame(&mut self, n: u8, yz: u16) -> Option<u64> {
-        let frame = self.frame_info_stack.pop()?;
-        let x = frame.saved_x;
-        let saved_rl = frame.saved_rl as u8;
+        if self.frame_depth == 0 {
+            return None;
+        }
 
         let rg = self.get_special(SpecialReg::RG) as u8;
         let ro = self.get_special(SpecialReg::RO);
-        let rs = self.get_special(SpecialReg::RS);
         let l = self.get_special(SpecialReg::RL) as u16;
+
+        let x = (self.read_octa(ro.wrapping_sub(8)) % 256) as u8;
 
         // If X > L, X becomes L+1 and the hole gets zero regardless of what
         // the callee left there.
@@ -1136,9 +1089,7 @@ impl MMix {
         let mut returns = [0u64; 256];
         returns[..count as usize].copy_from_slice(&self.general_regs[..count as usize]);
 
-        let frame_octas = Self::frame_octas(x, saved_rl);
-        let new_rs = rs.wrapping_sub(frame_octas + 1);
-        let stack_addr = ro.wrapping_add(new_rs.wrapping_mul(8));
+        let new_ro = ro.wrapping_sub((x as u64 + 1).wrapping_mul(8));
 
         // Every register from the new rL through rG-1 is marginal — clear
         // the whole local range before restoring or writing anything back.
@@ -1146,11 +1097,11 @@ impl MMix {
             self.general_regs[i] = 0;
         }
 
-        // Restore caller's $0..$(x-1) from the spilled frame, skipping any
-        // index at or above the current rG.
+        // Restore caller's $0..$(x-1) from memory, skipping any index at or
+        // above the current rG.
         for i in 0..x {
             if (i as usize) < rg as usize {
-                let addr = stack_addr.wrapping_add((i as u64).wrapping_mul(8));
+                let addr = new_ro.wrapping_add((i as u64).wrapping_mul(8));
                 self.general_regs[i as usize] = self.read_octa(addr);
             }
         }
@@ -1174,8 +1125,10 @@ impl MMix {
 
         let new_rl = std::cmp::min((x as u16) + count, rg as u16) as u64;
 
-        self.set_special(SpecialReg::RS, new_rs);
+        self.set_special(SpecialReg::RO, new_ro);
+        self.set_special(SpecialReg::RS, new_ro);
         self.set_special(SpecialReg::RL, new_rl);
+        self.frame_depth -= 1;
 
         let return_pc = self.get_special(SpecialReg::RJ);
 
@@ -1411,7 +1364,7 @@ impl MMix {
 
     /// Current call depth: the number of PUSHJ/PUSHGO frames not yet popped.
     pub fn call_depth(&self) -> usize {
-        self.frame_info_stack.len()
+        self.frame_depth
     }
 
     // ========== Internal Helpers ==========
@@ -5039,10 +4992,10 @@ mod tests {
     fn test_register_stack_initialization() {
         let mmix = MMix::new();
         assert_eq!(mmix.get_special(SpecialReg::RO), 0x6000000000000000);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RS), 0x6000000000000000);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RG), 32);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     #[test]
@@ -5053,37 +5006,98 @@ mod tests {
         mmix.set_register(1, 101);
         mmix.set_register(2, 102);
         mmix.set_special(SpecialReg::RL, 3);
+        let ro = mmix.get_special(SpecialReg::RO);
 
-        // PUSHJ $3, +1 (frame: $0..$3 = 4 octas + frame word)
+        // PUSHJ $3, +1 pushes X+1 = 4 entries: $0..$2 and the hole marker.
         mmix.write_tetra(0x100, 0xF2030001);
         mmix.execute_instruction();
 
-        // rS advances by X+2 = 5 (4 saved + 1 frame word)
-        assert_eq!(mmix.get_special(SpecialReg::RS), 5);
-        // new rL = max(0, rL_old - X - 1) = max(0, 4-3-1) = 0
+        // rO and rS both advance by X+1 = 4 octas.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 32);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro + 32);
+        // new rL = max(0, rL_old - X - 1) = max(0, 3-3-1) = 0
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
         assert_eq!(mmix.get_pc(), 0x104);
 
-        // Saved frame in memory: $0, $1, $2, marginal=X, frame_word=X
-        let ro = 0x6000000000000000u64;
+        // Saved frame in memory: $0, $1, $2, then the hole marker = X.
         assert_eq!(mmix.read_octa(ro), 100);
         assert_eq!(mmix.read_octa(ro + 8), 101);
         assert_eq!(mmix.read_octa(ro + 16), 102);
-        assert_eq!(mmix.read_octa(ro + 24), 3); // marginal at offset X = X
-        assert_eq!(mmix.read_octa(ro + 32), 3); // frame-size word
+        assert_eq!(mmix.read_octa(ro + 24), 3); // hole marker = X
 
         // Live register file: caller's $0..$2 zeroed (no slide source above $X here).
         assert_eq!(mmix.get_register(0), 0);
         assert_eq!(mmix.get_register(1), 0);
         assert_eq!(mmix.get_register(2), 0);
 
-        assert_eq!(mmix.frame_info_stack.len(), 1);
-        assert_eq!(mmix.frame_info_stack[0].saved_x, 3);
-        // X (3) is at the old rL (3), so it is marginal: the destination's
-        // rise claims it before push_frame runs, and saved_rl is the raised
-        // value (4), not the caller's rL when the instruction began.
-        assert_eq!(mmix.frame_info_stack[0].saved_rl, 4);
+        assert_eq!(mmix.call_depth(), 1);
+    }
+
+    /// The only test pinning part 1's destination rise through PUSHJ:
+    /// writing to a marginal $X raises rL and zeroes $rL..$X before
+    /// push_frame runs, so the spill holds zeros, not whatever the flat
+    /// array held from an earlier, unrelated frame.
+    #[test]
+    fn test_pushj_spills_zero_not_stale_content_when_caller_rl_is_zero() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        // Dirty the register file directly, then drop rL to 0 without
+        // going through claim_local, so $0..$2 are marginal but the
+        // physical array still holds the dirty values.
+        mmix.set_register(0, 0xDEAD);
+        mmix.set_register(1, 0xBEEF);
+        mmix.set_register(2, 0xCAFE);
+        mmix.set_special(SpecialReg::RL, 0);
+        let ro = mmix.get_special(SpecialReg::RO);
+
+        // PUSHJ $2, +1: X=2, caller's rL = 0.
+        mmix.write_tetra(0x100, 0xF2020001);
+        mmix.execute_instruction();
+
+        // The destination rise zeroes $0..$2 before the spill runs, so
+        // memory holds zeros, not the dirty values.
+        assert_eq!(mmix.read_octa(ro), 0);
+        assert_eq!(mmix.read_octa(ro + 8), 0);
+        assert_eq!(mmix.read_octa(ro + 16), 2); // hole marker = X
+        // The entries are fixed by X, not by the raised rL: the new rL
+        // settles back at 0 either way.
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
+    }
+
+    /// `POP` reads its hole from `M8[rO-8]` at the moment it runs, not from
+    /// any count `PUSHJ` cached. Rewriting that word between the two changes
+    /// how far `POP` retracts: no implementation that ignores memory can
+    /// pass this.
+    #[test]
+    fn test_pop_reads_the_hole_from_memory_even_when_rewritten() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_register(0, 100);
+        mmix.set_register(1, 101);
+        mmix.set_register(2, 102);
+        mmix.set_special(SpecialReg::RL, 3);
+        let ro = mmix.get_special(SpecialReg::RO);
+
+        // PUSHJ $3, +1: hole marker 3 lands at ro+24; rO advances to ro+32.
+        mmix.write_tetra(0x100, 0xF2030001);
+        mmix.execute_instruction();
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 32);
+
+        // Overwrite the hole in memory: POP must read this value, 1, not
+        // the pushed x = 3.
+        mmix.write_octa(ro + 24, 1);
+
+        // POP 0, 0
+        mmix.write_tetra(0x104, 0xF8000000);
+        mmix.execute_instruction();
+
+        // Reading x = 3 (the pushed value) would retract by 4 octas,
+        // landing back at ro. Reading the rewritten hole (1) retracts by
+        // only 2, landing short of it -- proof POP read memory, not a
+        // cached count.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 16);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro + 16);
     }
 
     #[test]
@@ -5201,25 +5215,25 @@ mod tests {
         mmix.set_register(3, 0x200);
         mmix.set_register(4, 0);
         mmix.set_special(SpecialReg::RL, 2);
+        let ro = mmix.get_special(SpecialReg::RO);
 
         // PUSHGO $2, $3, $4
         mmix.write_tetra(0x100, 0xBE020304);
         mmix.execute_instruction();
 
-        let ro = mmix.get_special(SpecialReg::RO);
-        // X=2, rL=2: frame = max(X+1, rL) + 1 = 4 octas
-        assert_eq!(mmix.get_special(SpecialReg::RS), 4);
+        // X=2: rO and rS both advance by X+1 = 3 octas.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 24);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro + 24);
         // new rL = saturating_sub(2, 3) = 0
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
         assert_eq!(mmix.get_pc(), 0x200);
 
-        // Saved $0,$1, marginal=2, frame word=2
+        // Saved $0, $1, then the hole marker = X.
         assert_eq!(mmix.read_octa(ro), 10);
         assert_eq!(mmix.read_octa(ro + 8), 11);
         assert_eq!(mmix.read_octa(ro + 16), 2);
-        assert_eq!(mmix.read_octa(ro + 24), 2);
-        assert_eq!(mmix.frame_info_stack.len(), 1);
+        assert_eq!(mmix.call_depth(), 1);
 
         // POP 0,0 at target
         mmix.write_tetra(0x200, 0xF8000000);
@@ -5228,21 +5242,23 @@ mod tests {
         // Caller's $0,$1 restored from memory.
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro);
         assert_eq!(mmix.get_special(SpecialReg::RL), 2);
         assert_eq!(mmix.get_pc(), 0x104);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     #[test]
     fn test_pop_basic() {
-        // PUSHJ $3 + POP 0: caller's $0..$2 fully restored, rL = saved_rl.
+        // PUSHJ $3 + POP 0: caller's $0..$2 fully restored, rL back to 3.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_register(0, 100);
         mmix.set_register(1, 101);
         mmix.set_register(2, 102);
         mmix.set_special(SpecialReg::RL, 3);
+        let ro = mmix.get_special(SpecialReg::RO);
 
         // PUSHJ $3, +1
         mmix.write_tetra(0x100, 0xF2030001);
@@ -5260,10 +5276,11 @@ mod tests {
         assert_eq!(mmix.get_register(0), 100);
         assert_eq!(mmix.get_register(1), 101);
         assert_eq!(mmix.get_register(2), 102);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro);
         assert_eq!(mmix.get_special(SpecialReg::RL), 3);
         assert_eq!(mmix.get_pc(), 0x104);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     #[test]
@@ -5515,8 +5532,9 @@ mod tests {
         assert_eq!(mmix.get_special(SpecialReg::RL), 6);
         // Globals are untouched throughout.
         assert_eq!(mmix.get_register(50), 0xBEEF);
-        // rS returns to its pre-call value; a spill sized by X (255) instead
-        // of the rewritten hole (rL = 5) would leave it short.
+        // POP retracts rO and rS to exactly the address PUSHJ found them
+        // at: a spill sized by rL, not the hole read back from memory,
+        // would retract by the wrong amount and land somewhere else.
         assert_eq!(mmix.get_special(SpecialReg::RS), rs_before);
     }
 
@@ -5528,22 +5546,23 @@ mod tests {
         mmix.set_register(1, 43);
         mmix.set_register(5, 0x310);
         mmix.set_special(SpecialReg::RL, 2);
+        let ro = mmix.get_special(SpecialReg::RO);
 
         // PUSHGOI $2, $5, #0x10  → target = $5 + 0x10 = 0x320
         mmix.write_tetra(0x300, 0xBF020510);
         mmix.execute_instruction();
 
-        let ro = mmix.get_special(SpecialReg::RO);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 4);
+        // X=2: rO and rS both advance by X+1 = 3 octas.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 24);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro + 24);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RJ), 0x304);
         assert_eq!(mmix.get_pc(), 0x320);
 
         assert_eq!(mmix.read_octa(ro), 42);
         assert_eq!(mmix.read_octa(ro + 8), 43);
-        assert_eq!(mmix.read_octa(ro + 16), 2); // marginal
-        assert_eq!(mmix.read_octa(ro + 24), 2); // frame word
-        assert_eq!(mmix.frame_info_stack.len(), 1);
+        assert_eq!(mmix.read_octa(ro + 16), 2); // hole marker = X
+        assert_eq!(mmix.call_depth(), 1);
 
         // POP 0,0 at target — restore caller's $0,$1.
         mmix.write_tetra(0x320, 0xF8000000);
@@ -5551,21 +5570,24 @@ mod tests {
 
         assert_eq!(mmix.get_register(0), 42);
         assert_eq!(mmix.get_register(1), 43);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0);
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro);
         assert_eq!(mmix.get_special(SpecialReg::RL), 2);
         assert_eq!(mmix.get_pc(), 0x304);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     #[test]
     fn test_pushj_pop_nested() {
-        // Two-level nested call exercises arg passing in both directions.
+        // Two-level nested call exercises arg passing in both directions
+        // and that the two frames stack contiguously in memory.
         let mut mmix = MMix::new();
         mmix.set_pc(0x100);
         mmix.set_register(0, 10);
         mmix.set_register(1, 11);
         mmix.set_register(2, 0xCAFE); // arg for inner call: caller's $2
         mmix.set_special(SpecialReg::RL, 5);
+        let ro = mmix.get_special(SpecialReg::RO);
 
         // Outer PUSHJ $2, +1 — saves $0,$1; slides $3,$4 to callee's $0,$1; arg at $2 → callee $0? No —
         // PUSHJ $X saves $0..$X-1 (here $0,$1) and the marginal at $X. Caller's $X+1, $X+2, ...
@@ -5577,7 +5599,9 @@ mod tests {
 
         // Outer callee sees arg at $0.
         assert_eq!(mmix.get_register(0), 0xCAFE);
-        assert_eq!(mmix.frame_info_stack.len(), 1);
+        assert_eq!(mmix.call_depth(), 1);
+        // Outer frame: X+1 = 3 entries.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 24);
 
         // Outer callee stages an arg at $1 then nested PUSHJ $0, +1 (X=0: nothing saved, slide $1→$0).
         mmix.set_register(1, 0xBEEF);
@@ -5585,17 +5609,21 @@ mod tests {
         mmix.execute_instruction();
 
         assert_eq!(mmix.get_register(0), 0xBEEF);
-        assert_eq!(mmix.frame_info_stack.len(), 2);
+        assert_eq!(mmix.call_depth(), 2);
+        // Inner frame starts exactly where the outer frame's entries end.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 32);
 
-        // Inner POP 1, 0 — return 0xD00D at $0; lands at outer callee's $0 (saved_x=0).
+        // Inner POP 1, 0 — return 0xD00D at $0; lands at outer callee's $0 (hole=0).
         mmix.set_register(0, 0xD00D);
         mmix.write_tetra(0x108, 0xF8010000);
         mmix.execute_instruction();
 
         assert_eq!(mmix.get_register(0), 0xD00D);
-        assert_eq!(mmix.frame_info_stack.len(), 1);
+        assert_eq!(mmix.call_depth(), 1);
+        // Popping the inner frame retracts rO to exactly where it started.
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro + 24);
 
-        // Outer POP 1, 0 — return 0xD00D, lands at top-level caller's $2 (saved_x=2).
+        // Outer POP 1, 0 — return 0xD00D, lands at top-level caller's $2 (hole=2).
         mmix.write_tetra(0x10C, 0xF8010000);
         mmix.execute_instruction();
 
@@ -5603,7 +5631,8 @@ mod tests {
         // Caller's $0, $1 restored.
         assert_eq!(mmix.get_register(0), 10);
         assert_eq!(mmix.get_register(1), 11);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro);
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     /// `POP` never writes `rJ`: it only reads it for the branch target.
@@ -5658,7 +5687,7 @@ mod tests {
         mmix.write_tetra(0x10C, 0xF8000000);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 0x10C);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     /// A callee that saves `rJ` before its nested call and restores it
@@ -5698,7 +5727,7 @@ mod tests {
         mmix.write_tetra(0x114, 0xF8010000);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 0x104);
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     #[test]
@@ -10442,7 +10471,7 @@ Main\tSETI\t$1,100
         mmix.write_tetra(SCRATCH, 0xFFFF_FFFF);
         assert_ne!(mmix.read_tetra(SCRATCH), 0, "memory must start dirty");
 
-        // A real PUSHJ, so `frame_info_stack` is genuinely non-empty.
+        // A real PUSHJ, so `call_depth` is genuinely nonzero.
         mmix.set_pc(0x4000);
         mmix.write_tetra(0x4000, 0xF2_02_00_01); // PUSHJ $2, forward 1
         assert!(mmix.execute_instruction());
@@ -12503,7 +12532,7 @@ Nested\tSET\t$0,42
         assert_eq!(mmix.get_special(SpecialReg::RJ), main_addr + 8);
         // TRAP's own handler advances pc past itself before halting.
         assert_eq!(mmix.get_pc(), main_addr + 12, "halt address");
-        assert!(mmix.frame_info_stack.is_empty());
+        assert_eq!(mmix.call_depth(), 0);
     }
 
     /// Assembles `source`, runs it under a fresh `CaptureHost` for up to

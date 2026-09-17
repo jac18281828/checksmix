@@ -203,23 +203,31 @@ stores the raised `rL`, not the value it held when the instruction began.
 `PUT rL,z` (and `PUTI`) only ever lowers `rL`, to `min(z, rL)`, and zeroes
 every register the drop excludes from the local range.
 
-`PUSHJ $X, addr` (and `PUSHJB`, `PUSHGO`, `PUSHGOI`) push the caller's local
-registers and slide the window down. For `X < rG`: `$0..$X` go to the
-register stack, the marginal slot at offset `X` and the following frame word
-both hold `X`; the caller's `$(X+1)..$(rL-1)` become the callee's
-`$0..$(rL-X-2)`; `rL` becomes `saturating_sub(rL, X+1)`. For `X ≥ rG`: all of
-`$0..$(rL-1)` push, followed by the marker `rL`, and the callee starts with
-`rL = 0` — the hole for the later `POP` is `rL`, not `X`.
+The register stack lives in memory at `rO`: `S[k] = M8[rO+8k]`. `PUSHJ $X,
+addr` (and `PUSHJB`, `PUSHGO`, `PUSHGOI`) push the caller's local registers
+there and slide the window down. For `X < rG`: `S[0..X] = $0..$X`, with the
+marginal slot `S[X]` holding `X` itself — the hole `POP` reads back; `rO`
+and `rS` both advance to `rO + 8(X+1)`. The caller's `$(X+1)..$(rL-1)`
+become the callee's `$0..$(rL-X-2)`; `rL` becomes `saturating_sub(rL,
+X+1)`. For `X ≥ rG`: all of `$0..$(rL-1)` push the same way, followed by
+the marker `rL`, and the callee starts with `rL = 0` — the hole for the
+later `POP` is `rL`, not `X`.
 
-`POP X, YZ` returns from a `PUSHJ $x` frame whose callee has `rL = L`. If `X
-> L`, `X` becomes `L+1` and the hole gets zero. The caller's `$0..$(x-1)`
-restore from the register stack; `$x` gets the callee's `$(X-1)` (the *last*
-output lands in the hole), or zero when
-`X = 0` or the clamp fired; `$(x+1)..$(x+X-1)` get the callee's `$0..$(X-2)`.
-`rL` becomes `min(x+X, rG)`; every register from the new `rL` through `rG-1`
-reads zero. `POP` branches to `rJ + 4·YZ` and leaves `rJ` unchanged; a
-subroutine that calls another saves `rJ` (`GET $k,rJ`) and restores it
-(`PUT rJ,$k`) before its own `POP`.
+`POP X, YZ` returns from a `PUSHJ $x` frame whose callee has `rL = L`. It
+reads the hole from memory: `x = M8[rO-8] mod 256`. If `X > L`, `X` becomes
+`L+1` and the hole gets zero. The caller's `$0..$(x-1)` restore from
+`M8[rO-8(x+1)..]`; `$x` gets the callee's `$(X-1)` (the *last* output lands
+in the hole), or zero when `X = 0` or the clamp fired; `$(x+1)..$(x+X-1)`
+get the callee's `$0..$(X-2)`. `rO` and `rS` retract to `rO - 8(x+1)` —
+exactly where the matching `PUSHJ` found them. `rL` becomes `min(x+X, rG)`;
+every register from the new `rL` through `rG-1` reads zero. `POP` branches
+to `rJ + 4·YZ` and leaves `rJ` unchanged; a subroutine that calls another
+saves `rJ` (`GET $k,rJ`) and restores it (`PUT rJ,$k`) before its own
+`POP`.
+
+`rO` and `rS` always agree between instructions: every `PUSHJ` and `POP`
+stores eagerly and moves both together, where MMIXware may leave `rS`
+behind a ring of unspilled registers.
 
 Measured on MMIXware:
 

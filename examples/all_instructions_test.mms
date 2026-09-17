@@ -3763,7 +3763,37 @@ Test279c
         SET     $10,32
         PUT     rL,$10            % set rL = rG = 32 for the next test
         PUT     rG,$10
-        JMP     TestPass
+        JMP     Test280
+
+% ========================================
+% Test 280: the register stack lives in memory, and POP retracts rO/rS by
+% the hole it reads back from that memory -- even a hole a callee rewrote
+% ========================================
+% X=$5 keeps the pushed frame's marginal register clear of the harness's
+% $1-$4, as above. PUSHJ $5 pushes X+1=6 entries ($0..$4 and the hole
+% marker, value 5) and advances rO by 48; rS tracks rO exactly.
+% Test280Callee overwrites the marker in memory with 1 before its own
+% POP. POP then reads x=1 back from that memory, retracting by only 2
+% octas instead of 6 -- proof it reads the hole from M8[rO-8] at POP
+% time, not any count PUSHJ cached. The rewrite itself still disturbs
+% $3, $4 below the new, smaller hole; harmless here since this is the
+% corpus's last test and nothing after it reads them.
+% ========================================
+Test280 ADDU    TestNum,TestNum,1
+        GET     $40,rO
+        PUSHJ   $5,Test280Callee
+        JMP     TestFail          % unreachable: skipped by POP's yz=1
+        GET     Result,rO
+        ADDU    Expect,$40,32
+        CMP     Temp,Result,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
+Test280Callee
+        GET     $41,rO
+        SUBU    $41,$41,8
+        SET     $42,1
+        STOU    $42,$41,0
+        POP     1,1               % yz=1 skips the unreachable JMP TestFail
 
 % ========================================
 % Intentional coverage exceptions
