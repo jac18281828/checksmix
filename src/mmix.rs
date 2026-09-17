@@ -8213,7 +8213,7 @@ Main\tSETI\t$1,100
     fn test_put_rl_survives_an_rl_beyond_the_register_file() {
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RL, u64::MAX);
-        mmix.general_regs[200] = 42;
+        mmix.set_register(200, 42); // global at rG = 32
 
         // PUTI rL,3
         mmix.write_tetra(0, 0xF7140003);
