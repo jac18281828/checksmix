@@ -2,18 +2,24 @@
 % Fibonacci (Big Integer) - bounded arbitrary precision.
 % BigInt = MAXLIMBS little-endian 64-bit limbs.
 %
-% Cross-routine arguments travel via global registers
-% Arg0/Arg1/Arg2 ($32/$33/$34) so they survive PUSHJ
-% irrespective of the saved-window size.  Single-value
-% returns use the standard slide convention: caller does
-% PUSHJ $K, callee does POP 1,0, and the returned value
-% lands at the caller's $K (the "hole").
+% Cross-routine arguments and results travel through Arg0/Arg1/Arg2,
+% global registers allocated with GREG, so they survive any PUSHJ/POP
+% regardless of the callee's saved-window size.  Single-value returns
+% instead use the standard slide convention: caller does PUSHJ $K,
+% callee does POP 1,0, and the returned value lands at the caller's $K
+% (the "hole"). A routine that PUSHJs saves rJ with GET before the
+% call and restores it with PUT before its own POP, because POP
+% resumes at the current rJ and a nested PUSHJ overwrites it. Any
+% local register a routine reads after a PUSHJ it issues is numbered
+% below that PUSHJ's hole, so the register-stack rule leaves it alone.
+% Zero is a GREG, not $255: mmixal's postamble sets $255 to the address
+% of Main, so $255 is not the zero constant it defaults to elsewhere.
 % ----------------------------------------------------
 
-Zero    IS      $255
-Arg0    IS      $32
-Arg1    IS      $33
-Arg2    IS      $34
+Zero    GREG    0
+Arg0    GREG    0
+Arg1    GREG    0
+Arg2    GREG    0
 MAXLIMBS IS     32
 
 % ----------------------------------------------------
@@ -48,14 +54,14 @@ Main    GETA    $6,BufA
         GETA    $7,BufB
 
         SET     Arg0,$6
-        SETI    Arg1,MAXLIMBS
+        SET     Arg1,MAXLIMBS
         PUSHJ   $31,ZeroBuf
 
         SET     Arg0,$7
-        SETI    Arg1,MAXLIMBS
+        SET     Arg1,MAXLIMBS
         PUSHJ   $31,ZeroBuf
 
-        SETI    Arg0,100
+        SET     Arg0,100
         SET     Arg1,$6
         SET     Arg2,$7
         PUSHJ   $31,Fibonacci           % Arg2 → result buffer
@@ -71,7 +77,7 @@ Main    GETA    $6,BufA
         GETA    $255,Newline
         TRAP    0,Fputs,StdOut
 
-        SETI    $255,0
+        SET     $255,0
         TRAP    0,Halt,0
 
 % ====================================================
@@ -82,9 +88,8 @@ Main    GETA    $6,BufA
 % ZeroBuf - zero a buffer of limbs.
 % Input: Arg0 = pointer, Arg1 = limb count.
 % ----------------------------------------------------
-ZeroBuf SETI    $0,0
-ZeroLoop
-        CMP     $1,$0,Arg1
+ZeroBuf SET     $0,0
+ZeroLoop CMP    $1,$0,Arg1
         BNN     $1,ZeroDone
         SLU     $2,$0,3
         STOU    Zero,Arg0,$2
@@ -96,21 +101,22 @@ ZeroDone POP    0,0
 % Fibonacci - compute fib(n) in BigInt form.
 % Input:  Arg0 = n, Arg1 = bufA (zeroed), Arg2 = bufB (zeroed).
 % Output: Arg2 = pointer to the buffer holding fib(n).
-% Locals: $0 = n, $5 = A pointer, $6 = B pointer, $7 = swap tmp.
+% Locals: $0 = n, $5 = A pointer, $6 = B pointer, $7 = swap tmp,
+%         $8 = rJ saved across MPAddWithCarry calls.
 % ----------------------------------------------------
-Fibonacci
+Fibonacci GET   $8,rJ
         SET     $0,Arg0                 % n
         SET     $5,Arg1                 % A
         SET     $6,Arg2                 % B
         BZ      $0,FibN0                % n == 0: result is A (zero)
 
-        SETI    $1,1
+        SET     $1,1
         STOU    $1,$6,Zero              % B[0] = 1
 
         CMP     $2,$0,1
         BZ      $2,FibDone              % n == 1: result is B
 
-        SETI    $3,2                    % i = 2
+        SET     $3,2                    % i = 2
 FibLoop CMP     $4,$3,$0
         BP      $4,FibDone              % i > n: done
 
@@ -129,9 +135,11 @@ FibLoop CMP     $4,$3,$0
         JMP     FibLoop
 
 FibDone SET     Arg2,$6
+        PUT     rJ,$8
         POP     0,0
 
 FibN0   SET     Arg2,$5
+        PUT     rJ,$8
         POP     0,0
 
 % ----------------------------------------------------
@@ -139,10 +147,9 @@ FibN0   SET     Arg2,$5
 % Input: Arg0 = src1 ptr, Arg1 = src2 ptr, Arg2 = dest ptr.
 % Dest may alias src1.
 % ----------------------------------------------------
-MPAddWithCarry
-        SETI    $0,0                    % limb index
-        SETI    $1,0                    % running carry
-        SETI    $2,MAXLIMBS
+MPAddWithCarry SET $0,0                 % limb index
+        SET     $1,0                    % running carry
+        SET     $2,MAXLIMBS
 MPALoop CMP     $3,$0,$2
         BNN     $3,MPADone
 
@@ -169,33 +176,32 @@ MPADone POP     0,0
 % BigIntToDecStr - convert a BigInt to a decimal string.
 % Input: Arg0 = pointer to BigInt
 %        Arg1 = pointer to NUL-terminated output buffer.
+% Locals: $1 = output pointer, $2 = digit count, both numbered below
+%         DivBy10's PUSHJ hole ($9) so they survive its calls; $3 =
+%         rJ saved across those calls.
 % ----------------------------------------------------
-BigIntToDecStr
+BigIntToDecStr GET $3,rJ
         SET     $10,Arg0
-        SET     $11,Arg1
+        SET     $1,Arg1
 
         % Copy input to TempBuf so we can destructively divide.
-        SETI    $12,0
+        SET     $12,0
         GETA    $13,TempBuf
-        SETI    $14,MAXLIMBS
-CopyLoop
-        CMP     $15,$12,$14
+        SET     $14,MAXLIMBS
+CopyLoop CMP    $15,$12,$14
         BNN     $15,CopyDone
         SLU     $16,$12,3
         LDOU    $17,$10,$16
         STOU    $17,$13,$16
         ADDU    $12,$12,1
         JMP     CopyLoop
-CopyDone
+CopyDone SET    $2,0                    % digit count (low-to-high)
 
-        SETI    $12,0                   % digit count (low-to-high)
-ExtractDigits
         % Test whether TempBuf is zero.
-        GETA    $13,TempBuf
-        SETI    $14,0
-        SETI    $15,MAXLIMBS
-CheckZero
-        CMP     $16,$14,$15
+ExtractDigits GETA $13,TempBuf
+        SET     $14,0
+        SET     $15,MAXLIMBS
+CheckZero CMP   $16,$14,$15
         BNN     $16,IsZero
         SLU     $17,$14,3
         LDOU    $18,$13,$17
@@ -203,36 +209,36 @@ CheckZero
         ADDU    $14,$14,1
         JMP     CheckZero
 
-IsZero  BZ      $12,WasZero
+IsZero  BZ      $2,WasZero
         JMP     ReverseDigits
 
-WasZero SETI    $16,48
-        STBU    $16,$11,Zero
-        STBUI   Zero,$11,1
+WasZero SET     $16,48
+        STBU    $16,$1,Zero
+        STBU    Zero,$1,1
         JMP     BIDSReturn
 
 NotZero SET     Arg0,$13                % stage TempBuf ptr for DivBy10
         PUSHJ   $9,DivBy10              % remainder lands at $9
         ADDU    $9,$9,48                % '0' + remainder
         GETA    $14,DigitBuf
-        STBU    $9,$14,$12
-        ADDU    $12,$12,1
+        STBU    $9,$14,$2
+        ADDU    $2,$2,1
         JMP     ExtractDigits
 
-ReverseDigits
-        SETI    $13,0
-RevLoop CMP     $14,$13,$12
+ReverseDigits SET $13,0
+RevLoop CMP     $14,$13,$2
         BNN     $14,RevDone
-        SUBU    $15,$12,1
+        SUBU    $15,$2,1
         SUBU    $15,$15,$13
         GETA    $16,DigitBuf
         LDBU    $17,$16,$15
-        STBU    $17,$11,$13
+        STBU    $17,$1,$13
         ADDU    $13,$13,1
         JMP     RevLoop
-RevDone STBU    Zero,$11,$13
+RevDone STBU    Zero,$1,$13
 
-BIDSReturn POP  0,0
+BIDSReturn PUT  rJ,$3
+        POP     0,0
 
 % ----------------------------------------------------
 % DivBy10 - divide BigInt by 10 in place.
@@ -240,9 +246,9 @@ BIDSReturn POP  0,0
 % Output: returns remainder (POP 1,0).
 % ----------------------------------------------------
 DivBy10 SET     $13,Arg0
-        SETI    $9,0                    % accumulator (high carry)
-        SETI    $28,MAXLIMBS
-        SETI    $14,0                   % limb counter (high → low)
+        SET     $9,0                    % accumulator (high carry)
+        SET     $28,MAXLIMBS
+        SET     $14,0                   % limb counter (high → low)
 DivLoop CMP     $15,$14,$28
         BNN     $15,DivDone
         SUBU    $18,$28,1
@@ -250,12 +256,12 @@ DivLoop CMP     $15,$14,$28
         SLU     $15,$15,3
         LDOU    $16,$13,$15
 
-        SETI    $17,0                   % new limb value
-        SETI    $18,64                  % bits remaining
+        SET     $17,0                   % new limb value
+        SET     $18,64                  % bits remaining
 
 BitLoop BZ      $18,LimbDone
         SLU     $9,$9,1
-        SETI    $22,63
+        SET     $22,63
         SRU     $23,$16,$22
         OR      $9,$9,$23
         SLU     $16,$16,1
