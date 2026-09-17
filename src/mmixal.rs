@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+#[cfg(any(unix, windows))]
 use std::io::{stderr, stdin, stdout};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
