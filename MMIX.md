@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
 
 ## Memory access
 
