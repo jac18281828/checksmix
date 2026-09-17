@@ -14,7 +14,8 @@ MAXLIMBS IS     32
 % Data Segment
 % ----------------------------------------------------
         LOC     #1000
-ResultMsg BYTE  "fib(100) = ",0
+
+ResultMsg BYTE	"fib(100) = ",0
 Newline BYTE    10,0
 
         LOC     #2000

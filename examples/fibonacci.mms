@@ -1,10 +1,6 @@
 % ----------------------------------------------------
 % Fibonacci - iterative; demonstrates the standard MMIX
 % calling convention with the register-stack window slide.
-%
-% Caller stages args at $X+1, $X+2, ...; the callee sees
-% them at $0, $1, ...  POP n places n return values at the
-% caller's $X..$X+n-1 (the "hole").
 % ----------------------------------------------------
 
         LOC     #100
