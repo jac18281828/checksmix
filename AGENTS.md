@@ -74,6 +74,11 @@ Before marking work complete, run and report:
 
 Do not mark work complete until all gates pass.
 
+## Commits
+- Conventional Commits, signed, lower-case `type(scope): subject`, wrapped at
+  80 columns.
+- All commits land on a branch; `main` only fast-forwards.
+
 ## Release
 
 All commits land on the branch; `main` only ever sees a fast-forward.
