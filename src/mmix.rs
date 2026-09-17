@@ -8247,7 +8247,7 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_save_with_destination_below_rg_rejected() {
+    fn test_save_claims_its_destination_in_a_state_mmix_rejects() {
         let mut mmix = MMix::new();
         mmix.set_register(40, 0xDEAD); // global while rG = 32
         mmix.set_special(SpecialReg::RG, 50);
@@ -8288,7 +8288,7 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_put_rl_with_rg_below_rl_rejected() {
+    fn test_put_rl_keeps_the_globals_in_a_state_mmix_rejects() {
         let mut mmix = MMix::new();
         mmix.set_special(SpecialReg::RG, 60);
         mmix.set_register(55, 777); // local while rG = 60, so rL rises to 56
