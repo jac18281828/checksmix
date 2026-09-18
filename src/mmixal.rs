@@ -8,15 +8,13 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
 
-use crate::mmix::TrapCode;
+use crate::mmix::{STACK_SEGMENT_START, TrapCode};
 use pest_derive::Parser;
 use regex::Regex;
 
 const DATA_SEGMENT_START: u64 = 0x2000000000000000;
 
 const POOL_SEGMENT_START: u64 = 0x4000000000000000;
-
-const STACK_SEGMENT_START: u64 = 0x6000000000000000;
 
 #[cfg(unix)]
 fn stdio_raw_identifiers() -> (u64, u64, u64) {

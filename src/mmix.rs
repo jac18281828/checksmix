@@ -613,6 +613,22 @@ const SAVE_SPECIALS: [SpecialReg; 12] = [
     SpecialReg::RZ,
 ];
 
+/// Base of the register stack: `rO`/`rS` start here, and
+/// [`MMix::call_depth`]'s walk stops here. `src/mmixal.rs` seeds the
+/// `Stack_Segment` predefined symbol from this same constant.
+pub(crate) const STACK_SEGMENT_START: u64 = 0x6000000000000000;
+
+/// What [`MMix::pop_frame`] found at `rO`.
+enum PopFrame {
+    /// A frame popped cleanly; the branch target follows.
+    Frame(u64),
+    /// `rO` was at or below the stack base — `POP`'s fallback.
+    NoFrame,
+    /// `rO` named an impossible placement; already rejected with a
+    /// diagnostic and the machine left unchanged.
+    Rejected,
+}
+
 /// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
 /// the wall clock, and diagnostic messages that today go to stderr.
 ///
@@ -827,11 +843,6 @@ pub struct MMix {
     /// Program counter (location of next instruction)
     pc: u64,
 
-    /// Count of PUSHJ/PUSHGO frames not yet popped. The registers
-    /// themselves live in memory at rO; this is bookkeeping only, backing
-    /// [`MMix::call_depth`] and POP's no-frame fallback.
-    frame_depth: usize,
-
     /// Open file handles for TRAP calls
     /// Maps file descriptor numbers to File objects
     /// 0 = stdin, 1 = stdout, 2 = stderr, 3+ = user-opened files
@@ -897,7 +908,6 @@ impl MMix {
             special_regs: [0; 32],
             memory: HashMap::new(),
             pc: 0,
-            frame_depth: 0,
             file_handles: HashMap::new(),
             next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
@@ -977,8 +987,8 @@ impl MMix {
         // rO and rS both start at the register stack's base, segment 6 per
         // MMIX convention. PUSHJ/POP store eagerly, so the two stay equal
         // and move together for the life of the machine.
-        self.set_special(SpecialReg::RO, 0x6000000000000000);
-        self.set_special(SpecialReg::RS, 0x6000000000000000);
+        self.set_special(SpecialReg::RO, STACK_SEGMENT_START);
+        self.set_special(SpecialReg::RS, STACK_SEGMENT_START);
     }
 
     /// Get the value of a general-purpose register.
@@ -1073,26 +1083,45 @@ impl MMix {
         self.set_special(SpecialReg::RS, new_ro);
         self.set_special(SpecialReg::RL, new_rl as u64);
         self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
-        self.frame_depth += 1;
     }
 
     /// Pop a frame from the register stack in memory and slide return
-    /// values back. Returns the branch target (`rJ + 4·yz`), or `None` when
-    /// no frame remains — `frame_depth` backs [`MMix::call_depth`] and
-    /// decides that fallback.
+    /// values back. `rO` at or below [`STACK_SEGMENT_START`] means no
+    /// frame remains: [`PopFrame::NoFrame`], the fallback `POP` takes.
+    /// Any other placement outside the stack segment, or a misaligned
+    /// `rO`, can only come from a forged [`MMix::set_special`] — the
+    /// reference would raise a protection fault there, so this halts
+    /// through [`MMix::reject`] instead: [`PopFrame::Rejected`].
     ///
-    /// The hole comes from memory: `x = M8[rO-8] mod 256`. The caller's
-    /// `$0..$(x-1)` restore from `M8[rO-8(x+1)..]`, skipping any index at or
-    /// above the current `rG`. `rO` and `rS` retract to `rO - 8(x+1)` —
-    /// exactly where the matching `PUSHJ` found them. `rJ` is left
-    /// unchanged.
-    fn pop_frame(&mut self, n: u8, yz: u16) -> Option<u64> {
-        if self.frame_depth == 0 {
-            return None;
+    /// Otherwise the hole comes from memory: `x = M8[rO-8] mod 256`. The
+    /// caller's `$0..$(x-1)` restore from `M8[rO-8(x+1)..]`, skipping any
+    /// index at or above the current `rG`. `rO` and `rS` retract to
+    /// `rO - 8(x+1)` — exactly where the matching `PUSHJ` found them. `rJ`
+    /// is left unchanged.
+    fn pop_frame(&mut self, n: u8, yz: u16) -> PopFrame {
+        let ro = self.get_special(SpecialReg::RO);
+        if ro <= STACK_SEGMENT_START {
+            return PopFrame::NoFrame;
+        }
+        if !ro.is_multiple_of(8) {
+            self.reject(&format!(
+                "POP {n},{yz}: rO={ro:#018x} is misaligned; the reference \
+                 would raise a protection fault at PC={:#018x}",
+                self.pc
+            ));
+            return PopFrame::Rejected;
+        }
+        if ro >= 0x8000000000000000 {
+            self.reject(&format!(
+                "POP {n},{yz}: rO={ro:#018x} is outside the register stack \
+                 segment; the reference would raise a protection fault at \
+                 PC={:#018x}",
+                self.pc
+            ));
+            return PopFrame::Rejected;
         }
 
         let rg = self.get_special(SpecialReg::RG) as u8;
-        let ro = self.get_special(SpecialReg::RO);
         let l = self.get_special(SpecialReg::RL) as u16;
 
         let x = (self.read_octa(ro.wrapping_sub(8)) % 256) as u8;
@@ -1145,11 +1174,10 @@ impl MMix {
         self.set_special(SpecialReg::RO, new_ro);
         self.set_special(SpecialReg::RS, new_ro);
         self.set_special(SpecialReg::RL, new_rl);
-        self.frame_depth -= 1;
 
         let return_pc = self.get_special(SpecialReg::RJ);
 
-        Some(return_pc.wrapping_add((yz as u64) * 4))
+        PopFrame::Frame(return_pc.wrapping_add((yz as u64) * 4))
     }
 
     /// Push the machine's context onto the register stack, growing upward
@@ -1280,6 +1308,23 @@ impl MMix {
         self.set_special(SpecialReg::RO, locals_base);
         self.set_special(SpecialReg::RS, locals_base);
         true
+    }
+
+    /// The register stack address below the `SAVE` context whose packed
+    /// octa sits at `ro - 8`, in the layout [`MMix::save_context`] wrote:
+    /// past the packed octa, the twelve specials, the globals, the marker
+    /// and the locals `SAVE` captured. [`MMix::call_depth`]'s walk uses
+    /// this to step over a whole context in one move, uncounted.
+    fn save_context_extent(&self, ro: u64) -> u64 {
+        let packed_addr = ro.wrapping_sub(8);
+        let packed = self.read_octa(packed_addr);
+        let rg_saved = (packed >> 56) as u8;
+        let specials_base = packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
+        let global_count = 256u64.wrapping_sub(rg_saved as u64);
+        let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
+        let marker_addr = globals_base.wrapping_sub(8);
+        let local_count = self.read_octa(marker_addr);
+        marker_addr.wrapping_sub(local_count.wrapping_mul(8))
     }
 
     /// Get the value of a special-purpose register.
@@ -1583,9 +1628,26 @@ impl MMix {
         self.exit_code
     }
 
-    /// Current call depth: the number of PUSHJ/PUSHGO frames not yet popped.
+    /// Current call depth: the number of PUSHJ/PUSHGO frames not yet
+    /// popped. Walks the register stack down from `rO` to
+    /// [`STACK_SEGMENT_START`]: a marker octa below 256 closes out a
+    /// frame and counts; a `SAVE` context — its topmost octa never below
+    /// 256 — is skipped whole and does not count. Stops, returning the
+    /// count so far, if `rO` is ever misaligned or outside the stack
+    /// segment.
     pub fn call_depth(&self) -> usize {
-        self.frame_depth
+        let mut ro = self.get_special(SpecialReg::RO);
+        let mut depth = 0;
+        while ro > STACK_SEGMENT_START && ro < 0x8000000000000000 && ro.is_multiple_of(8) {
+            let top = self.read_octa(ro.wrapping_sub(8));
+            if top < 256 {
+                ro = ro.wrapping_sub((top + 1).wrapping_mul(8));
+                depth += 1;
+            } else {
+                ro = self.save_context_extent(ro);
+            }
+        }
+        depth
     }
 
     // ========== Internal Helpers ==========
@@ -4757,15 +4819,20 @@ impl MMix {
                 // hole, and branches to rJ + 4·YZ. rJ itself is untouched;
                 // a subroutine that calls another must save and restore it.
                 let yz = ((y as u16) << 8) | z as u16;
-                if let Some(target) = self.pop_frame(x, yz) {
-                    self.pc = target;
-                } else {
-                    // No frame to pop: branch via current rJ as a defensive fallback.
-                    self.pc = self
-                        .get_special(SpecialReg::RJ)
-                        .wrapping_add((yz as u64) * 4);
+                match self.pop_frame(x, yz) {
+                    PopFrame::Frame(target) => {
+                        self.pc = target;
+                        true
+                    }
+                    PopFrame::NoFrame => {
+                        // No frame to pop: branch via current rJ as a defensive fallback.
+                        self.pc = self
+                            .get_special(SpecialReg::RJ)
+                            .wrapping_add((yz as u64) * 4);
+                        true
+                    }
+                    PopFrame::Rejected => false,
                 }
-                true
             }
             Opcode::RESUME => {
                 // RESUME - Resume after interrupt
@@ -9384,6 +9451,239 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_special(SpecialReg::RO), ro_before_call);
         assert_eq!(mmix.get_special(SpecialReg::RS), ro_before_call);
         assert_eq!(mmix.call_depth(), 0);
+    }
+
+    /// The register-stack review's reproduction: a `SAVE` before a call,
+    /// a nested `PUSHJ`, then an `UNSAVE` inside the callee that rewinds
+    /// `rO` clear past the frame the `PUSHJ` just opened. Reintroducing a
+    /// counter `POP` trusts over `rO` turns this test red: it would still
+    /// think the frame was open and read a hole from dead memory instead
+    /// of taking the fallback `rO` now calls for.
+    #[test]
+    fn test_call_depth_and_pop_follow_ro_through_save_pushj_unsave() {
+        let mut mmix = MMix::new();
+        let base = mmix.get_special(SpecialReg::RO);
+        assert_eq!(mmix.call_depth(), 0);
+
+        // SAVE $40,0 at top level -- a context, not a frame.
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFA280000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 0, "a SAVE context is not a frame");
+
+        // PUSHJ $0,+1 opens a frame inside what becomes the callee.
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF2000001);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 1, "PUSHJ opened one frame");
+
+        // UNSAVE 0,$40 inside the callee rewinds rO past that frame, back
+        // to where SAVE found it -- the frame PUSHJ opened is now dead
+        // memory below rO.
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFB000028);
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RO),
+            base,
+            "UNSAVE rewinds rO to where SAVE found it"
+        );
+        assert_eq!(
+            mmix.call_depth(),
+            0,
+            "rO names the top level again; the dead frame does not count"
+        );
+
+        // POP 1,0 acts on what rO now names: the top level, so it takes
+        // the no-frame fallback, branching via rJ -- restored by UNSAVE
+        // to 0, its value when SAVE captured it. The fallback touches no
+        // register or memory, so rO and rL, unlike a real pop, do not move.
+        let rl_before_pop = mmix.get_special(SpecialReg::RL);
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF8010000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0, "POP took the no-frame fallback");
+        assert_eq!(
+            mmix.get_special(SpecialReg::RO),
+            base,
+            "the fallback leaves rO alone"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RL),
+            rl_before_pop,
+            "the fallback leaves rL alone"
+        );
+        assert_eq!(mmix.call_depth(), 0);
+    }
+
+    /// A `SAVE`/`UNSAVE` pair inside a call leaves `call_depth` at the
+    /// call's own count throughout: the context never counts as a second
+    /// frame. Making `call_depth` count a `SAVE` context as a frame turns
+    /// the middle assertion here red (2, not 1).
+    #[test]
+    fn test_call_depth_reads_one_across_a_save_inside_a_call() {
+        let mut mmix = MMix::new();
+        assert_eq!(mmix.call_depth(), 0);
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF2000001); // PUSHJ $0,+1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 1);
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFA280000); // SAVE $40,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 1, "the SAVE context does not count");
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFB000028); // UNSAVE 0,$40
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 1, "still just the one open call");
+    }
+
+    /// Three nested `PUSHJ`s deep and back, `call_depth` 0→3→0, with a
+    /// `SAVE`/`UNSAVE` pair at depth 2 in between.
+    #[test]
+    fn test_call_depth_nests_three_deep_with_a_save_unsave_pair_at_depth_two() {
+        let mut mmix = MMix::new();
+        assert_eq!(mmix.call_depth(), 0);
+
+        for depth in 1..=2u64 {
+            let pc = mmix.get_pc();
+            mmix.write_tetra(pc, 0xF2000001); // PUSHJ $0,+1
+            assert!(mmix.execute_instruction());
+            assert_eq!(mmix.call_depth(), depth as usize);
+        }
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFA280000); // SAVE $40,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 2);
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFB000028); // UNSAVE 0,$40
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 2);
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF2000001); // PUSHJ $0,+1 -- depth 3
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.call_depth(), 3);
+
+        for depth in (0..=2u64).rev() {
+            let pc = mmix.get_pc();
+            mmix.write_tetra(pc, 0xF8000000); // POP 0,0
+            assert!(mmix.execute_instruction());
+            assert_eq!(mmix.call_depth(), depth as usize);
+        }
+    }
+
+    /// `POP` does not recognize a `SAVE` context: at top level after a
+    /// bare `SAVE`, it reads the packed octa's low byte as a real hole
+    /// count and retracts `rO` accordingly, rather than taking the
+    /// no-frame fallback (which would leave `rO` untouched).
+    #[test]
+    fn test_pop_after_a_bare_save_reads_the_packed_octas_low_byte_as_a_hole() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RA, 5); // packed octa's low byte becomes 5
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xFA280000); // SAVE $40,0
+        assert!(mmix.execute_instruction());
+        let ro_after_save = mmix.get_special(SpecialReg::RO);
+        assert!(ro_after_save > STACK_SEGMENT_START);
+
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF8000000); // POP 0,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RO),
+            ro_after_save - 48,
+            "rO retracted by 8*(5+1), the packed octa's low byte read as a hole"
+        );
+    }
+
+    /// `rO` at or below the stack base — the fresh-machine case, and a
+    /// forged one further below, only reachable through `set_special` —
+    /// both take `POP`'s no-frame fallback, and `call_depth` reads 0
+    /// without looping either way.
+    #[test]
+    fn test_pop_and_call_depth_at_or_below_the_base_take_the_fallback() {
+        let mut mmix = MMix::new();
+        assert_eq!(mmix.get_special(SpecialReg::RO), STACK_SEGMENT_START);
+        assert_eq!(mmix.call_depth(), 0);
+
+        mmix.set_special(SpecialReg::RJ, 0x200);
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF8008000); // POP 0,0x8000
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_pc(),
+            0x200 + 32768 * 4,
+            "at the base: the fallback fired"
+        );
+
+        mmix.set_special(SpecialReg::RO, STACK_SEGMENT_START - 8);
+        assert_eq!(mmix.call_depth(), 0);
+        mmix.set_special(SpecialReg::RJ, 0x300);
+        mmix.set_pc(0);
+        mmix.write_tetra(0, 0xF8000000); // POP 0,0
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_pc(),
+            0x300,
+            "below the base: the fallback fired too"
+        );
+    }
+
+    /// A misaligned `rO` — only reachable through a forged `set_special`,
+    /// since every legal instruction keeps it a multiple of 8 — halts
+    /// `POP` with a diagnostic and leaves the machine unchanged, since the
+    /// reference would raise a protection fault checksmix has no vector
+    /// for. `call_depth` stops at 0 without looping.
+    #[test]
+    fn test_pop_halts_on_a_misaligned_ro() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RO, STACK_SEGMENT_START + 3);
+        mmix.set_register(0, 0xFEED);
+
+        assert_eq!(
+            mmix.call_depth(),
+            0,
+            "the walk stops at once on a misaligned rO"
+        );
+
+        mmix.write_tetra(0, 0xF8000000); // POP 0,0
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0, "no PC advance on a halt");
+        assert_eq!(mmix.get_register(0), 0xFEED, "no register change on a halt");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rO"));
+    }
+
+    /// An `rO` above the register-stack segment — only reachable through a
+    /// forged `set_special` — halts `POP` the same way, and `call_depth`
+    /// again stops at once without looping.
+    #[test]
+    fn test_pop_halts_on_an_ro_above_the_stack_segment() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RO, 0x8000000000000000);
+        mmix.set_register(0, 0xFEED);
+
+        assert_eq!(
+            mmix.call_depth(),
+            0,
+            "the walk stops at once outside the segment"
+        );
+
+        mmix.write_tetra(0, 0xF8000000); // POP 0,0
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0);
+        assert_eq!(mmix.get_register(0), 0xFEED);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rO"));
     }
 
     /// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields the
