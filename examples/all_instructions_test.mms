@@ -3700,25 +3700,26 @@ Test277Inner
         POP     0,0
 
 % ========================================
-% Test 278: marginal registers stay zero
+% Test 278: a legal PUT rG zeroes what it reclassifies; PUT rL zeroes what
+% it drops
 % ========================================
-% PUT rG raises rG without zeroing, so it can plant a stale value in what
-% becomes a marginal
-% register: $50 holds #DEAD while global, then rG rises past it. Writing
-% a higher register must still zero that gap when it claims the range.
+% $50 holds #DEAD while global (rG = 32). PUT rG,60 reclassifies $32..$59
+% as local/marginal, and the check runs immediately after -- before
+% anything else could claim $50 -- so a zero here is PUT rG's own doing,
+% not a later write's.
 % PUT rL only ever lowers rL, to min(z, rL), and zeroes every register
 % the drop excludes from the local range.
 % ========================================
 Test278 ADDU    TestNum,TestNum,1
         SET     $50,#DEAD         % global while rG = 32
         SET     $10,60
-        PUT     rG,$10            % rG = 60; $50 is now marginal, still #DEAD
-        SET     $55,777           % claims $11..$55, zeroing the gap -- $50 too
+        PUT     rG,$10            % rG = 60: reclassified $50 reads zero
         SET     Expect,0
         CMP     Temp,$50,Expect
         PBZ     Temp,Test278b
         JMP     TestFail
 Test278b
+        SET     $55,777           % claims $51..$55; rL rises to 56
         SET     Expect,777
         CMP     Temp,$55,Expect
         PBZ     Temp,Test278c

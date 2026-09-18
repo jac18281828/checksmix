@@ -1,3 +1,7 @@
+0.3.10 (2026-09-18)
+
+* **Breaking: `PUT`/`PUTI` reject what MMIX rejects.** `PUT` wrote any special register with any value: an out-of-range `rA` was silently dropped, a register number above 31 was ignored, and `PUTI`'s immediate was built from all sixteen `YZ` bits where MMIX uses `Z` alone. `PUT`/`PUTI` now halt with a diagnostic, naming the instruction, the register, the value and the interrupt, on every write MMIX rejects: `X ≥ 32`; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18), read-only in user mode; `rG` below 32, below `rL`, or above 255; and `rA` above `#3FFFF`. `PUTI`'s value is `Z` alone, eight bits — `Y` is ignored, not enforced, the same as `GET`. A legal `PUT rG` also now zeroes every register it moves between the local and global ranges, in either direction; `SET $40,#DEAD` / `PUT rG,60` / `PUT rG,32` previously left `$40` holding `#DEAD`, where MMIXware gives zero
+
 0.3.9 (2026-09-17)
 
 * **Breaking: `JE`, `JNE`, `JL` and `JG` no longer assemble as MMIX.** MMIXAL never had them — they are MIX's compare-and-jump mnemonics, which test `CMPA`'s comparison indicator, and MMIX has no such indicator. They entered the grammar as aliases of `BZ`, `BNZ`, `BN` and `BP` respectively; source that used them must now spell the branch it means. The `0.3.6` entry documenting the four as checksmix extensions is superseded

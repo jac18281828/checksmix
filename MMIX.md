@@ -111,7 +111,7 @@ mmixasm         main.mms lib.mms -o prog.mmo
 
 ## Floating-point arithmetic
 
-All floating-point instructions use IEEE 754 double precision. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top and `PUT rA,$X` rejects any value above `#3FFFF`, leaving `rA` unchanged. `PUTI` cannot reach the field — its `YZ` operand is 16 bits — so selecting a mode needs the register form of `PUT`:
+All floating-point instructions use IEEE 754 double precision. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top: `PUT rA,$X` above `#3FFFF` is an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic. `PUTI` cannot reach the field — its operand is `Z` alone, eight bits — so selecting a mode needs the register form of `PUT`:
 
 | rA bits 17–16 | Mode | Meaning |
 | --- | --- | --- |
@@ -186,11 +186,12 @@ Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined s
 
 ## Register stack
 
-Every register from `rL` through `rG-1` is marginal and reads zero. `PUT rG`
-in MMIX accepts a value `z` only for `32 ≤ z ≤ 255` with `z ≥ rL`, and
-zeroes the registers released when lowering `rG`. checksmix validates none of
-these constraints; it accepts any `PUT rG` value, and does not zero registers
-when `rG` is lowered.
+Every register from `rL` through `rG-1` is marginal and reads zero. `PUT rG,z`
+accepts a value only for `32 ≤ z ≤ 255` with `z ≥ rL`; any other value is an
+illegal-instruction interrupt, and since this VM has no interrupt vector, it
+halts with a diagnostic. A legal `PUT rG` zeroes every register between the
+old and new `rG` — global to local/marginal when raising, local/marginal to
+global when lowering.
 
 `UNSAVE` restores `rL` and `rG` from memory. A raw write to either register
 moves its boundary without clearing anything; a register it strands keeps its

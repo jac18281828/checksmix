@@ -1145,19 +1145,77 @@ impl MMix {
         self.special_regs[reg as usize] = value;
     }
 
-    /// Apply a `PUT` write. rA holds 18 bits; a wider value is an
-    /// impermissible `PUT` and causes an illegal-instruction interrupt.
-    /// `PUT` here has no fault channel, so the write is dropped and
-    /// execution continues.
-    fn put_special(&mut self, reg: SpecialReg, value: u64) {
-        if reg == SpecialReg::RA && value > RA_MAX {
-            return;
+    /// Apply a `PUT`/`PUTI` write, enforcing every rule MMIX places on the
+    /// destination special register
+    /// (mmix.cs.hm.edu/doc/instructions/put.html). `X ≥ 32` names no
+    /// register; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18) are read-only in
+    /// user mode; `rG` and `rA` each bound the value they accept. A write
+    /// the reference calls impermissible halts with a diagnostic naming the
+    /// instruction, the register, the value and the interrupt it raises;
+    /// the PC does not advance and no register changes. Returns whether the
+    /// write succeeded.
+    fn put_special(&mut self, mnemonic: &str, x: u8, value: u64) -> bool {
+        let Some(reg) = SpecialReg::from_u8(x) else {
+            self.host.diagnostic(&format!(
+                "{mnemonic} X={x},{value}: no special register above 31 at PC={:#018x}",
+                self.pc
+            ));
+            return false;
+        };
+        match reg {
+            SpecialReg::RC
+            | SpecialReg::RI
+            | SpecialReg::RK
+            | SpecialReg::RQ
+            | SpecialReg::RT
+            | SpecialReg::RU
+            | SpecialReg::RV
+            | SpecialReg::RTT => {
+                self.host.diagnostic(&format!(
+                    "{mnemonic} {},{value}: privileged-operation interrupt at PC={:#018x}",
+                    reg.name(),
+                    self.pc
+                ));
+                false
+            }
+            SpecialReg::RN | SpecialReg::RO | SpecialReg::RS => {
+                self.host.diagnostic(&format!(
+                    "{mnemonic} {},{value}: illegal-instruction interrupt at PC={:#018x}",
+                    reg.name(),
+                    self.pc
+                ));
+                false
+            }
+            SpecialReg::RG => {
+                let rl = self.get_special(SpecialReg::RL);
+                if value < 32 || value < rl || value > 255 {
+                    self.host.diagnostic(&format!(
+                        "{mnemonic} rG,{value}: illegal-instruction interrupt \
+                         (rG must be 32-255 and >= rL={rl}) at PC={:#018x}",
+                        self.pc
+                    ));
+                    return false;
+                }
+                self.put_rg(value);
+                true
+            }
+            SpecialReg::RL => {
+                self.put_rl(value);
+                true
+            }
+            SpecialReg::RA if value > RA_MAX => {
+                self.host.diagnostic(&format!(
+                    "{mnemonic} rA,{value:#x}: illegal-instruction interrupt \
+                     (rA holds at most 18 bits, max {RA_MAX:#x}) at PC={:#018x}",
+                    self.pc
+                ));
+                false
+            }
+            _ => {
+                self.set_special(reg, value);
+                true
+            }
         }
-        if reg == SpecialReg::RL {
-            self.put_rl(value);
-            return;
-        }
-        self.set_special(reg, value);
     }
 
     /// `PUT rL,z` only ever lowers rL, to `min(z, rL)`. The registers the
@@ -1175,6 +1233,23 @@ impl MMix {
             self.general_regs[marginal as usize] = 0;
         }
         self.set_special(SpecialReg::RL, rl_new);
+    }
+
+    /// `PUT rG,z` moves the boundary between the local and global register
+    /// ranges. Every register between the old and new `rG` changes class —
+    /// global to local/marginal when raising, local/marginal to global when
+    /// lowering — and must read zero afterward; registers outside that span
+    /// keep their values. A stale `rG` beyond the register file (reachable
+    /// only through an unvalidated `UNSAVE`) is clamped so the sweep never
+    /// indexes past it.
+    fn put_rg(&mut self, z: u64) {
+        let rg_old = self.get_special(SpecialReg::RG);
+        let (lo, hi) = if z > rg_old { (rg_old, z) } else { (z, rg_old) };
+        let hi = hi.min(self.general_regs.len() as u64);
+        for reg in lo..hi {
+            self.general_regs[reg as usize] = 0;
+        }
+        self.set_special(SpecialReg::RG, z);
     }
 
     /// Read a byte from memory at the given address.
@@ -4506,23 +4581,19 @@ impl MMix {
                 true
             }
             Opcode::PUT => {
-                // PUT rX, $Z - Put to special register
-                // X field specifies the special register, Z specifies source register
-                let special_reg_num = x;
+                // PUT X, $Z - Put $Z into special register X.
                 let value = self.get_register(z);
-                // Map register number to SpecialReg enum
-                if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
-                    self.put_special(special_reg, value);
+                if !self.put_special("PUT", x, value) {
+                    return false;
                 }
                 self.advance_pc();
                 true
             }
             Opcode::PUTI => {
-                // PUTI $X, YZ - Put to special register (immediate)
-                let special_reg_num = x;
-                let value = ((y as u64) << 8) | (z as u64);
-                if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
-                    self.put_special(special_reg, value);
+                // PUT X, Z - Put immediate Z into special register X. Y is
+                // ignored; the value is Z alone, eight bits.
+                if !self.put_special("PUTI", x, z as u64) {
+                    return false;
                 }
                 self.advance_pc();
                 true
@@ -8185,12 +8256,225 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_puti() {
+    fn test_puti_ignores_y_and_stores_z_alone() {
         let mut mmix = MMix::new();
-        // PUTI rH, 0x1234 - Put immediate value into rH (special register 3)
-        mmix.write_tetra(0, 0xF7031234); // PUTI X=3 (rH), YZ=0x1234
+        // PUTI rH, YZ=0x1234 - Y is ignored; only Z=0x34 reaches rH.
+        mmix.write_tetra(0, 0xF7031234); // PUTI X=3 (rH), Y=0x12, Z=0x34
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_special(SpecialReg::RH), 0x1234);
+        assert_eq!(mmix.get_special(SpecialReg::RH), 0x34);
+    }
+
+    #[test]
+    fn test_put_x_at_32_names_no_special_register() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(1, 42);
+        mmix.write_tetra(0, 0xF6200001); // PUT X=32,$1 -- no register above 31
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn test_put_rc_is_rejected_with_a_privileged_operation_interrupt() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(1, 222);
+        mmix.write_tetra(0, 0xF6080001); // PUT X=8 (rC), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RC),
+            0,
+            "the write did not land"
+        );
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rC"));
+        assert!(handle.diagnostics()[0].contains("privileged"));
+    }
+
+    #[test]
+    fn test_put_rn_is_rejected_with_an_illegal_instruction_interrupt() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RN, 111);
+        mmix.set_register(1, 222);
+        mmix.write_tetra(0, 0xF6090001); // PUT X=9 (rN), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RN),
+            111,
+            "the write did not land"
+        );
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rN"));
+    }
+
+    #[test]
+    fn test_put_ro_is_rejected_with_an_illegal_instruction_interrupt() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        let ro = mmix.get_special(SpecialReg::RO);
+        mmix.set_register(1, 222);
+        mmix.write_tetra(0, 0xF60A0001); // PUT X=10 (rO), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RO),
+            ro,
+            "the write did not land"
+        );
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rO"));
+    }
+
+    #[test]
+    fn test_put_rs_is_rejected_with_an_illegal_instruction_interrupt() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        let rs = mmix.get_special(SpecialReg::RS);
+        mmix.set_register(1, 222);
+        mmix.write_tetra(0, 0xF60B0001); // PUT X=11 (rS), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RS),
+            rs,
+            "the write did not land"
+        );
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rS"));
+    }
+
+    #[test]
+    fn test_put_rg_below_32_is_rejected() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(1, 31);
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32, "rG unchanged");
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rG"));
+    }
+
+    #[test]
+    fn test_put_rg_below_rl_is_rejected() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RL, 40);
+        mmix.set_register(1, 35); // >= 32, but < rL
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32, "rG unchanged");
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn test_put_rg_above_255_is_rejected() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(1, 256);
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32, "rG unchanged");
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn test_put_rg_accepts_the_low_boundary_32() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RG, 60);
+        mmix.set_register(1, 32);
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+    }
+
+    #[test]
+    fn test_put_rg_accepts_the_high_boundary_255() {
+        let mut mmix = MMix::new();
+        mmix.set_register(1, 255);
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 255);
+    }
+
+    #[test]
+    fn test_put_rg_accepts_a_value_equal_to_rl() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RL, 40);
+        mmix.set_register(1, 40);
+        mmix.write_tetra(0, 0xF6130001); // PUT X=19 (rG), $1
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_special(SpecialReg::RG), 40);
+    }
+
+    #[test]
+    fn test_put_rg_raising_zeroes_the_newly_local_span() {
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+        mmix.set_register(70, 777); // outside the raised span; stays global
+
+        mmix.write_tetra(0, 0xF713003C); // PUTI rG,60
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_special(SpecialReg::RG), 60);
+        assert_eq!(
+            mmix.get_register(40),
+            0,
+            "reclassified into the local/marginal range reads zero"
+        );
+        assert_eq!(
+            mmix.get_register(70),
+            777,
+            "outside the span keeps its value"
+        );
+    }
+
+    #[test]
+    fn test_put_rg_lowering_zeroes_the_newly_global_span() {
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+        mmix.set_special(SpecialReg::RG, 60); // raw raise: $40 goes stale-marginal
+        mmix.set_register(70, 777); // outside the lowered span; stays global
+
+        mmix.write_tetra(0, 0xF7130020); // PUTI rG,32
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(
+            mmix.get_register(40),
+            0,
+            "reclassified back into the global range reads zero"
+        );
+        assert_eq!(
+            mmix.get_register(70),
+            777,
+            "outside the span keeps its value"
+        );
+    }
+
+    #[test]
+    fn test_put_rg_zeroes_a_reclassified_register_end_to_end() {
+        // SET $40,#DEAD / PUT rG,60 / PUT rG,32 / ADD $5,$40,$0 -- C6's
+        // adversarial review (2026-09-17) found this left $5 = #DEAD;
+        // MMIXware gives 0.
+        let mut mmix = MMix::new();
+        mmix.set_register(40, 0xDEAD); // global while rG = 32
+
+        mmix.write_tetra(0, 0xF713003C); // PUTI rG,60
+        assert!(mmix.execute_instruction());
+        mmix.write_tetra(4, 0xF7130020); // PUTI rG,32
+        assert!(mmix.execute_instruction());
+        mmix.write_tetra(8, 0x20052800); // ADD $5,$40,$0
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(5), 0);
     }
 
     #[test]
@@ -12445,21 +12729,27 @@ Sub\tSETI\t$0,3
 
     #[test]
     fn test_put_ra_rejects_a_value_wider_than_18_bits() {
-        let mut mmix = MMix::new();
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
         mmix.set_special(SpecialReg::RA, 2 << RA_ROUND_SHIFT);
         mmix.set_register(1, RA_MAX + 1);
         mmix.write_tetra(0, 0xF6150001); // PUT rA,$1
-        assert!(mmix.execute_instruction());
+        assert!(!mmix.execute_instruction());
         assert_eq!(
             mmix.get_special(SpecialReg::RA),
             2 << RA_ROUND_SHIFT,
             "a rejected write leaves rA unchanged"
         );
-        assert_eq!(mmix.get_pc(), 4, "execution continues");
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rA"));
+    }
 
-        // The widest accepted value is #3FFFF itself.
+    #[test]
+    fn test_put_ra_accepts_the_widest_legal_value() {
+        let mut mmix = MMix::new();
         mmix.set_register(1, RA_MAX);
-        mmix.write_tetra(4, 0xF6150001);
+        mmix.write_tetra(0, 0xF6150001); // PUT rA,$1
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_special(SpecialReg::RA), RA_MAX);
     }
