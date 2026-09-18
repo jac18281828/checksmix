@@ -1917,6 +1917,13 @@ impl MMix {
         }
     }
 
+    /// The aligned octabyte containing `addr`, read after a store has
+    /// written it: the stored bytes in place, the rest as memory holds them
+    /// (gitraptrip.html "General"). A store trip's `rZ` per §1 rule 3.
+    fn merged_store_octa(&self, addr: u64) -> u64 {
+        self.read_octa(addr)
+    }
+
     /// Whether every byte of the tetra at `addr` came from `write_image` (or
     /// a test's `write_loaded_byte`) rather than reading as zero by default.
     /// Backs the unloaded-vector halt in [`MMix::trip`]: unassembled memory
@@ -3776,12 +3783,14 @@ impl MMix {
             // Store instructions
             Opcode::STB => {
                 // STB $X, $Y, $Z - Store byte (with overflow check). A trip
-                // sets rY to the address and rZ to the value being stored.
+                // sets rY to the address and rZ to the merged octabyte after
+                // the store.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i8::MIN as i64, i8::MAX as i64);
                 self.write_byte(addr, value as u8);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STBI => {
                 // STB $X, $Y, Z - Store byte immediate (with overflow check)
@@ -3789,7 +3798,8 @@ impl MMix {
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i8::MIN as i64, i8::MAX as i64);
                 self.write_byte(addr, value as u8);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STBU => {
                 // STBU $X, $Y, $Z - Store byte unsigned (no overflow check)
@@ -3809,12 +3819,14 @@ impl MMix {
             }
             Opcode::STW => {
                 // STW $X, $Y, $Z - Store wyde (with overflow check). A trip
-                // sets rY to the address and rZ to the value being stored.
+                // sets rY to the address and rZ to the merged octabyte after
+                // the store.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i16::MIN as i64, i16::MAX as i64);
                 self.write_wyde(addr, value as u16);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STWI => {
                 // STW $X, $Y, Z - Store wyde immediate (with overflow check)
@@ -3822,7 +3834,8 @@ impl MMix {
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i16::MIN as i64, i16::MAX as i64);
                 self.write_wyde(addr, value as u16);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STWU => {
                 // STWU $X, $Y, $Z - Store wyde unsigned (no overflow check)
@@ -3842,12 +3855,14 @@ impl MMix {
             }
             Opcode::STT => {
                 // STT $X, $Y, $Z - Store tetra (with overflow check). A trip
-                // sets rY to the address and rZ to the value being stored.
+                // sets rY to the address and rZ to the merged octabyte after
+                // the store.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i32::MIN as i64, i32::MAX as i64);
                 self.write_tetra(addr, value as u32);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STTI => {
                 // STT $X, $Y, Z - Store tetra immediate (with overflow check)
@@ -3855,7 +3870,8 @@ impl MMix {
                 let value = self.get_register(x);
                 let flags = Self::store_overflow_flag(value, i32::MIN as i64, i32::MAX as i64);
                 self.write_tetra(addr, value as u32);
-                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STTU => {
                 // STTU $X, $Y, $Z - Store tetra unsigned (no overflow check)
@@ -3908,25 +3924,26 @@ impl MMix {
             Opcode::STSF => {
                 // STSF $X, $Y, $Z - Narrow $X to f32 using rA mode and store at $Y+$Z.
                 // No Y-operand override: STSF takes no rounding-mode field.
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z_val);
+                // A store trip, so a trip sets rY to the address and rZ to
+                // the merged octabyte after the store, per §1 rule 3.
+                let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = Self::u64_to_f64(self.get_register(x));
                 let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STSFI => {
-                let y_val = self.get_register(y);
-                // Z is the literal offset, not a register.
-                let z_val = z as u64;
-                let addr = y_val.wrapping_add(z as u64);
+                // A store trip: rY takes the address, rZ the merged octabyte
+                // after the store, per §1 rule 3.
+                let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
                 let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                let merged = self.merged_store_octa(addr);
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
             Opcode::STHT => {
                 // STHT $X, $Y, $Z - Store high tetra
@@ -9673,6 +9690,9 @@ Main\tSETI\t$1,100
         mmix.set_register(1, 200); // out of signed byte range: overflows
         mmix.set_register(2, 0x4000);
         mmix.set_register(3, 8);
+        // A nonzero neighbouring byte in the target octabyte: rZ must be the
+        // merged octabyte memory now holds, not the raw stored byte alone.
+        mmix.write_byte(0x4009, 0xAB);
         mmix.write_tetra(0x100, 0xA0010203); // STB $1,$2,$3
 
         assert!(mmix.execute_instruction());
@@ -9684,9 +9704,44 @@ Main\tSETI\t$1,100
         );
         assert_eq!(
             mmix.get_special(SpecialReg::RZ),
-            200,
-            "rZ holds the stored value, not raw $Z"
+            0xC8AB_0000_0000_0000,
+            "rZ holds the aligned octabyte after the store: the stored byte \
+             (200 = 0xC8) in place, the neighbouring byte and the rest of \
+             memory unchanged"
         );
+    }
+
+    #[test]
+    fn test_stsf_overflow_trip_reports_address_and_merged_octa() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x50, 0xFD000000); // O's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_O << 8); // enable O only
+        mmix.set_pc(0x100);
+        mmix.set_register(1, f64::MAX.to_bits()); // narrows to +inf: overflow
+        mmix.set_register(2, 0x4000);
+        mmix.set_register(3, 8);
+        // A nonzero byte past the stored tetra, in the same octabyte: rZ
+        // must be the merged octabyte, not the plain $Y/$Z operands.
+        mmix.write_byte(0x400C, 0xAB);
+        mmix.write_tetra(0x100, 0xB0010203); // STSF $1,$2,$3
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x50);
+        assert!(f32::from_bits(mmix.read_tetra(0x4008)).is_infinite());
+        assert_eq!(
+            mmix.get_special(SpecialReg::RY),
+            0x4008,
+            "rY holds the computed address, not raw $Y — catches a revert \
+             to the plain $Y/$Z operands"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RZ),
+            0x7F80_0000_AB00_0000,
+            "rZ holds the aligned octabyte after the store: the stored \
+             +inf tetra in place, the neighbouring byte unchanged — catches \
+             a revert to the plain $Y/$Z operands"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_O, 0);
     }
 
     #[test]

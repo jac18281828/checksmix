@@ -188,8 +188,9 @@ in the high tetra with that instruction's own opcode/X/Y/Z in the low tetra
 values the instruction used: a register operand's contents, or the literal
 field for an immediate or non-register operand — `ADDI $3,$2,5` gives
 `rZ = 5`, and `FIX`/`FLOT`'s rounding-mode `Y` and `NEG`'s immediate `Y` are
-non-register fields too. A store trip (`STB`/`STW`/`STT`, either form) sets
-`rY` to the computed address and `rZ` to the value being stored. An
+non-register fields too. A store trip (`STB`/`STW`/`STT`/`STSF`, either form)
+sets `rY` to the computed address and `rZ` to the aligned octabyte memory
+holds after the store: the stored bytes in place, the rest unchanged. An
 arithmetic trip's operands are captured before the instruction's own
 destination write, so `ADD $5,$5,$3` overflowing still shows the handler the
 pre-`ADD` `$5` in `rY`.
