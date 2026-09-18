@@ -629,6 +629,18 @@ enum PopFrame {
     Rejected,
 }
 
+/// Addresses below a saved context's packed octa, in the layout
+/// [`MMix::save_context`] wrote: the twelve specials, the `rg_saved`
+/// globals, the marker holding the saved local count, and the locals below
+/// it.
+struct SaveContextLayout {
+    specials_base: u64,
+    globals_base: u64,
+    global_count: u64,
+    local_count: u64,
+    locals_base: u64,
+}
+
 /// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
 /// the wall clock, and diagnostic messages that today go to stderr.
 ///
@@ -1085,6 +1097,19 @@ impl MMix {
         self.set_special(SpecialReg::RJ, self.pc.wrapping_add(4));
     }
 
+    /// Why `rO` above [`STACK_SEGMENT_START`] cannot hold a frame: `None`
+    /// when it is a plain in-segment address, otherwise the reason
+    /// [`MMix::pop_frame`] rejects it with.
+    fn ro_placement_violation(ro: u64) -> Option<&'static str> {
+        if !ro.is_multiple_of(8) {
+            Some("is misaligned")
+        } else if ro >= 0x8000000000000000 {
+            Some("is outside the register stack segment")
+        } else {
+            None
+        }
+    }
+
     /// Pop a frame from the register stack in memory and slide return
     /// values back. `rO` at or below [`STACK_SEGMENT_START`] means no
     /// frame remains: [`PopFrame::NoFrame`], the fallback `POP` takes.
@@ -1103,19 +1128,10 @@ impl MMix {
         if ro <= STACK_SEGMENT_START {
             return PopFrame::NoFrame;
         }
-        if !ro.is_multiple_of(8) {
+        if let Some(reason) = Self::ro_placement_violation(ro) {
             self.reject(&format!(
-                "POP {n},{yz}: rO={ro:#018x} is misaligned; the reference \
-                 would raise a protection fault at PC={:#018x}",
-                self.pc
-            ));
-            return PopFrame::Rejected;
-        }
-        if ro >= 0x8000000000000000 {
-            self.reject(&format!(
-                "POP {n},{yz}: rO={ro:#018x} is outside the register stack \
-                 segment; the reference would raise a protection fault at \
-                 PC={:#018x}",
+                "POP {n},{yz}: rO={ro:#018x} {reason}; the reference would \
+                 raise a protection fault at PC={:#018x}",
                 self.pc
             ));
             return PopFrame::Rejected;
@@ -1269,62 +1285,73 @@ impl MMix {
             ));
         }
 
-        let specials_base = packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
-        let global_count = 256 - rg_saved as u64;
-        let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
-        let marker_addr = globals_base.wrapping_sub(8);
-        let local_count = self.read_octa(marker_addr);
-
-        if local_count > rg_saved as u64 {
-            return self.reject(&format!(
-                "UNSAVE 0,$Z: saved local count {local_count} exceeds saved \
-                 rG={rg_saved} at PC={:#018x}",
-                self.pc
-            ));
-        }
-
-        let locals_base = marker_addr.wrapping_sub(local_count.wrapping_mul(8));
+        let layout = match self.save_context_layout(packed_addr, rg_saved) {
+            Ok(layout) => layout,
+            Err(local_count) => {
+                return self.reject(&format!(
+                    "UNSAVE 0,$Z: saved local count {local_count} exceeds saved \
+                     rG={rg_saved} at PC={:#018x}",
+                    self.pc
+                ));
+            }
+        };
 
         for reg in 0..rg_saved {
             self.general_regs[reg as usize] = 0;
         }
-        for i in 0..local_count {
-            let addr = locals_base.wrapping_add(i.wrapping_mul(8));
+        for i in 0..layout.local_count {
+            let addr = layout.locals_base.wrapping_add(i.wrapping_mul(8));
             self.general_regs[i as usize] = self.read_octa(addr);
         }
-        for i in 0..global_count {
-            let addr = globals_base.wrapping_add(i.wrapping_mul(8));
+        for i in 0..layout.global_count {
+            let addr = layout.globals_base.wrapping_add(i.wrapping_mul(8));
             self.general_regs[(rg_saved as u64 + i) as usize] = self.read_octa(addr);
         }
         for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
-            let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
+            let addr = layout
+                .specials_base
+                .wrapping_add((i as u64).wrapping_mul(8));
             let value = self.read_octa(addr);
             self.set_special(*reg, value);
         }
 
         self.set_special(SpecialReg::RG, rg_saved as u64);
         self.set_special(SpecialReg::RA, ra_saved);
-        self.set_special(SpecialReg::RL, local_count);
-        self.set_special(SpecialReg::RO, locals_base);
-        self.set_special(SpecialReg::RS, locals_base);
+        self.set_special(SpecialReg::RL, layout.local_count);
+        self.set_special(SpecialReg::RO, layout.locals_base);
+        self.set_special(SpecialReg::RS, layout.locals_base);
         true
     }
 
-    /// The register stack address below the `SAVE` context whose packed
-    /// octa sits at `ro - 8`, in the layout [`MMix::save_context`] wrote:
-    /// past the packed octa, the twelve specials, the globals, the marker
-    /// and the locals `SAVE` captured. [`MMix::call_depth`]'s walk uses
-    /// this to step over a whole context in one move, uncounted.
-    fn save_context_extent(&self, ro: u64) -> u64 {
-        let packed_addr = ro.wrapping_sub(8);
-        let packed = self.read_octa(packed_addr);
-        let rg_saved = (packed >> 56) as u8;
+    /// The arithmetic below a saved context's packed octa at `packed_addr`,
+    /// given its already-extracted `rg_saved`: specials, globals, the
+    /// marker and the locals, in the layout [`MMix::save_context`] wrote.
+    /// `Err` carries the saved local count when it exceeds `rg_saved` —
+    /// corrupt or forged memory, never something `SAVE` itself would
+    /// write. Both [`MMix::unsave_context`] and [`MMix::call_depth`] rely
+    /// on this bound: it is what keeps the latter's walk from stepping
+    /// somewhere memory content, not address arithmetic, decided.
+    fn save_context_layout(
+        &self,
+        packed_addr: u64,
+        rg_saved: u8,
+    ) -> Result<SaveContextLayout, u64> {
         let specials_base = packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
-        let global_count = 256u64.wrapping_sub(rg_saved as u64);
+        let global_count = 256 - rg_saved as u64;
         let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
         let marker_addr = globals_base.wrapping_sub(8);
         let local_count = self.read_octa(marker_addr);
-        marker_addr.wrapping_sub(local_count.wrapping_mul(8))
+        if local_count > rg_saved as u64 {
+            return Err(local_count);
+        }
+        let locals_base = marker_addr.wrapping_sub(local_count.wrapping_mul(8));
+        Ok(SaveContextLayout {
+            specials_base,
+            globals_base,
+            global_count,
+            local_count,
+            locals_base,
+        })
     }
 
     /// Get the value of a special-purpose register.
@@ -1634,18 +1661,28 @@ impl MMix {
     /// frame and counts; a `SAVE` context — its topmost octa never below
     /// 256 — is skipped whole and does not count. Stops, returning the
     /// count so far, if `rO` is ever misaligned or outside the stack
-    /// segment.
+    /// segment, or if a step's target does not lie strictly below where it
+    /// started — the walk trusts address arithmetic, never a value read
+    /// from memory, to bound itself, so no stack content can make it loop.
     pub fn call_depth(&self) -> usize {
         let mut ro = self.get_special(SpecialReg::RO);
         let mut depth = 0;
         while ro > STACK_SEGMENT_START && ro < 0x8000000000000000 && ro.is_multiple_of(8) {
             let top = self.read_octa(ro.wrapping_sub(8));
-            if top < 256 {
-                ro = ro.wrapping_sub((top + 1).wrapping_mul(8));
+            let next = if top < 256 {
                 depth += 1;
+                ro.wrapping_sub((top + 1).wrapping_mul(8))
             } else {
-                ro = self.save_context_extent(ro);
+                let rg_saved = (top >> 56) as u8;
+                match self.save_context_layout(ro.wrapping_sub(8), rg_saved) {
+                    Ok(layout) => layout.locals_base,
+                    Err(_) => break,
+                }
+            };
+            if next >= ro {
+                break;
             }
+            ro = next;
         }
         depth
     }
@@ -5239,8 +5276,8 @@ mod tests {
     #[test]
     fn test_register_stack_initialization() {
         let mmix = MMix::new();
-        assert_eq!(mmix.get_special(SpecialReg::RO), 0x6000000000000000);
-        assert_eq!(mmix.get_special(SpecialReg::RS), 0x6000000000000000);
+        assert_eq!(mmix.get_special(SpecialReg::RO), STACK_SEGMENT_START);
+        assert_eq!(mmix.get_special(SpecialReg::RS), STACK_SEGMENT_START);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.get_special(SpecialReg::RG), 32);
         assert_eq!(mmix.call_depth(), 0);
@@ -9684,6 +9721,74 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_register(0), 0xFEED);
         assert_eq!(handle.diagnostics().len(), 1);
         assert!(handle.diagnostics()[0].contains("rO"));
+    }
+
+    /// The review's non-forged reproduction: a real top-level `SAVE $40,0`,
+    /// then an ordinary `write_octa` overwrites the marker octa `SAVE`
+    /// wrote with a local count chosen so the walk's own arithmetic maps
+    /// `locals_base` back to `ro` itself -- a fixed point, no forged `rO`
+    /// anywhere. Without the saved-local-count bound in
+    /// `save_context_layout`, `call_depth` recomputes this same address
+    /// forever and the test never returns; with it, the count (far above
+    /// the saved `rG`) is rejected and the walk stops at once.
+    #[test]
+    fn test_call_depth_does_not_loop_on_a_marker_mapping_back_to_itself() {
+        let mut mmix = MMix::new();
+
+        // SAVE $40,0 at top level.
+        mmix.write_tetra(0, 0xFA280000);
+        assert!(mmix.execute_instruction());
+        let packed_addr = mmix.get_register(40);
+        let ro = mmix.get_special(SpecialReg::RO);
+        assert_eq!(ro, packed_addr + 8);
+
+        let global_count = 256u64 - 32; // rG = 32 at SAVE time
+        let marker_addr = packed_addr - (SAVE_SPECIALS.len() as u64) * 8 - global_count * 8 - 8;
+
+        // Solve for a count with locals_base == marker_addr - count*8 == ro.
+        let diff = marker_addr.wrapping_sub(ro);
+        assert_eq!(diff % 8, 0, "sanity: layout offsets are all multiples of 8");
+        mmix.write_octa(marker_addr, diff / 8);
+
+        assert_eq!(
+            mmix.call_depth(),
+            0,
+            "the corrupted local count exceeds the saved rG; the walk stops \
+             instead of looping back to where it started"
+        );
+    }
+
+    /// A `SAVE` executed with a nonzero `rL` and `rG != 32` -- the review's
+    /// coverage gap. `call_depth` must step over the whole context, globals
+    /// and locals alike, using the saved (not the machine's current) `rG`.
+    #[test]
+    fn test_call_depth_walks_a_save_context_with_nonzero_rl_and_rg_ne_32() {
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RG, 50);
+        mmix.set_special(SpecialReg::RL, 3);
+        mmix.set_register(0, 0x111);
+        mmix.set_register(1, 0x222);
+        mmix.set_register(2, 0x333);
+
+        // SAVE $60,0 -- $60 is global (rG=50).
+        mmix.write_tetra(0, 0xFA3C0000);
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.call_depth(),
+            0,
+            "the context alone, locals and all, is not a frame"
+        );
+
+        // PUSHJ $0,+1 opens a frame above the context.
+        let pc = mmix.get_pc();
+        mmix.write_tetra(pc, 0xF2000001);
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.call_depth(),
+            1,
+            "the walk steps over the saved rL=3, rG=50 context uncounted \
+             and still finds the one PUSHJ frame beneath it"
+        );
     }
 
     /// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields the
