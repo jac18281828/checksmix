@@ -141,7 +141,11 @@ Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, 
 
 ### rA event flags
 
-Arithmetic operations OR event flags into `rA`; they are never cleared automatically. The bit values match MMIXAL's predefined symbols `D_BIT` … `X_BIT`.
+An arithmetic exception whose enable bit (below) is clear ORs its event flag
+into `rA`; event flags are never cleared automatically. One whose enable bit
+is set trips to its handler instead, and its event flag stays clear — see
+"User trips". The bit values match MMIXAL's predefined symbols `D_BIT` …
+`X_BIT`.
 
 | Flag | rA bit | Kind | Raised when |
 | --- | --- | --- | --- |
@@ -158,6 +162,46 @@ There is no denormalized-operand event: a subnormal operand raises nothing, and 
 
 Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 
+### User trips
+
+`rA`'s low byte holds the eight event flags above; the next byte holds their
+enable bits, one per event flag, in the same `D V W I O U Z X` order. `PUT
+rA,$X` writes both bytes at once (bounded to 18 bits total, the rounding mode
+occupying the top two — see above); enabling an exception is `PUT
+rA,$X` with the matching bit set two places left of its event flag. `PUTI`'s
+operand is a single byte, too narrow to reach the enable byte — set a
+register and use the register form of `PUT`.
+
+`TRIP X,Y,Z` always trips, unconditionally, to the handler at `#00`. An
+arithmetic exception trips only when its enable bit is set; instead of the
+event flag, control transfers to a fixed handler address, `#10` `#20` `#30`
+`#40` `#50` `#60` `#70` `#80` for `D V W I O U Z X` respectively. An
+instruction that raises several exceptions at once trips to the leftmost
+enabled one, in `D V W I O U Z X` order; every other raised exception whose
+enable bit is clear still sets its event flag, but one that is enabled and
+not leftmost is dropped entirely — no trip, no event flag.
+
+A trip — explicit or arithmetic — sets `rB ← $255`, `$255 ← rJ`, `rW` to the
+address of the instruction after the one that trips, and `rX` to `#80000000`
+in the high tetra with that instruction's own opcode/X/Y/Z in the low tetra
+(always negative, since the top bit is set). `rY` and `rZ` take that
+instruction's `$Y` and `$Z`. An arithmetic trip's operands are captured
+before the instruction's own destination write, so `ADD $5,$5,$3` overflowing
+still shows the handler the pre-`ADD` `$5` in `rY`.
+
+`RESUME 0` returns from a handler: if `rX` is negative — always true right
+after a trip — execution continues at `rW`. Otherwise `rX`'s top byte is a
+ropcode; `0` reinserts the instruction in `rX`'s low tetra as if it stood at
+`rW − 4`, then continues at `rW`. Ropcodes `1`–`3` (operand substitution,
+forced-trap emulation, page-table insertion) and `RESUME` with a nonzero `Z`
+(the kernel's `RESUME 1`) have nothing in this VM to act on and halt with a
+diagnostic instead, PC unmoved.
+
+A trip to a vector nothing ever loaded would read zero, which decodes as a
+silent `TRAP 0,0,0` — instead it halts with a diagnostic naming the trip and
+the vector, and a nonzero exit code, after every register above is set so a
+debugger can see why.
+
 ### Epsilon instructions (FCMPE / FUNE / FEQLE)
 
 `FCMPE`, `FUNE`, and `FEQLE` are the "with epsilon" variants of `FCMP`, `FUN`, and `FEQL`. Each compared value `u` has an ε-neighborhood `Nε(u)`, scaled by its own binade: for a normal `u` the radius is `2^(e−1022)·ε`, where `e` is `u`'s raw IEEE-754 biased exponent field; for a denormal it is the fixed `2^−1021·ε`; `Nε(0) = {0}`; `Nε(+∞)` is `{+∞}` when `ε < 1`, every value except `−∞` when `1 ≤ ε < 2`, and every value when `ε ≥ 2` (mirrored for `−∞`). `FCMPE` reports `$Y ≺ $Z` (`-1`), `$Y ∼ $Z` (`0`, meaning `$Y ∈ Nε($Z)` or `$Z ∈ Nε($Y)`), or `$Y ≻ $Z` (`+1`). `FEQLE` reports the stronger `$Y ≈ $Z` (`1`), which requires both memberships to hold, and `0` otherwise.
@@ -167,6 +211,9 @@ Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 ## TRAP interface
 
 `TRAP 0, Code, Z` invokes a system call identified by the predefined symbol *Code*. Register `$255` holds the primary argument or return value; additional arguments use `$0`–`$2` as described below.
+
+`TRAP 0,Trip,Z` (the `Trip` code below) is unrelated to the `TRIP` instruction
+in "User trips": it is the kernel's dynamic-trap entry point, jumping to `rTT`.
 
 | Code | Value | Description | Key registers |
 | --- | --- | --- | --- |

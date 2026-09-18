@@ -94,11 +94,12 @@ macro_rules! muladd_ri {
 /// Macro for int-to-float conversions (register). `$signed` reinterprets `$Z`
 /// as `i64`. `$mnem` names the instruction in the `Y > 4` diagnostic.
 macro_rules! i2f_conv_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
         let mode = match $cpu.resolved_round_mode($y) {
             Ok(m) => m,
             Err(()) => return $cpu.illegal_round_mode($mnem, $y),
         };
+        let y_val = $cpu.get_register($y);
         let z_val = $cpu.get_register($z);
         let negative = $signed && (z_val as i64) < 0;
         let magnitude = if negative {
@@ -107,10 +108,8 @@ macro_rules! i2f_conv_rr {
             z_val
         };
         let (result, flags) = $cpu.int_to_f64_rounded(negative, magnitude, mode);
-        $cpu.raise_fp_flags(flags);
         $cpu.set_register($x, MMix::f64_to_u64(result));
-        $cpu.advance_pc();
-        true
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
@@ -118,11 +117,13 @@ macro_rules! i2f_conv_rr {
 /// converts exactly, so the rounding mode can never change the result — `Y`
 /// is still checked, since `Y > 4` halts regardless.
 macro_rules! i2f_conv_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
         let mode = match $cpu.resolved_round_mode($y) {
             Ok(m) => m,
             Err(()) => return $cpu.illegal_round_mode($mnem, $y),
         };
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
         // Z is 8-bit immediate value to convert
         let v = if $signed {
             ($z as i8) as i64
@@ -130,10 +131,8 @@ macro_rules! i2f_conv_ri {
             $z as i64
         };
         let (result, flags) = $cpu.int_to_f64_rounded(v < 0, v.unsigned_abs(), mode);
-        $cpu.raise_fp_flags(flags);
         $cpu.set_register($x, MMix::f64_to_u64(result));
-        $cpu.advance_pc();
-        true
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
@@ -151,9 +150,11 @@ macro_rules! fcmp_rr {
 
 /// Macro for signed multiplication with overflow detection (register-register)
 macro_rules! mul_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
-        let b = $cpu.get_register($z) as i64;
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
+        let b = z_val as i64;
         let product = (a as i128) * (b as i128);
         $cpu.set_register($x, product as u64);
         let sign_ext = if (product as u64) as i64 >= 0 {
@@ -161,18 +162,21 @@ macro_rules! mul_rr {
         } else {
             -1i64
         };
-        if (product >> 64) as i64 != sign_ext {
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
-        }
-        $cpu.advance_pc();
-        true
+        let flags = if (product >> 64) as i64 != sign_ext {
+            RA_V
+        } else {
+            0
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
 /// Macro for signed multiplication with overflow detection (register-immediate)
 macro_rules! mul_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
         let b = $z as i64;
         let product = (a as i128) * (b as i128);
         $cpu.set_register($x, product as u64);
@@ -181,11 +185,12 @@ macro_rules! mul_ri {
         } else {
             -1i64
         };
-        if (product >> 64) as i64 != sign_ext {
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
-        }
-        $cpu.advance_pc();
-        true
+        let flags = if (product >> 64) as i64 != sign_ext {
+            RA_V
+        } else {
+            0
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
@@ -217,18 +222,20 @@ macro_rules! mulu_ri {
 
 /// Macro for signed division (register-register)
 macro_rules! div_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let dividend = $cpu.get_register($y) as i64;
-        let divisor = $cpu.get_register($z) as i64;
-        if divisor == 0 {
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let dividend = y_val as i64;
+        let divisor = z_val as i64;
+        let flags = if divisor == 0 {
             $cpu.set_register($x, 0);
-            $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_D);
+            $cpu.set_special(SpecialReg::RR, y_val);
+            RA_D
         } else if dividend == i64::MIN && divisor == -1 {
             // The only quotient outside the signed range; it wraps to itself.
             $cpu.set_register($x, i64::MIN as u64);
             $cpu.set_special(SpecialReg::RR, 0);
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+            RA_V
         } else {
             // MMIX floors the quotient, so the remainder takes the divisor's
             // sign; Rust truncates toward zero.
@@ -240,28 +247,30 @@ macro_rules! div_rr {
             }
             $cpu.set_register($x, quotient as u64);
             $cpu.set_special(SpecialReg::RR, remainder as u64);
-        }
-        $cpu.advance_pc();
-        true
+            0
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
 /// Macro for signed division (register-immediate)
 macro_rules! div_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let dividend = $cpu.get_register($y) as i64;
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let dividend = y_val as i64;
         let divisor = $z as i64;
-        if divisor == 0 {
+        let flags = if divisor == 0 {
             $cpu.set_register($x, 0);
-            $cpu.set_special(SpecialReg::RR, $cpu.get_register($y));
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_D);
+            $cpu.set_special(SpecialReg::RR, y_val);
+            RA_D
         } else if dividend == i64::MIN && divisor == -1 {
             // Z is a byte, so the divisor is in `0..=255` and this arm is
             // unreachable from the immediate encoding. It mirrors div_rr,
             // where the quotient leaves the signed range and wraps to itself.
             $cpu.set_register($x, i64::MIN as u64);
             $cpu.set_special(SpecialReg::RR, 0);
-            $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+            RA_V
         } else {
             // MMIX floors the quotient, so the remainder takes the divisor's
             // sign; Rust truncates toward zero.
@@ -273,9 +282,9 @@ macro_rules! div_ri {
             }
             $cpu.set_register($x, quotient as u64);
             $cpu.set_special(SpecialReg::RR, remainder as u64);
-        }
-        $cpu.advance_pc();
-        true
+            0
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
@@ -329,77 +338,85 @@ macro_rules! divu_ri {
 
 /// Macro for signed addition with overflow detection (register-register)
 macro_rules! add_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
-        let b = $cpu.get_register($z) as i64;
-        match a.checked_add(b) {
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
+        let b = z_val as i64;
+        let flags = match a.checked_add(b) {
             Some(result) => {
                 $cpu.set_register($x, result as u64);
+                0
             }
             None => {
                 $cpu.set_register($x, a.wrapping_add(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+                RA_V
             }
-        }
-        $cpu.advance_pc();
-        true
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
 /// Macro for signed addition with overflow detection (register-immediate)
 macro_rules! add_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
         let b = $z as i64;
-        match a.checked_add(b) {
+        let flags = match a.checked_add(b) {
             Some(result) => {
                 $cpu.set_register($x, result as u64);
+                0
             }
             None => {
                 $cpu.set_register($x, a.wrapping_add(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+                RA_V
             }
-        }
-        $cpu.advance_pc();
-        true
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
 /// Macro for signed subtraction with overflow detection (register-register)
 macro_rules! sub_rr {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
-        let b = $cpu.get_register($z) as i64;
-        match a.checked_sub(b) {
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
+        let b = z_val as i64;
+        let flags = match a.checked_sub(b) {
             Some(result) => {
                 $cpu.set_register($x, result as u64);
+                0
             }
             None => {
                 $cpu.set_register($x, a.wrapping_sub(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+                RA_V
             }
-        }
-        $cpu.advance_pc();
-        true
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
 /// Macro for signed subtraction with overflow detection (register-immediate)
 macro_rules! sub_ri {
-    ($cpu:expr, $x:expr, $y:expr, $z:expr) => {{
-        let a = $cpu.get_register($y) as i64;
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
+        let y_val = $cpu.get_register($y);
+        let z_val = $cpu.get_register($z);
+        let a = y_val as i64;
         let b = $z as i64;
-        match a.checked_sub(b) {
+        let flags = match a.checked_sub(b) {
             Some(result) => {
                 $cpu.set_register($x, result as u64);
+                0
             }
             None => {
                 $cpu.set_register($x, a.wrapping_sub(b) as u64);
-                $cpu.set_special(SpecialReg::RA, $cpu.get_special(SpecialReg::RA) | RA_V);
+                RA_V
             }
-        }
-        $cpu.advance_pc();
-        true
+        };
+        return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};
 }
 
@@ -1809,13 +1826,134 @@ impl MMix {
         y_val.is_nan() || z_val.is_nan() || epsilon.is_nan() || epsilon < 0.0
     }
 
-    /// OR `flags` into rA (no-op if flags == 0).
-    #[inline]
-    fn raise_fp_flags(&mut self, flags: u64) {
-        if flags != 0 {
-            let cur = self.get_special(SpecialReg::RA);
-            self.set_special(SpecialReg::RA, cur | flags);
+    /// Route every bit `flags` raises through rA's enable byte
+    /// (gitraptrip.html "General"; §1 rules 1-2). A raised bit whose enable
+    /// is clear sets its event bit and execution continues normally. The
+    /// leftmost raised bit in `D V W I O U Z X` priority whose enable is set
+    /// instead trips to its handler; any other raised bit that is enabled
+    /// but not leftmost is dropped — no event, no trip (owner, 2026-09-18).
+    ///
+    /// `op_byte`, `x`, `y`, `z` are the raising instruction's own fields, and
+    /// `y_val`/`z_val` its `$Y`/`$Z`, captured by the caller before any
+    /// destination write — in `ADD $5,$5,$3` the destination is also a
+    /// source. This call owns the program counter: it advances it when
+    /// nothing trips, and otherwise leaves it to [`MMix::trip`]. Returns
+    /// whether execution continues.
+    #[allow(clippy::too_many_arguments)]
+    fn raise_exceptions(
+        &mut self,
+        flags: u64,
+        op_byte: u8,
+        x: u8,
+        y: u8,
+        z: u8,
+        y_val: u64,
+        z_val: u64,
+    ) -> bool {
+        if flags == 0 {
+            self.advance_pc();
+            return true;
         }
+        let enable = (self.get_special(SpecialReg::RA) >> 8) & 0xFF;
+        let mut tripped = None;
+        let mut events = 0u64;
+        for bit in [RA_D, RA_V, RA_W, RA_I, RA_O, RA_U, RA_Z, RA_X] {
+            if flags & bit == 0 {
+                continue;
+            }
+            if tripped.is_none() && enable & bit != 0 {
+                tripped = Some(bit);
+            } else if enable & bit == 0 {
+                events |= bit;
+            }
+        }
+        if events != 0 {
+            let ra = self.get_special(SpecialReg::RA);
+            self.set_special(SpecialReg::RA, ra | events);
+        }
+        match tripped {
+            Some(bit) => {
+                let (vector, label) = Self::arithmetic_vector(bit);
+                self.trip(vector, label, op_byte, x, y, z, y_val, z_val)
+            }
+            None => {
+                self.advance_pc();
+                true
+            }
+        }
+    }
+
+    /// Handler vector and diagnostic label for a tripped rA exception bit:
+    /// `D V W I O U Z X` to `#10 #20 #30 #40 #50 #60 #70 #80`
+    /// (gitraptrip.html, "TRIP" section).
+    fn arithmetic_vector(bit: u64) -> (u64, &'static str) {
+        match bit {
+            RA_D => (0x10, "D"),
+            RA_V => (0x20, "V"),
+            RA_W => (0x30, "W"),
+            RA_I => (0x40, "I"),
+            RA_O => (0x50, "O"),
+            RA_U => (0x60, "U"),
+            RA_Z => (0x70, "Z"),
+            RA_X => (0x80, "X"),
+            _ => unreachable!("raise_exceptions only ever passes an rA exception bit"),
+        }
+    }
+
+    /// Whether every byte of the tetra at `addr` came from `write_image` (or
+    /// a test's `write_loaded_byte`) rather than reading as zero by default.
+    /// Backs the unloaded-vector halt in [`MMix::trip`]: unassembled memory
+    /// decodes as `TRAP 0,0,0`, a silent zero-exit halt that would hide the
+    /// fault a trip to that vector was supposed to report.
+    fn vector_loaded(&self, addr: u64) -> bool {
+        (0..4).all(|offset| self.loaded.contains(&(addr + offset)))
+    }
+
+    /// Transfer control to a `TRIP` or arithmetic-exception handler
+    /// (gitraptrip.html "TRIP"; §1 rule 3): `rB` takes `$255`, `$255` takes
+    /// `rJ`, `rW` takes the address following the raising instruction, `rX`
+    /// takes `#80000000` with that instruction's own opcode/X/Y/Z, and
+    /// `rY`/`rZ` take `y_val`/`z_val`. PC then jumps to `vector`.
+    ///
+    /// A vector nothing ever loaded halts with a diagnostic naming `label`
+    /// and `vector`, PC unmoved and a nonzero exit code, after every
+    /// register above is set — so a debugger sees why. This does not route
+    /// through [`MMix::reject`]: that helper promises no prior state change,
+    /// which does not hold here by design.
+    #[allow(clippy::too_many_arguments)]
+    fn trip(
+        &mut self,
+        vector: u64,
+        label: &str,
+        op_byte: u8,
+        x: u8,
+        y: u8,
+        z: u8,
+        y_val: u64,
+        z_val: u64,
+    ) -> bool {
+        let next_pc = self.pc.wrapping_add(4);
+        self.set_special(SpecialReg::RB, self.get_register(255));
+        self.set_register(255, self.get_special(SpecialReg::RJ));
+        self.set_special(SpecialReg::RW, next_pc);
+        let rx = 0x8000_0000_0000_0000u64
+            | ((op_byte as u64) << 24)
+            | ((x as u64) << 16)
+            | ((y as u64) << 8)
+            | z as u64;
+        self.set_special(SpecialReg::RX, rx);
+        self.set_special(SpecialReg::RY, y_val);
+        self.set_special(SpecialReg::RZ, z_val);
+        if !self.vector_loaded(vector) {
+            self.exit_code = 1;
+            self.host.diagnostic(&format!(
+                "{label} trip to unloaded vector {vector:#04x} at PC={:#018x}",
+                self.pc
+            ));
+            return false;
+        }
+        self.pc = vector;
+        true
     }
 
     /// True iff `x` is a signaling NaN per IEEE 754 binary64 (exponent all 1s,
@@ -2782,6 +2920,23 @@ impl MMix {
             panic!("Invalid opcode {:#04x} at PC {:#018x}", op_byte, self.pc);
         });
 
+        self.dispatch(opcode, op_byte, x, y, z)
+    }
+
+    /// Decode and run one instruction given its already-resolved opcode and
+    /// fields. Split out of [`MMix::execute_instruction`] so `RESUME` can run
+    /// the instruction carried in `rX` (§1 rule 4) as if fetched at a chosen
+    /// address, with no real memory read.
+    fn dispatch(
+        &mut self,
+        opcode: crate::mmixal::Opcode,
+        op_byte: u8,
+        x: u8,
+        y: u8,
+        z: u8,
+    ) -> bool {
+        use crate::mmixal::Opcode;
+
         // Operands are read before the destination raises rL. A marginal $Y
         // or $Z still reads as zero when the instruction executes.
         //
@@ -2832,14 +2987,17 @@ impl MMix {
             }
             Opcode::FCMP => {
                 // FCMP $X, $Y, $Z - Floating compare. Raises I when an operand is NaN.
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
-                if y_val.is_nan() || z_val.is_nan() {
-                    self.raise_fp_flags(RA_I);
-                }
+                let y_raw = self.get_register(y);
+                let z_raw = self.get_register(z);
+                let y_val = Self::u64_to_f64(y_raw);
+                let z_val = Self::u64_to_f64(z_raw);
+                let flags = if y_val.is_nan() || z_val.is_nan() {
+                    RA_I
+                } else {
+                    0
+                };
                 self.set_register(x, Self::fcmp(y_val, z_val));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_raw, z_raw)
             }
             Opcode::FUN => {
                 // FUN $X, $Y, $Z - Floating unordered (no exception flag)
@@ -2856,17 +3014,17 @@ impl MMix {
                 fcmp_rr!(self, x, y, z, |y: f64, z: f64| if y == z { 1 } else { 0 })
             }
             Opcode::FADD => {
-                let a = Self::u64_to_f64(self.get_register(y));
-                let b = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(y_val);
+                let b = Self::u64_to_f64(z_val);
                 let r_near = a + b;
                 let (_, err) = Self::two_sum(a, b);
                 // `two_sum` is exact for finite operands, so a zero sum with a
                 // zero residual is exact cancellation, not an underflow.
                 let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0);
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FIX => {
                 // FIX $X, Y, $Z - Convert floating to fixed (signed). Raises X
@@ -2875,7 +3033,9 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIX", y),
                 };
-                let f = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let f = Self::u64_to_f64(z_val);
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
@@ -2893,21 +3053,19 @@ impl MMix {
                 if rounded != f && f.is_finite() {
                     flags |= RA_X;
                 }
-                self.raise_fp_flags(flags);
                 self.set_register(x, value);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FSUB => {
-                let a = Self::u64_to_f64(self.get_register(y));
-                let b = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(y_val);
+                let b = Self::u64_to_f64(z_val);
                 let r_near = a - b;
                 let (_, err) = Self::two_sum(a, -b);
                 let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0);
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FIXU => {
                 // FIXU $X, Y, $Z - Convert floating to fixed unsigned
@@ -2915,7 +3073,9 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIXU", y),
                 };
-                let f = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let f = Self::u64_to_f64(z_val);
                 let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
@@ -2930,26 +3090,24 @@ impl MMix {
                 if rounded != f && f.is_finite() {
                     flags |= RA_X;
                 }
-                self.raise_fp_flags(flags);
                 self.set_register(x, value);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FLOT => {
                 // FLOT $X, Y, $Z - Convert fixed to floating (signed)
-                i2f_conv_rr!(self, x, y, z, true, "FLOT")
+                i2f_conv_rr!(self, op_byte, x, y, z, true, "FLOT")
             }
             Opcode::FLOTI => {
                 // FLOTI $X, Y, Z - Convert fixed to floating immediate (signed)
-                i2f_conv_ri!(self, x, y, z, true, "FLOTI")
+                i2f_conv_ri!(self, op_byte, x, y, z, true, "FLOTI")
             }
             Opcode::FLOTU => {
                 // FLOTU $X, Y, $Z - Convert fixed unsigned to floating
-                i2f_conv_rr!(self, x, y, z, false, "FLOTU")
+                i2f_conv_rr!(self, op_byte, x, y, z, false, "FLOTU")
             }
             Opcode::FLOTUI => {
                 // FLOTUI $X, Y, Z - Convert fixed unsigned to floating immediate
-                i2f_conv_ri!(self, x, y, z, false, "FLOTUI")
+                i2f_conv_ri!(self, op_byte, x, y, z, false, "FLOTUI")
             }
             Opcode::SFLOT => {
                 // SFLOT $X, Y, $Z - Convert signed integer to f32 (in f64 register)
@@ -2957,55 +3115,56 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOT", y),
                 };
-                let v = self.get_register(z) as i64;
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let v = z_val as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
-                self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SFLOTI => {
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTI", y),
                 };
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
                 let v = (z as i8) as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
-                self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SFLOTU => {
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTU", y),
                 };
+                let y_val = self.get_register(y);
                 let v = self.get_register(z);
                 let flags = Self::int_to_f64_inexact(v);
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
-                self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, v)
             }
             Opcode::SFLOTUI => {
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTUI", y),
                 };
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
                 let flags = Self::int_to_f64_inexact(z as u64);
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z as f64, mode);
-                self.raise_fp_flags(flags | narrow_flags);
                 self.set_register(x, Self::f64_to_u64(narrowed));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FMUL => {
-                let a = Self::u64_to_f64(self.get_register(y));
-                let b = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(y_val);
+                let b = Self::u64_to_f64(z_val);
                 let r_near = a * b;
                 // FMA gives the exact residual: a*b - r_near.
                 let err = a.mul_add(b, -r_near);
@@ -3014,22 +3173,21 @@ impl MMix {
                 // MIN_POSITIVE the exact product lies below the subnormal range,
                 // so the FMA rounds the residual to zero on a real underflow.
                 let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false);
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FCMPE => {
                 // FCMPE $X, $Y, $Z - the ε-relation: −1 (≺), 0 (∼, an
                 // epsilon-close pair), or +1 (≻). Forces 0 and raises I on
                 // an exceptional input; never both -1/+1 and I.
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
+                let y_raw = self.get_register(y);
+                let z_raw = self.get_register(z);
+                let y_val = Self::u64_to_f64(y_raw);
+                let z_val = Self::u64_to_f64(z_raw);
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
-                let result = if Self::epsilon_exceptional(y_val, z_val, epsilon) {
-                    self.raise_fp_flags(RA_I);
-                    0
-                } else if Self::in_epsilon_neighborhood(y_val, z_val, epsilon)
+                let exceptional = Self::epsilon_exceptional(y_val, z_val, epsilon);
+                let result = if exceptional
+                    || Self::in_epsilon_neighborhood(y_val, z_val, epsilon)
                     || Self::in_epsilon_neighborhood(z_val, y_val, epsilon)
                 {
                     0
@@ -3039,8 +3197,8 @@ impl MMix {
                     1
                 };
                 self.set_register(x, result);
-                self.advance_pc();
-                true
+                let flags = if exceptional { RA_I } else { 0 };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_raw, z_raw)
             }
             Opcode::FUNE => {
                 // FUNE $X, $Y, $Z - reports only whether $Y, $Z, or rE is
@@ -3063,11 +3221,13 @@ impl MMix {
             Opcode::FEQLE => {
                 // FEQLE $X, $Y, $Z - ≈: both directions of Nε membership
                 // must hold, stronger than FCMPE's ∼.
-                let y_val = Self::u64_to_f64(self.get_register(y));
-                let z_val = Self::u64_to_f64(self.get_register(z));
+                let y_raw = self.get_register(y);
+                let z_raw = self.get_register(z);
+                let y_val = Self::u64_to_f64(y_raw);
+                let z_val = Self::u64_to_f64(z_raw);
                 let epsilon = Self::u64_to_f64(self.get_special(SpecialReg::RE));
-                let result = if Self::epsilon_exceptional(y_val, z_val, epsilon) {
-                    self.raise_fp_flags(RA_I);
+                let exceptional = Self::epsilon_exceptional(y_val, z_val, epsilon);
+                let result = if exceptional {
                     0
                 } else if Self::in_epsilon_neighborhood(y_val, z_val, epsilon)
                     && Self::in_epsilon_neighborhood(z_val, y_val, epsilon)
@@ -3077,15 +3237,19 @@ impl MMix {
                     0
                 };
                 self.set_register(x, result);
-                self.advance_pc();
-                true
+                let flags = if exceptional { RA_I } else { 0 };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_raw, z_raw)
             }
             Opcode::FDIV => {
-                let a = Self::u64_to_f64(self.get_register(y));
-                let b = Self::u64_to_f64(self.get_register(z));
-                if b == 0.0 && !a.is_nan() && a != 0.0 {
-                    self.raise_fp_flags(RA_Z);
-                }
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(y_val);
+                let b = Self::u64_to_f64(z_val);
+                let div_by_zero = if b == 0.0 && !a.is_nan() && a != 0.0 {
+                    RA_Z
+                } else {
+                    0
+                };
                 let r_near = a / b;
                 // residual = a - r_near*b is exact via FMA.
                 // sign(true - r_near) = sign(residual) * sign(b).
@@ -3098,37 +3262,36 @@ impl MMix {
                 // A quotient of nonzero finite operands is never mathematically
                 // zero, so a zero result from such operands underflowed.
                 let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false);
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(div_by_zero | flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FSQRT => {
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FSQRT", y),
                 };
-                let a = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(z_val);
                 let r_near = a.sqrt();
                 // residual = a - r_near^2, exact via FMA.
                 // sign(true - r_near) = sign(residual) when r_near >= 0 (always
                 // true here since sqrt returns ≥0 or NaN).
                 let err = (-r_near).mul_add(r_near, a);
                 let (r, flags) = self.finalize_fp_unop(a, r_near, err, mode);
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FREM => {
                 // FREM $X, $Y, $Z - IEEE 754 floating remainder.
-                let a = Self::u64_to_f64(self.get_register(y));
-                let b = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let a = Self::u64_to_f64(y_val);
+                let b = Self::u64_to_f64(z_val);
                 let r = Self::ieee_remainder(a, b);
-                self.raise_fp_flags(Self::fp_arith_flags(a, b, r));
+                let flags = Self::fp_arith_flags(a, b, r);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FINT => {
                 // FINT $X, Y, $Z — Integerize under Y's rounding-mode
@@ -3137,7 +3300,9 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FINT", y),
                 };
-                let v = Self::u64_to_f64(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let v = Self::u64_to_f64(z_val);
                 let r = if v.is_finite() {
                     Self::round_with_mode(v, mode)
                 } else {
@@ -3149,10 +3314,8 @@ impl MMix {
                 } else if v.is_finite() && r != v {
                     flags |= RA_X;
                 }
-                self.raise_fp_flags(flags);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
 
             // Load instructions
@@ -3586,28 +3749,34 @@ impl MMix {
             // Store instructions
             Opcode::STB => {
                 // STB $X, $Y, $Z - Store byte (with overflow check)
-                let addr = self.get_register(y).wrapping_add(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z_val);
                 let value = self.get_register(x);
                 // Check if value fits in signed byte range [-128, 127]
                 let signed_value = value as i64;
-                if !(-128..=127).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-128..=127).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_byte(addr, value as u8);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STBI => {
                 // STB $X, $Y, Z - Store byte immediate (with overflow check)
-                let addr = self.get_register(y).wrapping_add(z as u64);
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z as u64);
                 let value = self.get_register(x);
                 let signed_value = value as i64;
-                if !(-128..=127).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-128..=127).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_byte(addr, value as u8);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STBU => {
                 // STBU $X, $Y, $Z - Store byte unsigned (no overflow check)
@@ -3627,27 +3796,33 @@ impl MMix {
             }
             Opcode::STW => {
                 // STW $X, $Y, $Z - Store wyde (with overflow check)
-                let addr = self.get_register(y).wrapping_add(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z_val);
                 let value = self.get_register(x);
                 let signed_value = value as i64;
-                if !(-32768..=32767).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-32768..=32767).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_wyde(addr, value as u16);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STWI => {
                 // STW $X, $Y, Z - Store wyde immediate (with overflow check)
-                let addr = self.get_register(y).wrapping_add(z as u64);
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z as u64);
                 let value = self.get_register(x);
                 let signed_value = value as i64;
-                if !(-32768..=32767).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-32768..=32767).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_wyde(addr, value as u16);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STWU => {
                 // STWU $X, $Y, $Z - Store wyde unsigned (no overflow check)
@@ -3667,27 +3842,33 @@ impl MMix {
             }
             Opcode::STT => {
                 // STT $X, $Y, $Z - Store tetra (with overflow check)
-                let addr = self.get_register(y).wrapping_add(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z_val);
                 let value = self.get_register(x);
                 let signed_value = value as i64;
-                if !(-2147483648..=2147483647).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-2147483648..=2147483647).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_tetra(addr, value as u32);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STTI => {
                 // STT $X, $Y, Z - Store tetra immediate (with overflow check)
-                let addr = self.get_register(y).wrapping_add(z as u64);
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z as u64);
                 let value = self.get_register(x);
                 let signed_value = value as i64;
-                if !(-2147483648..=2147483647).contains(&signed_value) {
-                    self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                }
+                let flags = if !(-2147483648..=2147483647).contains(&signed_value) {
+                    RA_V
+                } else {
+                    0
+                };
                 self.write_tetra(addr, value as u32);
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STTU => {
                 // STTU $X, $Y, $Z - Store tetra unsigned (no overflow check)
@@ -3740,24 +3921,24 @@ impl MMix {
             Opcode::STSF => {
                 // STSF $X, $Y, $Z - Narrow $X to f32 using rA mode and store at $Y+$Z.
                 // No Y-operand override: STSF takes no rounding-mode field.
-                let addr = self.get_register(y).wrapping_add(self.get_register(z));
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z_val);
                 let value = Self::u64_to_f64(self.get_register(x));
                 let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
-                self.raise_fp_flags(flags);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STSFI => {
-                let addr = self.get_register(y).wrapping_add(z as u64);
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let addr = y_val.wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
                 let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
                 let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
-                self.raise_fp_flags(flags);
                 self.write_tetra(addr, (narrowed as f32).to_bits());
-                self.advance_pc();
-                true
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::STHT => {
                 // STHT $X, $Y, $Z - Store high tetra
@@ -3854,11 +4035,11 @@ impl MMix {
             // Arithmetic instructions - MUL/DIV opcodes 0x18-0x1F
             Opcode::MUL => {
                 // MUL $X, $Y, $Z - Multiply signed with overflow
-                mul_rr!(self, x, y, z)
+                mul_rr!(self, op_byte, x, y, z)
             }
             Opcode::MULI => {
                 // MULI $X, $Y, Z - Multiply signed immediate with overflow
-                mul_ri!(self, x, y, z)
+                mul_ri!(self, op_byte, x, y, z)
             }
             Opcode::MULU => {
                 // MULU $X, $Y, $Z - Multiply unsigned
@@ -3870,11 +4051,11 @@ impl MMix {
             }
             Opcode::DIV => {
                 // DIV $X, $Y, $Z - Divide signed
-                div_rr!(self, x, y, z)
+                div_rr!(self, op_byte, x, y, z)
             }
             Opcode::DIVI => {
                 // DIVI $X, $Y, Z - Divide signed immediate
-                div_ri!(self, x, y, z)
+                div_ri!(self, op_byte, x, y, z)
             }
             Opcode::DIVU => {
                 // DIVU $X, $Y, $Z - Divide unsigned
@@ -3887,20 +4068,20 @@ impl MMix {
             // ADD/SUB and variants - opcodes 0x20-0x2F
             Opcode::ADD => {
                 // ADD $X, $Y, $Z - Add signed with overflow check
-                add_rr!(self, x, y, z)
+                add_rr!(self, op_byte, x, y, z)
             }
             Opcode::ADDI => {
                 // ADDI $X, $Y, Z - Add signed immediate with overflow check
-                add_ri!(self, x, y, z)
+                add_ri!(self, op_byte, x, y, z)
             }
             // 0x22 and 0x23 are ADDU/ADDUI, already implemented above
             Opcode::SUB => {
                 // SUB $X, $Y, $Z - Subtract signed with overflow check
-                sub_rr!(self, x, y, z)
+                sub_rr!(self, op_byte, x, y, z)
             }
             Opcode::SUBI => {
                 // SUBI $X, $Y, Z - Subtract signed immediate with overflow check
-                sub_ri!(self, x, y, z)
+                sub_ri!(self, op_byte, x, y, z)
             }
             Opcode::SUBU => {
                 // SUBU $X, $Y, $Z
@@ -3962,39 +4143,43 @@ impl MMix {
             Opcode::NEG => {
                 // NEG $X, Y, $Z - Negate with overflow check
                 // Y is immediate constant, $Z is register
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
                 let a = y as i64;
-                let b = self.get_register(z) as i64;
-                match a.checked_sub(b) {
+                let b = z_val as i64;
+                let flags = match a.checked_sub(b) {
                     Some(result) => {
                         self.set_register(x, result as u64);
+                        0
                     }
                     None => {
                         self.set_register(x, a.wrapping_sub(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
+                        RA_V
                     }
-                }
-                self.advance_pc();
-                true
+                };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::NEGI => {
                 // NEG $X, Y, Z - Negate immediate with overflow check
                 // Both Y and Z are immediate constants
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
                 let a = y as i64;
                 let b = z as i64;
-                match a.checked_sub(b) {
+                let flags = match a.checked_sub(b) {
                     Some(result) => {
                         self.set_register(x, result as u64);
+                        0
                     }
                     // Y and Z are bytes, so a - b lies in [-255, 255] and this
                     // arm is unreachable from the immediate encoding. It mirrors
                     // NEG, where s($Z) can carry the difference out of range.
                     None => {
                         self.set_register(x, a.wrapping_sub(b) as u64);
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
+                        RA_V
                     }
-                }
-                self.advance_pc();
-                true
+                };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::NEGU => {
                 // NEGU $X, Y, $Z - Negate unsigned
@@ -4015,44 +4200,46 @@ impl MMix {
             // Shift instructions - opcodes 0x38-0x3F
             Opcode::SL => {
                 // SL $X, $Y, $Z - Shift left with overflow check
-                let val_y = self.get_register(y) as i64;
-                let shift = self.get_register(z);
-                if shift >= 64 {
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let val_y = y_val as i64;
+                let shift = z_val;
+                let flags = if shift >= 64 {
                     // Shift by 64 or more: result is 0, overflow unless Y was 0
-                    if val_y != 0 {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                    }
                     self.set_register(x, 0);
+                    if val_y != 0 { RA_V } else { 0 }
                 } else {
                     let result = (val_y as u64) << shift;
+                    self.set_register(x, result);
                     // Overflow exactly when s($Y)·2^u($Z) leaves the signed
                     // range, which is when shifting back does not restore $Y.
                     if ((result as i64) >> shift) != val_y {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
+                        RA_V
+                    } else {
+                        0
                     }
-                    self.set_register(x, result);
-                }
-                self.advance_pc();
-                true
+                };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SLI => {
                 // SLI $X, $Y, Z - Shift left immediate with overflow check
-                let val_y = self.get_register(y) as i64;
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                let val_y = y_val as i64;
                 let shift = z as u64;
-                if shift >= 64 {
-                    if val_y != 0 {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                    }
+                let flags = if shift >= 64 {
                     self.set_register(x, 0);
+                    if val_y != 0 { RA_V } else { 0 }
                 } else {
                     let result = (val_y as u64) << shift;
-                    if ((result as i64) >> shift) != val_y {
-                        self.set_special(SpecialReg::RA, self.get_special(SpecialReg::RA) | RA_V);
-                    }
                     self.set_register(x, result);
-                }
-                self.advance_pc();
-                true
+                    if ((result as i64) >> shift) != val_y {
+                        RA_V
+                    } else {
+                        0
+                    }
+                };
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SLU => {
                 // SLU $X, $Y, $Z - Shift left unsigned (no overflow check)
@@ -4872,11 +5059,53 @@ impl MMix {
                 }
             }
             Opcode::RESUME => {
-                // RESUME - Resume after interrupt
-                // This is a complex instruction that would restore full processor state
-                // For now, just continue execution
-                self.advance_pc();
-                true
+                // RESUME Z (gitraptrip.html "RESUME"; §1 rule 4): X and Y
+                // are always zero, so only Z varies. Z != 0 is RESUME 1,
+                // which restores from the kernel's rWW/rXX/rYY/rZZ and is
+                // privileged. rX < 0 resumes at rW. Otherwise rX's top byte
+                // is the ropcode: 0 inserts rX's instruction as if it stood
+                // at rW-4 and resumes at rW; 1 substitutes rY/rZ into an
+                // interruptible instruction; 2 serves forced-trap emulation;
+                // 3 inserts a page-table entry. checksmix has no
+                // interruptible instruction, no emulated opcode and no page
+                // table, so ropcodes 1-3 never arise legitimately. Each
+                // unsupported form halts through the shared MMix::reject
+                // path: diagnostic, false, PC unmoved.
+                if z != 0 {
+                    return self.reject(&format!(
+                        "RESUME {z}: privileged form (RESUME 1) at PC={:#018x}",
+                        self.pc
+                    ));
+                }
+                let rx = self.get_special(SpecialReg::RX);
+                if (rx as i64) < 0 {
+                    self.pc = self.get_special(SpecialReg::RW);
+                    return true;
+                }
+                let ropcode = rx >> 56;
+                if ropcode != 0 {
+                    return self.reject(&format!(
+                        "RESUME: ropcode {ropcode} at PC={:#018x} \
+                         (only ropcode 0 and rX < 0 are supported)",
+                        self.pc
+                    ));
+                }
+                let word = rx as u32;
+                let ins_op = (word >> 24) as u8;
+                let ins_x = (word >> 16) as u8;
+                let ins_y = (word >> 8) as u8;
+                let ins_z = word as u8;
+                let ins_opcode = match Opcode::try_from(ins_op) {
+                    Ok(op) => op,
+                    Err(_) => {
+                        return self.reject(&format!(
+                            "RESUME: invalid opcode {ins_op:#04x} in rX at PC={:#018x}",
+                            self.pc
+                        ));
+                    }
+                };
+                self.pc = self.get_special(SpecialReg::RW).wrapping_sub(4);
+                self.dispatch(ins_opcode, ins_op, ins_x, ins_y, ins_z)
             }
             Opcode::SAVE => {
                 // SAVE $X,0 - push the machine's context onto the register
@@ -4920,11 +5149,11 @@ impl MMix {
                 true
             }
             Opcode::TRIP => {
-                // TRIP XYZ - Software interrupt
-                // For now, just halt
-                self.host
-                    .diagnostic(&format!("TRIP instruction at PC={:#018x}", self.pc));
-                false
+                // TRIP X,Y,Z: user trip to the handler at #00 (trip.html;
+                // §1 rule 3).
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                self.trip(0x00, "TRIP", op_byte, x, y, z, y_val, z_val)
             }
         }
     }
@@ -6098,14 +6327,21 @@ mod tests {
     }
 
     #[test]
-    fn test_trip_halts() {
-        let mut mmix = MMix::new();
-        // TRIP instruction should halt execution
-        mmix.write_tetra(0, 0xFF000000);
-
+    fn test_trip_to_unloaded_vector_halts_with_diagnostic_and_nonzero_exit() {
+        // #00 reads zero, which decodes as TRAP 0,0,0 — the case the
+        // unloaded-vector halt exists to catch instead of hiding.
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_pc(0x100);
+        mmix.write_tetra(0x100, 0xFF000000); // TRIP 0,0,0
         let result = mmix.execute_instruction();
-        assert!(!result); // Should halt
-        assert_eq!(mmix.get_pc(), 0); // PC not advanced
+        assert!(!result);
+        assert_eq!(mmix.get_pc(), 0x100, "PC stays on the tripping instruction");
+        assert_eq!(mmix.get_exit_code(), 1);
+        // Registers are set before the halt is detected, so a debugger sees why.
+        assert_eq!(mmix.get_special(SpecialReg::RW), 0x104);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("TRIP"));
     }
 
     // Load instruction tests
@@ -9272,12 +9508,35 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_pc(), 4); // PC advances normally
     }
 
+    /// Write `value`'s four bytes as loaded, the way `write_image` does, so a
+    /// trip landing here does not read the address as an unloaded vector.
+    fn load_tetra(mmix: &mut MMix, addr: u64, value: u32) {
+        for i in 0..4 {
+            let shift = 24 - 8 * i;
+            mmix.write_loaded_byte(addr + i as u64, (value >> shift) as u8);
+        }
+    }
+
     #[test]
     fn test_trip() {
+        // TRIP X,Y,Z sets rX/rY/rZ/rB/$255/rW (§1 rule 3) and lands at #00.
         let mut mmix = MMix::new();
-        // TRIP - software interrupt (halts in our implementation)
-        mmix.write_tetra(0, 0xFF000000); // TRIP 0,0,0
-        assert!(!mmix.execute_instruction()); // Should return false (halt)
+        load_tetra(&mut mmix, 0x00, 0xFD000000); // vector loaded: SWYM
+        mmix.set_pc(0x100);
+        mmix.set_register(255, 0xAAAA);
+        mmix.set_register(2, 0x2222);
+        mmix.set_register(3, 0x3333);
+        mmix.set_special(SpecialReg::RJ, 0xBEEF);
+        mmix.write_tetra(0x100, 0xFF110203); // TRIP X=0x11, Y=2, Z=3
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x00);
+        assert_eq!(mmix.get_special(SpecialReg::RW), 0x104);
+        assert_eq!(mmix.get_special(SpecialReg::RX), 0x80000000FF110203);
+        assert_eq!(mmix.get_special(SpecialReg::RY), 0x2222);
+        assert_eq!(mmix.get_special(SpecialReg::RZ), 0x3333);
+        assert_eq!(mmix.get_special(SpecialReg::RB), 0xAAAA);
+        assert_eq!(mmix.get_register(255), 0xBEEF);
     }
 
     #[test]
@@ -9290,12 +9549,227 @@ Main\tSETI\t$1,100
     }
 
     #[test]
-    fn test_resume() {
+    fn test_resume_with_negative_rx_continues_at_rw() {
         let mut mmix = MMix::new();
-        // RESUME - resume after interrupt
-        mmix.write_tetra(0, 0xF9000000); // RESUME
+        mmix.set_pc(0x100);
+        mmix.set_special(SpecialReg::RX, 0x8000000000000000); // negative
+        mmix.set_special(SpecialReg::RW, 0x200);
+        mmix.write_tetra(0x100, 0xF9000000); // RESUME 0
+
         assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(mmix.get_pc(), 0x200);
+    }
+
+    #[test]
+    fn test_resume_ropcode_0_runs_rxs_instruction_and_continues_at_rw() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_register(2, 10);
+        mmix.set_register(3, 20);
+        // rX (nonnegative, ropcode 0): ADD $1,$2,$3.
+        mmix.set_special(SpecialReg::RX, 0x20010203);
+        mmix.set_special(SpecialReg::RW, 0x300);
+        mmix.write_tetra(0x100, 0xF9000000); // RESUME 0
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_register(1), 30);
+        assert_eq!(mmix.get_pc(), 0x300);
+    }
+
+    #[test]
+    fn test_resume_ropcodes_1_to_3_halt() {
+        for ropcode in 1u64..=3 {
+            let (host, handle) = CaptureHost::new();
+            let mut mmix = MMix::with_host(host);
+            mmix.set_pc(0x100);
+            mmix.set_special(SpecialReg::RX, ropcode << 56);
+            mmix.set_special(SpecialReg::RW, 0x300);
+            mmix.write_tetra(0x100, 0xF9000000); // RESUME 0
+
+            assert!(!mmix.execute_instruction(), "ropcode {ropcode}");
+            assert_eq!(mmix.get_pc(), 0x100, "PC unmoved for ropcode {ropcode}");
+            assert_eq!(handle.diagnostics().len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_resume_with_nonzero_z_halts() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_pc(0x100);
+        mmix.write_tetra(0x100, 0xF9000001); // RESUME 1 - privileged
+
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x100, "PC stays on the rejected instruction");
+        assert_eq!(handle.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn test_divide_check_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x10, 0xFD000000); // D's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_D << 8); // enable D only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, 7);
+        mmix.set_register(3, 0);
+        mmix.write_tetra(0x100, 0x1C010203); // DIV $1,$2,$3
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x10, "trips to D's vector");
+        assert_eq!(
+            mmix.get_register(1),
+            0,
+            "DIV's own zero result is written first"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RY), 7);
+        assert_eq!(
+            mmix.get_special(SpecialReg::RA) & RA_D,
+            0,
+            "a tripped exception's own event bit stays clear"
+        );
+    }
+
+    #[test]
+    fn test_integer_overflow_trips_and_the_handler_sees_the_pre_write_operand() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x20, 0xFD000000); // V's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_V << 8); // enable V only
+        mmix.set_pc(0x100);
+        mmix.set_register(5, i64::MAX as u64);
+        mmix.set_register(3, 1);
+        mmix.write_tetra(0x100, 0x20050503); // ADD $5,$5,$3 - destination aliases a source
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x20);
+        assert_eq!(
+            mmix.get_register(5),
+            i64::MIN as u64,
+            "the wrapped result is written before the trip"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RY),
+            i64::MAX as u64,
+            "rY holds $5's value from before ADD overwrote it"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_V, 0);
+    }
+
+    #[test]
+    fn test_float_to_fix_overflow_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x30, 0xFD000000); // W's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_W << 8); // enable W only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, f64::INFINITY.to_bits());
+        mmix.write_tetra(0x100, 0x05010002); // FIX $1,0,$2
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x30);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_W, 0);
+    }
+
+    #[test]
+    fn test_invalid_operation_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x40, 0xFD000000); // I's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_I << 8); // enable I only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, f64::NAN.to_bits());
+        mmix.set_register(3, 0);
+        mmix.write_tetra(0x100, 0x01010203); // FCMP $1,$2,$3 - $2 is NaN
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x40);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_I, 0);
+    }
+
+    #[test]
+    fn test_floating_overflow_trips_and_the_unenabled_inexact_still_sets_its_event_bit() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x50, 0xFD000000); // O's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_O << 8); // enable O only, not X
+        mmix.set_pc(0x100);
+        mmix.set_register(2, f64::MAX.to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.write_tetra(0x100, 0x10010203); // FMUL $1,$2,$3 overflows (raises O and X)
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x50);
+        let ra = mmix.get_special(SpecialReg::RA);
+        assert_eq!(ra & RA_O, 0, "O tripped: its own event bit stays clear");
+        assert_eq!(
+            ra & RA_X,
+            RA_X,
+            "X was raised but not enabled: it still sets its event bit"
+        );
+    }
+
+    #[test]
+    fn test_two_enabled_exceptions_trip_to_the_leftmost_and_drop_the_other_silently() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x50, 0xFD000000); // O's vector loaded
+        mmix.set_special(SpecialReg::RA, (RA_O << 8) | (RA_X << 8)); // both enabled
+        mmix.set_pc(0x100);
+        mmix.set_register(2, f64::MAX.to_bits());
+        mmix.set_register(3, f64::MAX.to_bits());
+        mmix.write_tetra(0x100, 0x10010203); // FMUL $1,$2,$3 overflows (raises O and X)
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(
+            mmix.get_pc(),
+            0x50,
+            "trips to O, the leftmost enabled exception"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RA) & 0xFF,
+            0,
+            "O tripped and X was enabled but not leftmost: neither sets an event bit"
+        );
+    }
+
+    #[test]
+    fn test_floating_underflow_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x60, 0xFD000000); // U's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_U << 8); // enable U only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
+        mmix.set_register(3, f64::MIN_POSITIVE.to_bits());
+        mmix.write_tetra(0x100, 0x10010203); // FMUL $1,$2,$3 underflows to zero
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x60);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_U, 0);
+    }
+
+    #[test]
+    fn test_floating_divide_by_zero_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x70, 0xFD000000); // Z's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_Z << 8); // enable Z only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 0.0f64.to_bits());
+        mmix.write_tetra(0x100, 0x14010203); // FDIV $1,$2,$3
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x70);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_Z, 0);
+    }
+
+    #[test]
+    fn test_floating_inexact_trips_when_enabled() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x80, 0xFD000000); // X's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_X << 8); // enable X only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, 1.0f64.to_bits());
+        mmix.set_register(3, 1e-30f64.to_bits());
+        mmix.write_tetra(0x100, 0x04010203); // FADD $1,$2,$3 rounds 1e-30 away
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x80);
+        assert_eq!(mmix.get_special(SpecialReg::RA) & RA_X, 0);
     }
 
     #[test]

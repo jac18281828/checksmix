@@ -2,6 +2,16 @@
 % This program tests all major instruction families
 % It validates itself - if it completes without error, all tests passed
 
+% User trip handlers (gitraptrip.html). TRIP's vector is #00; an enabled
+% arithmetic exception's is #10-#80 by DVWIOUZX (V is #20). Each vector just
+% jumps to its handler, placed with the rest of the program below, so the
+% handler is not squeezed into the 32 bytes before the next vector.
+        LOC     #00
+TripVector      JMP     TripHandler
+
+        LOC     #20
+ArithVector     JMP     ArithHandler
+
         LOC     #100
 
 % Special registers (MMIX standard numbering)
@@ -2349,24 +2359,81 @@ Test185c
         JMP     TestFail
 
 % ========================================
-% Test 186: RESUME - Resume from context
-% Note: RESUME is typically used for exception handling.
-% For testing coverage, we include the instruction even though
-% it may not execute in normal circumstances.
+% Test 186: TRIP, an enabled arithmetic exception, and RESUME
+% TripVector (#00) and ArithVector (#20) jump to the handlers below; each
+% checks the registers it sees, records a marker, and RESUMEs. TRIP's rX is
+% always negative, so RESUME 0 in a handler just continues at rW - the
+% instruction after the one that tripped.
 % ========================================
 Test186 ADDUI   TestNum,TestNum,1
-        % RESUME instruction format: RESUME X (or RESUME 0 for simple test)
-        % In a real scenario, RESUME would resume from a trap/interrupt
-        % For coverage testing, we just need to show the instruction exists
-        % We'll jump over it to avoid potential issues
-        JMP     Test186Skip
-        RESUME  0               % This instruction exists for coverage
-Test186Skip
-        SETI Result,1
-        SETI Expect,1
-        CMP     Temp,Result,Expect
+        SETI    $70,0             % set to 1 by TripHandler on success
+        SETI    $10,#1234
+        SETI    $11,#5678
+        TRIP    1,10,11           % X=1, Y=10 ($10), Z=11 ($11)
+        SETI    Expect,1
+        CMP     Temp,$70,Expect
+        PBZ     Temp,Test186Arith
+        JMP     TestFail
+
+Test186Arith
+        SETI    $71,0             % set to 1 by ArithHandler on success
+        SETI    $20,#7FFFFFFFFFFFFFFF % i64::MAX
+        SETI    $21,1
+        SETI    $22,#4000         % enable V (RA_V<<8) only; PUTI's Z is a byte
+        PUT     rA,$22
+        ADD     $20,$20,$21       % overflows; destination aliases a source
+        PUTI    rA,0              % disable again before later tests run
+        SETI    Expect,1
+        CMP     Temp,$71,Expect
+        PBZ     Temp,Test186Resume
+        JMP     TestFail
+
+Test186Resume
+        SETI    $30,0
+        SETI    $31,10
+        SETI    $32,32
+        GETA    $33,Test186Cont
+        PUT     rW,$33
+        SETI    $34,#201E1F20     % ADD $30,$31,$32, ropcode 0 in the top byte
+        PUT     rX,$34
+        RESUME  0
+Test186Cont
+        SETI    Expect,42
+        CMP     Temp,$30,Expect
         PBZ     Temp,Test187
         JMP     TestFail
+
+TripHandler
+        GET     $72,rX
+        SETI    $73,#80000000FF010A0B
+        CMP     $74,$72,$73
+        PBNZ    $74,TripHandlerFail
+        GET     $72,rY
+        SETI    $73,#1234
+        CMP     $74,$72,$73
+        PBNZ    $74,TripHandlerFail
+        GET     $72,rZ
+        SETI    $73,#5678
+        CMP     $74,$72,$73
+        PBNZ    $74,TripHandlerFail
+        SETI    $70,1
+        RESUME  0
+TripHandlerFail
+        RESUME  0
+
+ArithHandler
+        GET     $75,rX
+        SETI    $76,#8000000020141415
+        CMP     $77,$75,$76
+        PBNZ    $77,ArithHandlerFail
+        GET     $75,rY
+        SETI    $76,#7FFFFFFFFFFFFFFF
+        CMP     $77,$75,$76
+        PBNZ    $77,ArithHandlerFail
+        SETI    $71,1
+        RESUME  0
+ArithHandlerFail
+        RESUME  0
 
 % ========================================
 % Test 187: FCMPE - Floating compare with epsilon (rE)
@@ -3822,10 +3889,6 @@ Test280Callee
 % ========================================
 % The following grammar-defined mnemonics are deliberately not exercised
 % above:
-%   TRIP    - Opcode::TRIP unconditionally returns false ("for now, just
-%             halt") with no pass/fail signal this harness can observe;
-%             unlike HALT it has no existing intentional termination point
-%             to piggyback on.
 %   SYNCD, SYNCDI, SYNCID, SYNCIDI - each handler is exactly
 %             "self.advance_pc(); true" with no observable state change at
 %             all, so no operand choice can make a CMP/PBZ against them
