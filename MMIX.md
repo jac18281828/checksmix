@@ -196,9 +196,26 @@ halts with a diagnostic. A legal `PUT rG` zeroes every register between the
 old and new `rG` — global to local/marginal when raising, local/marginal to
 global when lowering.
 
-`UNSAVE` restores `rL` and `rG` from memory. A raw write to either register
-moves its boundary without clearing anything; a register it strands keeps its
-old contents until something claims it.
+`SAVE $X, 0` requires `X` global (`X ≥ rG`); a local `X` halts with a
+diagnostic. It pushes a context onto the register stack at the current `rO`,
+growing upward, in this order: the `rL` local registers `$0..$(rL-1)`, a
+marker octa holding `rL`, the global registers `$rG..$255`, the twelve
+special registers `rB rD rE rH rJ rM rR rP rW rX rY rZ`, and one packed octa
+holding `rG` in its top byte and `rA` in its low bits. `$X` receives the
+packed octa's address; `rO` and `rS` both become the address of the byte
+after it, and `rL` becomes 0. `rJ` is saved as data among the specials, never
+overwritten — `SAVE` opens no call frame.
+
+`UNSAVE 0, $Z` restores a context whose topmost (packed) octa `$Z` addresses,
+validating it whole before changing anything: a packed `rG` outside
+`32..=255`, a packed `rA` above the widest legal value, or a saved local
+count greater than the packed `rG` all halt with a diagnostic and the
+machine unchanged. Otherwise every saved register restores, `rL` becomes the
+saved local count, and `rO = rS` land at the address of the first restored
+local — where `rO` stood before the matching `SAVE`.
+
+Both instructions ignore their must-be-zero fields (`SAVE`'s `Y` and `Z`,
+`UNSAVE`'s `X` and `Y`) rather than rejecting a nonzero value there.
 
 Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
 through `$X`. For an instruction whose `X` field is a general-register
@@ -493,8 +510,8 @@ Measured on MMIXware:
 | `GET` | `GET $X, Z` | Read special register Z into `$X` |
 | `PUT` | `PUT X, $Z` | Write `$Z` into special register X |
 | `PUTI` | `PUT X, Z` | Write immediate Z into special register X |
-| `SAVE` | `SAVE $X, 0` | Save register stack to memory |
-| `UNSAVE` | `UNSAVE 0, $Z` | Restore register stack from memory |
+| `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address |
+| `UNSAVE` | `UNSAVE 0, $Z` | Restore the context `$Z` addresses from the register stack |
 | `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
 | `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
 | `HALT` | `HALT` | checksmix extension — encodes as `TRAP 0,Halt,0` |

@@ -596,6 +596,23 @@ impl SpecialReg {
     }
 }
 
+/// The special registers `SAVE` writes to the register stack and `UNSAVE`
+/// reads back, in the order the SAVE page's diagram lays them out.
+const SAVE_SPECIALS: [SpecialReg; 12] = [
+    SpecialReg::RB,
+    SpecialReg::RD,
+    SpecialReg::RE,
+    SpecialReg::RH,
+    SpecialReg::RJ,
+    SpecialReg::RM,
+    SpecialReg::RR,
+    SpecialReg::RP,
+    SpecialReg::RW,
+    SpecialReg::RX,
+    SpecialReg::RY,
+    SpecialReg::RZ,
+];
+
 /// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
 /// the wall clock, and diagnostic messages that today go to stderr.
 ///
@@ -1145,6 +1162,16 @@ impl MMix {
         self.special_regs[reg as usize] = value;
     }
 
+    /// Emit a diagnostic and report the halt `execute_instruction` should
+    /// propagate: no register or memory change and no PC advance, on the
+    /// caller's promise that it made none before calling this. Every
+    /// `PUT`/`PUTI` rejection and `SAVE`/`UNSAVE`'s validation failures route
+    /// through this one diagnose-then-refuse path.
+    fn reject(&mut self, message: &str) -> bool {
+        self.host.diagnostic(message);
+        false
+    }
+
     /// Apply a `PUT`/`PUTI` write, enforcing every rule MMIX places on the
     /// destination special register
     /// (mmix.cs.hm.edu/doc/instructions/put.html). `X ≥ 32` names no
@@ -1156,11 +1183,10 @@ impl MMix {
     /// write succeeded.
     fn put_special(&mut self, mnemonic: &str, x: u8, value: u64) -> bool {
         let Some(reg) = SpecialReg::from_u8(x) else {
-            self.host.diagnostic(&format!(
+            return self.reject(&format!(
                 "{mnemonic} X={x},{value}: no special register above 31 at PC={:#018x}",
                 self.pc
             ));
-            return false;
         };
         match reg {
             SpecialReg::RC
@@ -1170,31 +1196,24 @@ impl MMix {
             | SpecialReg::RT
             | SpecialReg::RU
             | SpecialReg::RV
-            | SpecialReg::RTT => {
-                self.host.diagnostic(&format!(
-                    "{mnemonic} {},{value}: privileged-operation interrupt at PC={:#018x}",
-                    reg.name(),
-                    self.pc
-                ));
-                false
-            }
-            SpecialReg::RN | SpecialReg::RO | SpecialReg::RS => {
-                self.host.diagnostic(&format!(
-                    "{mnemonic} {},{value}: illegal-instruction interrupt at PC={:#018x}",
-                    reg.name(),
-                    self.pc
-                ));
-                false
-            }
+            | SpecialReg::RTT => self.reject(&format!(
+                "{mnemonic} {},{value}: privileged-operation interrupt at PC={:#018x}",
+                reg.name(),
+                self.pc
+            )),
+            SpecialReg::RN | SpecialReg::RO | SpecialReg::RS => self.reject(&format!(
+                "{mnemonic} {},{value}: illegal-instruction interrupt at PC={:#018x}",
+                reg.name(),
+                self.pc
+            )),
             SpecialReg::RG => {
                 let rl = self.get_special(SpecialReg::RL);
                 if value < 32 || value < rl || value > 255 {
-                    self.host.diagnostic(&format!(
+                    return self.reject(&format!(
                         "{mnemonic} rG,{value}: illegal-instruction interrupt \
                          (rG must be 32-255 and >= rL={rl}) at PC={:#018x}",
                         self.pc
                     ));
-                    return false;
                 }
                 self.put_rg(value);
                 true
@@ -1203,14 +1222,11 @@ impl MMix {
                 self.put_rl(value);
                 true
             }
-            SpecialReg::RA if value > RA_MAX => {
-                self.host.diagnostic(&format!(
-                    "{mnemonic} rA,{value:#x}: illegal-instruction interrupt \
-                     (rA holds at most 18 bits, max {RA_MAX:#x}) at PC={:#018x}",
-                    self.pc
-                ));
-                false
-            }
+            SpecialReg::RA if value > RA_MAX => self.reject(&format!(
+                "{mnemonic} rA,{value:#x}: illegal-instruction interrupt \
+                 (rA holds at most 18 bits, max {RA_MAX:#x}) at PC={:#018x}",
+                self.pc
+            )),
             _ => {
                 self.set_special(reg, value);
                 true
@@ -2539,7 +2555,13 @@ impl MMix {
 
         // Operands are read before the destination raises rL. A marginal $Y
         // or $Z still reads as zero when the instruction executes.
-        if Self::writes_general_register_x(op_byte) {
+        //
+        // SAVE is excluded even though its X is a genuine destination: X
+        // must already be global, so a legal SAVE never needs this claim,
+        // and claiming a local X here would raise rL before SAVE's own
+        // rejection runs, breaking its promise to leave a rejected machine
+        // unchanged. SAVE's arm validates X itself.
+        if Self::writes_general_register_x(op_byte) && opcode != Opcode::SAVE {
             self.claim_local(x);
         }
 
@@ -4623,63 +4645,136 @@ impl MMix {
                 true
             }
             Opcode::SAVE => {
-                // SAVE $X,Z - Save process state
-                // Saves local registers and special registers to memory
-                // Returns address of saved context in $X
-
-                // Allocate memory for context (256 general registers + 32 special registers)
-                // Each register is 8 bytes (octa)
-                let context_size = (256 + 32) * 8;
-
-                // For simplicity, allocate context at a fixed high address
-                // In a real implementation, this would use a stack or memory allocator
-                use std::sync::atomic::{AtomicU64, Ordering};
-                static CONTEXT_COUNTER: AtomicU64 = AtomicU64::new(0x8000000000000000);
-                let context_addr = CONTEXT_COUNTER.fetch_add(context_size, Ordering::Relaxed);
-
-                // Save all 256 general registers
-                for i in 0..256 {
-                    let value = self.get_register(i as u8);
-                    self.write_octa(context_addr + (i * 8), value);
+                // SAVE $X,0 - push the machine's context onto the register
+                // stack, growing upward from the current rO. From lowest
+                // address to highest: the rL local registers $0..$(rL-1),
+                // a marker octa holding rL, the global registers
+                // $rG..$255, the twelve SAVE_SPECIALS in order, and one
+                // packed octa with rG in its top byte and rA in its low
+                // bits. $X receives the packed octa's address; rO and rS
+                // both become the address of the byte after it, and rL
+                // becomes 0. rJ is saved as data among the specials, never
+                // written live: SAVE opens no call frame.
+                //
+                // X must already be global (X >= rG) — a local destination
+                // halts with the machine unchanged. `writes_general_register_x`
+                // would otherwise pre-claim a local X as a side effect of
+                // dispatch before this check ever runs; the preamble in
+                // `execute_instruction` skips that pre-claim for SAVE so a
+                // rejected SAVE truly touches nothing.
+                let rg = self.get_special(SpecialReg::RG) as u8;
+                if x < rg {
+                    return self.reject(&format!(
+                        "SAVE $X,0: X={x} must name a global (rG={rg}) at PC={:#018x}",
+                        self.pc
+                    ));
                 }
 
-                // Save special registers
-                for i in 0..32 {
-                    let value = self.special_regs[i];
-                    self.write_octa(context_addr + (256 * 8) + (i as u64 * 8), value);
+                let rl = self.get_special(SpecialReg::RL);
+                let ra = self.get_special(SpecialReg::RA);
+                let ro = self.get_special(SpecialReg::RO);
+
+                for i in 0..rl {
+                    let addr = ro.wrapping_add(i.wrapping_mul(8));
+                    self.write_octa(addr, self.general_regs[i as usize]);
+                }
+                let marker_addr = ro.wrapping_add(rl.wrapping_mul(8));
+                self.write_octa(marker_addr, rl);
+
+                let globals_base = marker_addr.wrapping_add(8);
+                let global_count = 256 - rg as u64;
+                for i in 0..global_count {
+                    let addr = globals_base.wrapping_add(i.wrapping_mul(8));
+                    self.write_octa(addr, self.general_regs[(rg as u64 + i) as usize]);
                 }
 
-                // Return context address in $X
-                self.set_register(x, context_addr);
+                let specials_base = globals_base.wrapping_add(global_count.wrapping_mul(8));
+                for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
+                    let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
+                    self.write_octa(addr, self.get_special(*reg));
+                }
+
+                let packed_addr =
+                    specials_base.wrapping_add((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
+                self.write_octa(packed_addr, (rg as u64) << 56 | ra);
+
+                for reg in 0..rg {
+                    self.general_regs[reg as usize] = 0;
+                }
+                self.set_register(x, packed_addr);
+                self.set_special(SpecialReg::RL, 0);
+                let new_ro = packed_addr.wrapping_add(8);
+                self.set_special(SpecialReg::RO, new_ro);
+                self.set_special(SpecialReg::RS, new_ro);
                 self.advance_pc();
                 true
             }
             Opcode::UNSAVE => {
-                // UNSAVE X,$Z - Restore process state
-                // Restores local registers and special registers from memory
-                // NOTE: Does NOT restore rJ (return address) - that's managed by PUSHJ/POP
-                let context_addr = self.get_register(z);
+                // UNSAVE 0,$Z - restore the context whose topmost (packed)
+                // octa $Z addresses, in the layout SAVE wrote. Validated
+                // whole before any register or memory change: a packed rG
+                // outside 32..=255, a packed rA above RA_MAX, or a saved
+                // local count above the packed rG all halt with the
+                // machine unchanged. Afterward rL is the saved local
+                // count and rO = rS = the address of the first restored
+                // local — where rO stood before the matching SAVE.
+                let packed_addr = self.get_register(z);
+                let packed = self.read_octa(packed_addr);
+                let rg_saved = (packed >> 56) as u8;
+                let ra_saved = packed & !(0xFFu64 << 56);
 
-                // Save current rJ before restoring
-                let saved_rj = self.get_special(SpecialReg::RJ);
-
-                // Restore all 256 general registers
-                for i in 0..256 {
-                    let value = self.read_octa(context_addr + (i * 8));
-                    self.set_register(i as u8, value);
+                if !(32..=255).contains(&rg_saved) {
+                    return self.reject(&format!(
+                        "UNSAVE 0,$Z: saved rG={rg_saved} outside 32..=255 at PC={:#018x}",
+                        self.pc
+                    ));
+                }
+                if ra_saved > RA_MAX {
+                    return self.reject(&format!(
+                        "UNSAVE 0,$Z: saved rA={ra_saved:#x} exceeds {RA_MAX:#x} at PC={:#018x}",
+                        self.pc
+                    ));
                 }
 
-                // Restore special registers (excluding rJ)
-                for i in 0..32 {
-                    if i != SpecialReg::RJ as usize {
-                        let value = self.read_octa(context_addr + (256 * 8) + (i as u64 * 8));
-                        self.special_regs[i] = value;
-                    }
+                let specials_base =
+                    packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
+                let global_count = 256 - rg_saved as u64;
+                let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
+                let marker_addr = globals_base.wrapping_sub(8);
+                let local_count = self.read_octa(marker_addr);
+
+                if local_count > rg_saved as u64 {
+                    return self.reject(&format!(
+                        "UNSAVE 0,$Z: saved local count {local_count} exceeds saved \
+                         rG={rg_saved} at PC={:#018x}",
+                        self.pc
+                    ));
                 }
 
-                // Restore rJ
-                self.set_special(SpecialReg::RJ, saved_rj);
+                let locals_base = marker_addr.wrapping_sub(local_count.wrapping_mul(8));
 
+                for reg in 0..rg_saved {
+                    self.general_regs[reg as usize] = 0;
+                }
+                for i in 0..local_count {
+                    let addr = locals_base.wrapping_add(i.wrapping_mul(8));
+                    self.general_regs[i as usize] = self.read_octa(addr);
+                }
+                for i in 0..global_count {
+                    let addr = globals_base.wrapping_add(i.wrapping_mul(8));
+                    self.general_regs[(rg_saved as u64 + i) as usize] = self.read_octa(addr);
+                }
+                for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
+                    let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
+                    let value = self.read_octa(addr);
+                    self.set_special(*reg, value);
+                }
+
+                self.set_special(SpecialReg::RG, rg_saved as u64);
+                self.set_special(SpecialReg::RA, ra_saved);
+                self.set_special(SpecialReg::RL, local_count);
+                self.set_special(SpecialReg::RO, locals_base);
+                self.set_special(SpecialReg::RS, locals_base);
                 self.advance_pc();
                 true
             }
@@ -8538,22 +8633,18 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_register(200), 42, "a global is not a local");
     }
 
+    /// `UNSAVE` can no longer produce an rG/rL pair this far out of range —
+    /// its own validation now refuses a packed rG above 255 or a local
+    /// count above the packed rG — so this state is planted directly
+    /// through `set_special`, which stays raw by design.
     #[test]
-    fn test_put_rl_after_an_unsave_naming_more_registers_than_the_file_holds() {
+    fn test_put_rl_after_an_out_of_range_state_naming_more_registers_than_the_file_holds() {
         let mut mmix = MMix::new();
-        let context = 0x2000;
-        let specials = context + 256 * 8;
-        mmix.write_octa(specials + (SpecialReg::RG as u64) * 8, 1000);
-        mmix.write_octa(specials + (SpecialReg::RL as u64) * 8, 500);
-        mmix.set_register(255, context);
-
-        // UNSAVE 0,$255
-        mmix.write_tetra(0, 0xFB0000FF);
-        assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_special(SpecialReg::RL), 500);
+        mmix.set_special(SpecialReg::RG, 1000); // beyond the register file
+        mmix.set_special(SpecialReg::RL, 500);
 
         // PUTI rL,3
-        mmix.write_tetra(4, 0xF7140003);
+        mmix.write_tetra(0, 0xF7140003);
         assert!(mmix.execute_instruction());
 
         assert_eq!(mmix.get_special(SpecialReg::RL), 3);
@@ -8584,45 +8675,32 @@ Main\tSETI\t$1,100
         assert_eq!(mmix.get_register(200), 777);
     }
 
+    /// `SAVE`'s own X < rG rejection, and proof that `writes_general_register_x`'s
+    /// pre-claim (real for every other destination-writing opcode) is
+    /// skipped for `SAVE`: were it not, claiming a marginal $45 here would
+    /// raise rL and zero $40 before this arm ever ran.
     #[test]
-    fn test_save_claims_its_destination_in_a_state_mmix_rejects() {
-        let mut mmix = MMix::new();
+    fn test_save_rejects_a_destination_below_rg_leaving_the_machine_unchanged() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
         mmix.set_register(40, 0xDEAD); // global while rG = 32
         mmix.set_special(SpecialReg::RG, 50);
         mmix.set_special(SpecialReg::RL, 3);
 
-        // SAVE $45,0
+        // SAVE $45,0 - $45 < rG (50): a local, rejected.
         mmix.write_tetra(0, 0xFA2D0000);
-        assert!(mmix.execute_instruction());
+        assert!(!mmix.execute_instruction());
 
-        let context = mmix.get_register(45);
-        assert_eq!(mmix.read_octa(context + 40 * 8), 0);
-    }
-
-    #[test]
-    fn test_a_destination_rise_after_an_out_of_range_unsave_keeps_the_locals() {
-        let mut mmix = MMix::new();
-        let context = 0x2000;
-        for (reg, value) in [(5u64, 111u64), (6, 222), (7, 333)] {
-            mmix.write_octa(context + reg * 8, value);
-        }
-        let specials = context + 256 * 8;
-        mmix.write_octa(specials + (SpecialReg::RG as u64) * 8, 32);
-        mmix.write_octa(specials + (SpecialReg::RL as u64) * 8, 256);
-        mmix.set_register(255, context);
-
-        // UNSAVE 0,$255
-        mmix.write_tetra(0, 0xFB0000FF);
-        assert!(mmix.execute_instruction());
-        assert_eq!(mmix.get_special(SpecialReg::RL), 256);
-
-        // ADD $10,$0,$0 - a destination rise against the restored rL.
-        mmix.write_tetra(4, 0x200A0000);
-        assert!(mmix.execute_instruction());
-
-        assert_eq!(mmix.get_register(5), 111);
-        assert_eq!(mmix.get_register(6), 222);
-        assert_eq!(mmix.get_register(7), 333);
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(mmix.get_special(SpecialReg::RL), 3, "rL is untouched");
+        assert_eq!(
+            mmix.get_register(40),
+            0xDEAD,
+            "the destination-rise pre-claim never ran"
+        );
+        assert_eq!(mmix.get_register(45), 0, "the rejected SAVE wrote nothing");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("SAVE"));
     }
 
     /// `writes_general_register_x` decides, for every opcode byte, whether
@@ -9104,8 +9182,8 @@ Main\tSETI\t$1,100
     #[test]
     fn test_save() {
         let mut mmix = MMix::new();
-        // SAVE $1, 0 - Save process state
-        mmix.write_tetra(0, 0xFA010000); // SAVE $1,0
+        // SAVE $40,0 - $40 is global while rG = 32.
+        mmix.write_tetra(0, 0xFA280000); // SAVE $40,0
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_pc(), 4);
     }
@@ -9113,10 +9191,305 @@ Main\tSETI\t$1,100
     #[test]
     fn test_unsave() {
         let mut mmix = MMix::new();
-        // UNSAVE $1 - Restore process state
-        mmix.write_tetra(0, 0xFB000001); // UNSAVE Z=$1
+        // UNSAVE 0,$1 - $1 holds 0, so the packed octa read from address 0
+        // is all zero: a packed rG of 0 is outside 32..=255 and rejects.
+        mmix.write_tetra(0, 0xFB000001); // UNSAVE 0,$1
+        assert!(!mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0);
+    }
+
+    /// After `SAVE`, the register stack holds — lowest address to highest
+    /// — the locals, a marker octa of their count, the globals, the
+    /// twelve specials in `SAVE_SPECIALS` order, and a packed octa of
+    /// `rG << 56 | rA`. `$X`, `rO`, `rS` and `rL` land where §1 says.
+    /// Reverting `SAVE` to the old fixed-address format turns every
+    /// assertion here red.
+    #[test]
+    fn test_save_writes_the_documented_layout() {
+        let mut mmix = MMix::new();
+        mmix.set_register(0, 0x1111);
+        mmix.set_register(1, 0x2222);
+        mmix.set_register(2, 0x3333); // rL becomes 3
+        mmix.set_special(SpecialReg::RG, 250); // six globals: $250..$255
+        for i in 250u8..=255 {
+            mmix.set_register(i, 0x9000 + i as u64);
+        }
+        for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
+            mmix.set_special(*reg, 0x7000 + i as u64);
+        }
+        mmix.set_special(SpecialReg::RA, 0x2A);
+        let ro_before = mmix.get_special(SpecialReg::RO);
+
+        // SAVE $250,0 - $250 is global (== rG).
+        mmix.write_tetra(0, 0xFAFA0000);
         assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.read_octa(ro_before), 0x1111);
+        assert_eq!(mmix.read_octa(ro_before + 8), 0x2222);
+        assert_eq!(mmix.read_octa(ro_before + 16), 0x3333);
+        let marker_addr = ro_before + 24;
+        assert_eq!(mmix.read_octa(marker_addr), 3, "the marker holds rL");
+
+        let globals_base = marker_addr + 8;
+        for i in 0u64..6 {
+            assert_eq!(
+                mmix.read_octa(globals_base + i * 8),
+                0x9000 + 250 + i,
+                "global {}",
+                250 + i
+            );
+        }
+
+        let specials_base = globals_base + 6 * 8;
+        for i in 0..SAVE_SPECIALS.len() as u64 {
+            assert_eq!(
+                mmix.read_octa(specials_base + i * 8),
+                0x7000 + i,
+                "special at index {i}"
+            );
+        }
+
+        let packed_addr = specials_base + (SAVE_SPECIALS.len() as u64) * 8;
+        assert_eq!(mmix.read_octa(packed_addr), (250u64 << 56) | 0x2A);
+
+        assert_eq!(
+            mmix.get_register(250),
+            packed_addr,
+            "$X holds the packed octa's address"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RO), packed_addr + 8);
+        assert_eq!(mmix.get_special(SpecialReg::RS), packed_addr + 8);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
+    }
+
+    /// `SAVE`, clobber every register class, `UNSAVE`: everything lands
+    /// back exactly where it was, and `rO = rS` returns to where `SAVE`
+    /// found them. Dropping any restoration in `UNSAVE`'s arm turns one of
+    /// these assertions red.
+    #[test]
+    fn test_save_unsave_round_trips_every_register_class() {
+        let mut mmix = MMix::new();
+        mmix.set_register(0, 0x1111); // local
+        mmix.set_register(1, 0x2222); // local
+        mmix.set_register(60, 0x3333); // global
+        mmix.set_special(SpecialReg::RJ, 0x4444);
+        mmix.set_special(SpecialReg::RM, 0x5555);
+        mmix.set_special(SpecialReg::RA, 0x2A);
+        let rl_before = mmix.get_special(SpecialReg::RL);
+        let ro_before = mmix.get_special(SpecialReg::RO);
+
+        // SAVE $70,0 - $70 is global.
+        mmix.write_tetra(0, 0xFA460000);
+        assert!(mmix.execute_instruction());
+
+        // Clobber every register class SAVE just captured.
+        mmix.set_register(0, 0);
+        mmix.set_register(1, 0);
+        mmix.set_register(60, 0);
+        mmix.set_special(SpecialReg::RJ, 0);
+        mmix.set_special(SpecialReg::RM, 0);
+        mmix.set_special(SpecialReg::RA, 0);
+        mmix.set_special(SpecialReg::RG, 200);
+        mmix.set_special(SpecialReg::RL, 0);
+
+        // UNSAVE 0,$70.
+        mmix.write_tetra(4, 0xFB000046);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(0), 0x1111);
+        assert_eq!(mmix.get_register(1), 0x2222);
+        assert_eq!(mmix.get_register(60), 0x3333);
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 0x4444);
+        assert_eq!(mmix.get_special(SpecialReg::RM), 0x5555);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0x2A);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(mmix.get_special(SpecialReg::RL), rl_before);
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro_before);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro_before);
+    }
+
+    /// A `SAVE`/`UNSAVE` pair inside a call is transparent to the call
+    /// itself: the enclosing `PUSHJ`/`POP` retract exactly as if the pair
+    /// had never run.
+    #[test]
+    fn test_save_unsave_inside_a_call_leaves_the_caller_frame_intact() {
+        let mut mmix = MMix::new();
+        mmix.set_pc(0x100);
+        mmix.set_register(0, 888); // caller's own local, must survive the call
+        mmix.set_special(SpecialReg::RL, 3); // $0..$2 real locals; $2 is PUSHJ's hole
+        let ro_before_call = mmix.get_special(SpecialReg::RO);
+
+        // PUSHJ $2,+1 pushes $0,$1 and the hole ($2); the callee starts
+        // with rL = 0.
+        mmix.write_tetra(0x100, 0xF2020001);
+        assert!(mmix.execute_instruction());
+        let ro_in_callee = mmix.get_special(SpecialReg::RO);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
+
+        // Callee's own local, then SAVE $40,0 ($40 is global).
+        mmix.set_register(0, 0xABC);
+        mmix.write_tetra(0x104, 0xFA280000);
+        assert!(mmix.execute_instruction());
+
+        // Clobber everything SAVE just captured.
+        mmix.set_register(0, 0xDEAD);
+        mmix.set_special(SpecialReg::RM, 0xBAD);
+
+        // UNSAVE 0,$40.
+        mmix.write_tetra(0x108, 0xFB000028);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(
+            mmix.get_register(0),
+            0xABC,
+            "the callee's own local round-trips"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RM),
+            0,
+            "rM round-trips to its pre-SAVE value"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro_in_callee);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro_in_callee);
+        assert_eq!(
+            mmix.get_special(SpecialReg::RL),
+            1,
+            "the callee's own single local"
+        );
+
+        // POP 0,0 returns to the caller.
+        mmix.write_tetra(0x10C, 0xF8000000);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(
+            mmix.get_register(0),
+            888,
+            "caller's $0, pushed by PUSHJ, survives the call"
+        );
+        assert_eq!(mmix.get_special(SpecialReg::RO), ro_before_call);
+        assert_eq!(mmix.get_special(SpecialReg::RS), ro_before_call);
+        assert_eq!(mmix.call_depth(), 0);
+    }
+
+    /// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields the
+    /// machine never reads. A nonzero value there behaves exactly as zero.
+    #[test]
+    fn test_save_and_unsave_ignore_their_must_be_zero_fields() {
+        let mut mmix = MMix::new();
+        mmix.set_register(0, 0x1234); // a local
+        mmix.set_register(50, 0xABCD); // a global
+
+        // SAVE $60,255,255 - Y and Z both nonzero.
+        mmix.write_tetra(0, 0xFA3CFFFF);
+        assert!(mmix.execute_instruction());
+
+        mmix.set_register(0, 0);
+        mmix.set_register(50, 0);
+
+        // UNSAVE 255,255,$60 - X and Y both nonzero; the address still
+        // comes from $Z alone.
+        mmix.write_tetra(4, 0xFBFFFF3C);
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(mmix.get_register(0), 0x1234);
+        assert_eq!(mmix.get_register(50), 0xABCD);
+    }
+
+    /// Two independent machines run the same `SAVE`; `$X` lands on the same
+    /// address in both. The old fixed-address format shared one process-
+    /// global counter across every `MMix`, so two machines (or two tests
+    /// running in parallel) handed out interleaved addresses instead.
+    #[test]
+    fn test_save_is_deterministic_across_instances() {
+        let mut a = MMix::new();
+        let mut b = MMix::new();
+
+        a.write_tetra(0, 0xFA280000); // SAVE $40,0
+        b.write_tetra(0, 0xFA280000);
+        assert!(a.execute_instruction());
+        assert!(b.execute_instruction());
+
+        assert_eq!(a.get_register(40), b.get_register(40));
+    }
+
+    /// `UNSAVE` rejects a packed rG below 32 (above 255 cannot occur — it
+    /// is one byte), before touching any register or memory.
+    #[test]
+    fn test_unsave_rejects_a_packed_rg_below_32() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(0, 0xFEED); // survives iff UNSAVE never runs
+
+        let context = 0x2000u64;
+        mmix.write_octa(context, 31u64 << 56); // packed rG = 31, rA = 0
+        mmix.set_register(60, context);
+
+        // UNSAVE 0,$60
+        mmix.write_tetra(0, 0xFB00003C);
+        assert!(!mmix.execute_instruction());
+
+        assert_eq!(mmix.get_pc(), 0);
+        assert_eq!(mmix.get_register(0), 0xFEED);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rG"));
+    }
+
+    /// `UNSAVE` rejects a packed rA above `RA_MAX`.
+    #[test]
+    fn test_unsave_rejects_a_packed_ra_above_ra_max() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_register(0, 0xFEED);
+
+        let context = 0x2000u64;
+        mmix.write_octa(context, (32u64 << 56) | (RA_MAX + 1));
+        mmix.set_register(60, context);
+
+        // UNSAVE 0,$60
+        mmix.write_tetra(0, 0xFB00003C);
+        assert!(!mmix.execute_instruction());
+
+        assert_eq!(mmix.get_pc(), 0);
+        assert_eq!(mmix.get_register(0), 0xFEED);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("rA"));
+    }
+
+    /// `UNSAVE` rejects a saved local count greater than the packed rG. A
+    /// real `SAVE` gives a well-formed context; only its marker is
+    /// corrupted.
+    #[test]
+    fn test_unsave_rejects_a_saved_local_count_above_the_packed_rg() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RL, 0);
+
+        // SAVE $40,0 with no locals: the marker holds 0.
+        mmix.write_tetra(0, 0xFA280000);
+        assert!(mmix.execute_instruction());
+        let context = mmix.get_register(40);
+
+        let global_count = 256u64 - 32; // rg = 32
+        let marker_addr = context - (SAVE_SPECIALS.len() as u64) * 8 - global_count * 8 - 8;
+        assert_eq!(
+            mmix.read_octa(marker_addr),
+            0,
+            "sanity: 0 locals were saved"
+        );
+        mmix.write_octa(marker_addr, 33); // 33 > rG (32)
+
+        mmix.set_register(0, 0xFEED); // survives iff UNSAVE never runs
+
+        // UNSAVE 0,$40
+        mmix.write_tetra(4, 0xFB000028);
+        assert!(!mmix.execute_instruction());
+
         assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(mmix.get_register(0), 0xFEED);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains("local count"));
     }
 
     #[test]
@@ -12823,6 +13196,38 @@ Nested\tSET\t$0,42
         // TRAP's own handler advances pc past itself before halting.
         assert_eq!(mmix.get_pc(), main_addr + 12, "halt address");
         assert_eq!(mmix.call_depth(), 0);
+    }
+
+    /// At `rG = 255`, `$254` is local, so `debug`'s stub (`SAVE $254,0`)
+    /// breaks the `X >= rG` rule and halts before its `Fputs` ever runs.
+    /// Pinned until C8 replaces the stub with a single `TRAP`.
+    #[test]
+    fn test_debug_after_put_rg_255_halts_at_the_stubs_save() {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        const SOURCE: &str = "\
+\tLOC\t#100
+\tSET\t$1,255
+\tPUT\trG,$1
+\tdebug\t\"unreachable\"
+";
+        let mut asm = MMixAssembler::new(SOURCE, "<test>");
+        asm.parse().expect("program must assemble");
+
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(entry_point(&asm));
+
+        let (_, stop) = mmix.run_bounded(100);
+        assert_eq!(stop, Stop::Halted);
+        assert!(
+            handle.stdout().is_empty(),
+            "the stub halts before Fputs runs"
+        );
+        // run_bounded logs its own halt notice alongside SAVE's rejection.
+        assert!(handle.diagnostics().iter().any(|d| d.contains("SAVE")));
     }
 
     /// Assembles `source`, runs it under a fresh `CaptureHost` for up to

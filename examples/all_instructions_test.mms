@@ -2318,14 +2318,33 @@ Test184 ADDUI   TestNum,TestNum,1
 % ========================================
 % Test 185: SAVE / UNSAVE - Save and restore registers
 % ========================================
+% SAVE requires a global destination; rG = 32 here, so Temp ($254) works.
+% A local, a global and rE each carry a distinct value through the round
+% trip on the register stack.
+% ========================================
 Test185 ADDUI   TestNum,TestNum,1
-        GETA    $10,SaveArea
-        SETI $20,#ABCD1234   % Set a value to save
-        SAVE    $15,0           % Save registers starting from $15
-        SETI $20,0           % Clear the register
-        UNSAVE  0,$15           % Restore registers from $15
+        SETI $20,#ABCD1234   % local: $20 < rG
+        SETI $50,#12345678   % global: $50 >= rG
+        SET     Result,#5A5A
+        PUT     rE,Result       % special: rE
+        SAVE    Temp,0          % Temp receives the context address
+        SETI $20,0
+        SETI $50,0
+        PUT     rE,0
+        UNSAVE  0,Temp          % restore from the saved context
         SETI Expect,#ABCD1234
-        CMP     Temp,$20,Expect % Check if restored
+        CMP     Temp,$20,Expect % local survived
+        PBZ     Temp,Test185b
+        JMP     TestFail
+Test185b
+        SETI Expect,#12345678
+        CMP     Temp,$50,Expect % global survived
+        PBZ     Temp,Test185c
+        JMP     TestFail
+Test185c
+        GET     Result,rE
+        SET     Expect,#5A5A
+        CMP     Temp,Result,Expect % special survived
         PBZ     Temp,Test186
         JMP     TestFail
 
