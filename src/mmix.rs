@@ -1152,6 +1152,136 @@ impl MMix {
         Some(return_pc.wrapping_add((yz as u64) * 4))
     }
 
+    /// Push the machine's context onto the register stack, growing upward
+    /// from the current `rO`. From lowest address to highest: the `rL`
+    /// local registers `$0..$(rL-1)`, a marker octa holding `rL`, the
+    /// global registers `$rG..$255`, the twelve `SAVE_SPECIALS` in order,
+    /// and one packed octa with `rG` in its top byte and `rA` in its low
+    /// bits. `$X` receives the packed octa's address; `rO` and `rS` both
+    /// become the address of the byte after it, and `rL` becomes 0. `rJ` is
+    /// saved as data among the specials, never written live: `SAVE` opens
+    /// no call frame.
+    ///
+    /// `X` must already be global (`X >= rG`) — a local destination halts
+    /// with the machine unchanged. `writes_general_register_x` would
+    /// otherwise pre-claim a local `X` as a side effect of dispatch before
+    /// this check ever runs; the preamble in `execute_instruction` skips
+    /// that pre-claim for `SAVE` so a rejected `SAVE` truly touches
+    /// nothing.
+    fn save_context(&mut self, x: u8) -> bool {
+        let rg = self.get_special(SpecialReg::RG) as u8;
+        if x < rg {
+            return self.reject(&format!(
+                "SAVE $X,0: X={x} must name a global (rG={rg}) at PC={:#018x}",
+                self.pc
+            ));
+        }
+
+        let rl = self.get_special(SpecialReg::RL);
+        let ra = self.get_special(SpecialReg::RA);
+        let ro = self.get_special(SpecialReg::RO);
+
+        for i in 0..rl {
+            let addr = ro.wrapping_add(i.wrapping_mul(8));
+            self.write_octa(addr, self.general_regs[i as usize]);
+        }
+        let marker_addr = ro.wrapping_add(rl.wrapping_mul(8));
+        self.write_octa(marker_addr, rl);
+
+        let globals_base = marker_addr.wrapping_add(8);
+        let global_count = 256 - rg as u64;
+        for i in 0..global_count {
+            let addr = globals_base.wrapping_add(i.wrapping_mul(8));
+            self.write_octa(addr, self.general_regs[(rg as u64 + i) as usize]);
+        }
+
+        let specials_base = globals_base.wrapping_add(global_count.wrapping_mul(8));
+        for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
+            let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
+            self.write_octa(addr, self.get_special(*reg));
+        }
+
+        let packed_addr = specials_base.wrapping_add((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
+        self.write_octa(packed_addr, (rg as u64) << 56 | ra);
+
+        for reg in 0..rg {
+            self.general_regs[reg as usize] = 0;
+        }
+        self.set_register(x, packed_addr);
+        self.set_special(SpecialReg::RL, 0);
+        let new_ro = packed_addr.wrapping_add(8);
+        self.set_special(SpecialReg::RO, new_ro);
+        self.set_special(SpecialReg::RS, new_ro);
+        true
+    }
+
+    /// Restore the context whose topmost (packed) octa `packed_addr`
+    /// addresses, in the layout [`MMix::save_context`] wrote. Validated
+    /// whole before any register or memory change: a packed `rG` outside
+    /// `32..=255`, a packed `rA` above `RA_MAX`, or a saved local count
+    /// above the packed `rG` all halt with the machine unchanged.
+    /// Afterward `rL` is the saved local count and `rO = rS` = the address
+    /// of the first restored local — where `rO` stood before the matching
+    /// `SAVE`.
+    fn unsave_context(&mut self, packed_addr: u64) -> bool {
+        let packed = self.read_octa(packed_addr);
+        let rg_saved = (packed >> 56) as u8;
+        let ra_saved = packed & !(0xFFu64 << 56);
+
+        if !(32..=255).contains(&rg_saved) {
+            return self.reject(&format!(
+                "UNSAVE 0,$Z: saved rG={rg_saved} outside 32..=255 at PC={:#018x}",
+                self.pc
+            ));
+        }
+        if ra_saved > RA_MAX {
+            return self.reject(&format!(
+                "UNSAVE 0,$Z: saved rA={ra_saved:#x} exceeds {RA_MAX:#x} at PC={:#018x}",
+                self.pc
+            ));
+        }
+
+        let specials_base = packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
+        let global_count = 256 - rg_saved as u64;
+        let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
+        let marker_addr = globals_base.wrapping_sub(8);
+        let local_count = self.read_octa(marker_addr);
+
+        if local_count > rg_saved as u64 {
+            return self.reject(&format!(
+                "UNSAVE 0,$Z: saved local count {local_count} exceeds saved \
+                 rG={rg_saved} at PC={:#018x}",
+                self.pc
+            ));
+        }
+
+        let locals_base = marker_addr.wrapping_sub(local_count.wrapping_mul(8));
+
+        for reg in 0..rg_saved {
+            self.general_regs[reg as usize] = 0;
+        }
+        for i in 0..local_count {
+            let addr = locals_base.wrapping_add(i.wrapping_mul(8));
+            self.general_regs[i as usize] = self.read_octa(addr);
+        }
+        for i in 0..global_count {
+            let addr = globals_base.wrapping_add(i.wrapping_mul(8));
+            self.general_regs[(rg_saved as u64 + i) as usize] = self.read_octa(addr);
+        }
+        for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
+            let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
+            let value = self.read_octa(addr);
+            self.set_special(*reg, value);
+        }
+
+        self.set_special(SpecialReg::RG, rg_saved as u64);
+        self.set_special(SpecialReg::RA, ra_saved);
+        self.set_special(SpecialReg::RL, local_count);
+        self.set_special(SpecialReg::RO, locals_base);
+        self.set_special(SpecialReg::RS, locals_base);
+        true
+    }
+
     /// Get the value of a special-purpose register.
     pub fn get_special(&self, reg: SpecialReg) -> u64 {
         self.special_regs[reg as usize]
@@ -4646,135 +4776,20 @@ impl MMix {
             }
             Opcode::SAVE => {
                 // SAVE $X,0 - push the machine's context onto the register
-                // stack, growing upward from the current rO. From lowest
-                // address to highest: the rL local registers $0..$(rL-1),
-                // a marker octa holding rL, the global registers
-                // $rG..$255, the twelve SAVE_SPECIALS in order, and one
-                // packed octa with rG in its top byte and rA in its low
-                // bits. $X receives the packed octa's address; rO and rS
-                // both become the address of the byte after it, and rL
-                // becomes 0. rJ is saved as data among the specials, never
-                // written live: SAVE opens no call frame.
-                //
-                // X must already be global (X >= rG) — a local destination
-                // halts with the machine unchanged. `writes_general_register_x`
-                // would otherwise pre-claim a local X as a side effect of
-                // dispatch before this check ever runs; the preamble in
-                // `execute_instruction` skips that pre-claim for SAVE so a
-                // rejected SAVE truly touches nothing.
-                let rg = self.get_special(SpecialReg::RG) as u8;
-                if x < rg {
-                    return self.reject(&format!(
-                        "SAVE $X,0: X={x} must name a global (rG={rg}) at PC={:#018x}",
-                        self.pc
-                    ));
+                // stack. See MMix::save_context.
+                if !self.save_context(x) {
+                    return false;
                 }
-
-                let rl = self.get_special(SpecialReg::RL);
-                let ra = self.get_special(SpecialReg::RA);
-                let ro = self.get_special(SpecialReg::RO);
-
-                for i in 0..rl {
-                    let addr = ro.wrapping_add(i.wrapping_mul(8));
-                    self.write_octa(addr, self.general_regs[i as usize]);
-                }
-                let marker_addr = ro.wrapping_add(rl.wrapping_mul(8));
-                self.write_octa(marker_addr, rl);
-
-                let globals_base = marker_addr.wrapping_add(8);
-                let global_count = 256 - rg as u64;
-                for i in 0..global_count {
-                    let addr = globals_base.wrapping_add(i.wrapping_mul(8));
-                    self.write_octa(addr, self.general_regs[(rg as u64 + i) as usize]);
-                }
-
-                let specials_base = globals_base.wrapping_add(global_count.wrapping_mul(8));
-                for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
-                    let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
-                    self.write_octa(addr, self.get_special(*reg));
-                }
-
-                let packed_addr =
-                    specials_base.wrapping_add((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
-                self.write_octa(packed_addr, (rg as u64) << 56 | ra);
-
-                for reg in 0..rg {
-                    self.general_regs[reg as usize] = 0;
-                }
-                self.set_register(x, packed_addr);
-                self.set_special(SpecialReg::RL, 0);
-                let new_ro = packed_addr.wrapping_add(8);
-                self.set_special(SpecialReg::RO, new_ro);
-                self.set_special(SpecialReg::RS, new_ro);
                 self.advance_pc();
                 true
             }
             Opcode::UNSAVE => {
-                // UNSAVE 0,$Z - restore the context whose topmost (packed)
-                // octa $Z addresses, in the layout SAVE wrote. Validated
-                // whole before any register or memory change: a packed rG
-                // outside 32..=255, a packed rA above RA_MAX, or a saved
-                // local count above the packed rG all halt with the
-                // machine unchanged. Afterward rL is the saved local
-                // count and rO = rS = the address of the first restored
-                // local — where rO stood before the matching SAVE.
+                // UNSAVE 0,$Z - restore the context $Z addresses. See
+                // MMix::unsave_context.
                 let packed_addr = self.get_register(z);
-                let packed = self.read_octa(packed_addr);
-                let rg_saved = (packed >> 56) as u8;
-                let ra_saved = packed & !(0xFFu64 << 56);
-
-                if !(32..=255).contains(&rg_saved) {
-                    return self.reject(&format!(
-                        "UNSAVE 0,$Z: saved rG={rg_saved} outside 32..=255 at PC={:#018x}",
-                        self.pc
-                    ));
+                if !self.unsave_context(packed_addr) {
+                    return false;
                 }
-                if ra_saved > RA_MAX {
-                    return self.reject(&format!(
-                        "UNSAVE 0,$Z: saved rA={ra_saved:#x} exceeds {RA_MAX:#x} at PC={:#018x}",
-                        self.pc
-                    ));
-                }
-
-                let specials_base =
-                    packed_addr.wrapping_sub((SAVE_SPECIALS.len() as u64).wrapping_mul(8));
-                let global_count = 256 - rg_saved as u64;
-                let globals_base = specials_base.wrapping_sub(global_count.wrapping_mul(8));
-                let marker_addr = globals_base.wrapping_sub(8);
-                let local_count = self.read_octa(marker_addr);
-
-                if local_count > rg_saved as u64 {
-                    return self.reject(&format!(
-                        "UNSAVE 0,$Z: saved local count {local_count} exceeds saved \
-                         rG={rg_saved} at PC={:#018x}",
-                        self.pc
-                    ));
-                }
-
-                let locals_base = marker_addr.wrapping_sub(local_count.wrapping_mul(8));
-
-                for reg in 0..rg_saved {
-                    self.general_regs[reg as usize] = 0;
-                }
-                for i in 0..local_count {
-                    let addr = locals_base.wrapping_add(i.wrapping_mul(8));
-                    self.general_regs[i as usize] = self.read_octa(addr);
-                }
-                for i in 0..global_count {
-                    let addr = globals_base.wrapping_add(i.wrapping_mul(8));
-                    self.general_regs[(rg_saved as u64 + i) as usize] = self.read_octa(addr);
-                }
-                for (i, reg) in SAVE_SPECIALS.iter().enumerate() {
-                    let addr = specials_base.wrapping_add((i as u64).wrapping_mul(8));
-                    let value = self.read_octa(addr);
-                    self.set_special(*reg, value);
-                }
-
-                self.set_special(SpecialReg::RG, rg_saved as u64);
-                self.set_special(SpecialReg::RA, ra_saved);
-                self.set_special(SpecialReg::RL, local_count);
-                self.set_special(SpecialReg::RO, locals_base);
-                self.set_special(SpecialReg::RS, locals_base);
                 self.advance_pc();
                 true
             }
