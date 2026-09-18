@@ -20,8 +20,9 @@ rP      IS      23      % Prediction register (CSWAP/CSWAPI compare value)
 Expect  IS      $1      % Expected value
 Result  IS      $2      % Actual result
 % FailNum/TestNum are global (above $60, the highest rG the register-stack
-% tests raise it to, and below Temp) so POP and UNSAVE, which only ever
-% rewrite locals, can never touch the harness's own bookkeeping.
+% tests raise it to, and below Temp) so a POP, which rewrites only local
+% registers, never touches them. UNSAVE restores globals, so the harness
+% must not change them between a SAVE and its UNSAVE, and it does not.
 FailNum IS      $253    % Failed test number
 TestNum IS      $252    % Current test number
 Temp    IS      $254    % Temporary register (canonical t register)
