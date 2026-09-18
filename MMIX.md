@@ -217,6 +217,11 @@ local — where `rO` stood before the matching `SAVE`.
 Both instructions ignore their must-be-zero fields (`SAVE`'s `Y` and `Z`,
 `UNSAVE`'s `X` and `Y`) rather than rejecting a nonzero value there.
 
+The `debug "text"` extension's generated stub opens with `SAVE $254,0`, which
+needs `$254` global. Once `PUT rG,255` makes `$254` local, a `debug` line
+halts there instead of printing — accepted until a later unit replaces the
+stub with a single `TRAP`.
+
 Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
 through `$X`. For an instruction whose `X` field is a general-register
 destination, this rise happens before the instruction runs, so `GET $X,rL`
