@@ -19,13 +19,14 @@ rP      IS      23      % Prediction register (CSWAP/CSWAPI compare value)
 % Test counter and expected values
 Expect  IS      $1      % Expected value
 Result  IS      $2      % Actual result
-FailNum IS      $3      % Failed test number
-TestNum IS      $4      % Current test number 
+% FailNum/TestNum are global (above $60, the highest rG the register-stack
+% tests raise it to, and below Temp) so POP and UNSAVE, which only ever
+% rewrite locals, can never touch the harness's own bookkeeping.
+FailNum IS      $253    % Failed test number
+TestNum IS      $252    % Current test number
 Temp    IS      $254    % Temporary register (canonical t register)
-Zero    IS      $255    % ZERO register
 
 Main    SETI TestNum,0       % Initialize test counter
-        SETI Zero,0         % Initialize $255 to 0 (constant zero)
 
 % ========================================
 % Test 1: SET and immediate load instructions
@@ -266,8 +267,8 @@ Test19  ADDUI   TestNum,TestNum,1       % Increment test counter
 Test20  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $20,#100        % Address
         SETI $21,#42         % Value to store
-        STB     $21,$20,Zero    % Store byte
-        LDB     Result,$20,Zero % Load it back
+        STB     $21,$20,$0    % Store byte
+        LDB     Result,$20,$0 % Load it back
         SETI Expect,#42
         CMP     Temp,Result,Expect
         PBZ     Temp,Test21
@@ -279,8 +280,8 @@ Test20  ADDUI   TestNum,TestNum,1       % Increment test counter
 Test21  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $20,#200        % Address
         SETI $21,#ABCD       % Value to store
-        STW     $21,$20,Zero    % Store wyde
-        LDWU    Result,$20,Zero % Load it back (unsigned)
+        STW     $21,$20,$0    % Store wyde
+        LDWU    Result,$20,$0 % Load it back (unsigned)
         SETI Expect,#ABCD
         CMP     Temp,Result,Expect
         PBZ     Temp,Test22
@@ -292,8 +293,8 @@ Test21  ADDUI   TestNum,TestNum,1       % Increment test counter
 Test22  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $20,#300        % Address
         SETI $21,#12345678   % Value to store
-        STT     $21,$20,Zero    % Store tetra
-        LDT     Result,$20,Zero % Load it back
+        STT     $21,$20,$0    % Store tetra
+        LDT     Result,$20,$0 % Load it back
         SETI Expect,#12345678
         CMP     Temp,Result,Expect
         PBZ     Temp,Test23
@@ -305,8 +306,8 @@ Test22  ADDUI   TestNum,TestNum,1       % Increment test counter
 Test23  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $20,#400        % Address (8-byte aligned)
         SETI $21,#123456789ABCDEF
-        STO     $21,$20,Zero    % Store octa
-        LDO     Result,$20,Zero % Load it back
+        STO     $21,$20,0    % Store octa
+        LDO     Result,$20,0 % Load it back
         SETI Expect,#123456789ABCDEF
         CMP     Temp,Result,Expect
         PBZ     Temp,Test24
@@ -329,7 +330,7 @@ Test24  ADDUI   TestNum,TestNum,1       % Increment test counter
 % ========================================
 Test25  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $10,#0101010101010101
-        SADD    Result,$10,Zero
+        SADD    Result,$10,$0
         SETI Expect,8        % Eight 1-bits
         CMP     Temp,Result,Expect
         PBZ     Temp,Test26
@@ -554,7 +555,7 @@ Test43  ADDUI   TestNum,TestNum,1       % Increment test counter
 Test44  ADDUI   TestNum,TestNum,1       % Increment test counter
         SETI $255,0         % Initialize $255 to 0
         SETI $10,12345
-        ADD     Result,$10,Zero
+        ADD     Result,$10,0
         SETI Expect,12345
         CMP     Temp,Result,Expect
         PBZ     Temp,Test45
@@ -565,7 +566,7 @@ Test44  ADDUI   TestNum,TestNum,1       % Increment test counter
 % ========================================
 Test45  ADDUI   TestNum,TestNum,1       % Increment test counter
         GETA    Result,LocalData  % Get address of LocalData
-        LDO     $10,Result,Zero   % Load the octa at that address (offset 0)
+        LDO     $10,Result,0   % Load the octa at that address (offset 0)
         SETI Expect,#DEADBEEFCAFEBABE
         CMP     Temp,$10,Expect
         PBZ     Temp,Test46
@@ -2568,7 +2569,7 @@ Test202 ADDUI   TestNum,TestNum,1
 % Test 203: DIVUI - Unsigned divide immediate
 % ========================================
 Test203 ADDUI   TestNum,TestNum,1
-        PUT     rD,Zero                 % clear dividend-high (dirty since Test121)
+        PUT     rD,0                 % clear dividend-high (dirty since Test121)
         SETI $10,1000
         DIVUI   Result,$10,7
         SETI Expect,142
@@ -3833,7 +3834,7 @@ TestPass        SETI $255,PassMsg
 TestFail        SETI $255,FailMsg
         TRAP    0,Fputs,StdOut
         SETI    Result,#DEAD    % Failure marker
-        OR      FailNum,TestNum,Zero    % Copy TestNum to FailNum
+        OR      FailNum,TestNum,0    % Copy TestNum to FailNum
         SETI    $255, 1         % error exit code
         TRAP    0,Halt,1        % Halt with error
 

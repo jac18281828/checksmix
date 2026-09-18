@@ -1,5 +1,6 @@
 use checksmix::{
-    MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat, entry_point, write_image,
+    MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat, entry_point, start_program,
+    write_image,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -244,7 +245,7 @@ fn run_mms(filenames: &[String], value_format: ValueFormat) {
     let mut mmix = MMix::new();
 
     write_image(&mut mmix, &assembler);
-    mmix.set_pc(entry_point(&assembler));
+    start_program(&mut mmix, entry_point(&assembler));
 
     println!("=== Initial Machine State ===");
     println!("{}", mmix.display_with(value_format));
@@ -279,13 +280,13 @@ fn run_mmo(filename: &str, value_format: ValueFormat) {
     let mut mmix = MMix::new();
 
     let decoder = MmoDecoder::new(data);
-    let entry_point = decoder.decode(|addr, byte| {
+    let entry = decoder.decode(|addr, byte| {
         mmix.write_byte(addr, byte);
     });
 
-    mmix.set_pc(entry_point);
+    start_program(&mut mmix, entry);
 
-    println!("Loaded object file (entry point: 0x{:X})", entry_point);
+    println!("Loaded object file (entry point: 0x{:X})", entry);
     println!();
 
     println!("=== Initial Machine State ===");

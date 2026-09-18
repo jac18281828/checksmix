@@ -157,6 +157,14 @@ pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
     }
 }
 
+/// Start a program at `entry`: set the PC there, and `$255` to the same
+/// address, MMIXware's start state for a running program. `$255` is always
+/// global, so this never raises `rL`.
+pub fn start_program(mmix: &mut MMix, entry: u64) {
+    mmix.set_pc(entry);
+    mmix.set_register(255, entry);
+}
+
 /// The program's entry point: the `Main` label if present, else the first
 /// code address below the text/data segment boundary.
 pub fn entry_point(assembler: &MMixAssembler) -> u64 {
@@ -213,7 +221,7 @@ impl Debugger {
     fn with_machine(mut mmix: MMix, assembler: MMixAssembler) -> Debugger {
         write_image(&mut mmix, &assembler);
         let entry = entry_point(&assembler);
-        mmix.set_pc(entry);
+        start_program(&mut mmix, entry);
         let primary_file = assembler.source_loc(entry).map(|loc| loc.file.clone());
         Debugger {
             mmix,
@@ -292,7 +300,7 @@ impl Debugger {
     fn reset(&mut self) {
         self.mmix.reset();
         write_image(&mut self.mmix, &self.assembler);
-        self.mmix.set_pc(self.entry);
+        start_program(&mut self.mmix, self.entry);
         self.exited = false;
     }
 
@@ -1415,6 +1423,49 @@ Main\tTRAP\t0,Halt,0
 ";
         let dbg = Debugger::load(assemble(NO_GREG_PROGRAM, "no_greg.mms"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 32);
+    }
+
+    #[test]
+    fn start_program_sets_pc_and_dollar_255_to_the_entry() {
+        let asm = assemble(MINIMAL_PROGRAM, "minimal.mms");
+        let entry = entry_point(&asm);
+        let mut mmix = MMix::new();
+        start_program(&mut mmix, entry);
+        assert_eq!(mmix.get_pc(), entry);
+        assert_eq!(mmix.get_register(255), entry);
+    }
+
+    #[test]
+    fn start_program_uses_the_fallback_entry_with_no_main_label() {
+        const NO_MAIN_PROGRAM: &str = "\tLOC\t#100\n\tTRAP\t0,Halt,0\n";
+        let asm = assemble(NO_MAIN_PROGRAM, "no_main.mms");
+        assert!(!asm.labels.contains_key("Main"));
+        let entry = entry_point(&asm);
+        let mut mmix = MMix::new();
+        start_program(&mut mmix, entry);
+        assert_eq!(mmix.get_pc(), entry);
+        assert_eq!(mmix.get_register(255), entry);
+    }
+
+    #[test]
+    fn start_program_leaves_rl_unchanged() {
+        let mut mmix = MMix::new();
+        mmix.set_register(3, 7); // raises rL to 4
+        let rl_before = mmix.get_special(SpecialReg::RL);
+        start_program(&mut mmix, 0x100);
+        assert_eq!(mmix.get_special(SpecialReg::RL), rl_before);
+    }
+
+    #[test]
+    fn debugger_load_and_reset_both_hold_dollar_255_at_the_entry() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "minimal.mms"));
+        let entry = dbg.entry;
+        assert_eq!(dbg.mmix.get_register(255), entry);
+
+        // Disturb $255, then confirm reset restores it.
+        dbg.mmix.set_register(255, 0);
+        dbg.reset();
+        assert_eq!(dbg.mmix.get_register(255), entry);
     }
 
     #[test]

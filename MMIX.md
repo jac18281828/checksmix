@@ -20,6 +20,9 @@ Main    SETL    $0,42       % your code here
         TRAP    0,Halt,0    % halt, exit code in $255
 ```
 
+A program starts with `$255` holding its entry address — `Main`'s, or the
+first instruction's when there is no `Main` (MMIXAL reference).
+
 ## Assembler directives
 
 | Directive | Syntax | Effect |
