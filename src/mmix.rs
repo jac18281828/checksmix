@@ -99,7 +99,8 @@ macro_rules! i2f_conv_rr {
             Ok(m) => m,
             Err(()) => return $cpu.illegal_round_mode($mnem, $y),
         };
-        let y_val = $cpu.get_register($y);
+        // Y is the rounding-mode field, not a register operand.
+        let y_val = $y as u64;
         let z_val = $cpu.get_register($z);
         let negative = $signed && (z_val as i64) < 0;
         let magnitude = if negative {
@@ -122,8 +123,10 @@ macro_rules! i2f_conv_ri {
             Ok(m) => m,
             Err(()) => return $cpu.illegal_round_mode($mnem, $y),
         };
-        let y_val = $cpu.get_register($y);
-        let z_val = $cpu.get_register($z);
+        // Y is the rounding-mode field and Z the literal operand, neither a
+        // register.
+        let y_val = $y as u64;
+        let z_val = $z as u64;
         // Z is 8-bit immediate value to convert
         let v = if $signed {
             ($z as i8) as i64
@@ -175,7 +178,8 @@ macro_rules! mul_rr {
 macro_rules! mul_ri {
     ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
         let y_val = $cpu.get_register($y);
-        let z_val = $cpu.get_register($z);
+        // Z is the literal operand, not a register.
+        let z_val = $z as u64;
         let a = y_val as i64;
         let b = $z as i64;
         let product = (a as i128) * (b as i128);
@@ -257,7 +261,8 @@ macro_rules! div_rr {
 macro_rules! div_ri {
     ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
         let y_val = $cpu.get_register($y);
-        let z_val = $cpu.get_register($z);
+        // Z is the literal operand, not a register.
+        let z_val = $z as u64;
         let dividend = y_val as i64;
         let divisor = $z as i64;
         let flags = if divisor == 0 {
@@ -361,7 +366,8 @@ macro_rules! add_rr {
 macro_rules! add_ri {
     ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
         let y_val = $cpu.get_register($y);
-        let z_val = $cpu.get_register($z);
+        // Z is the literal operand, not a register.
+        let z_val = $z as u64;
         let a = y_val as i64;
         let b = $z as i64;
         let flags = match a.checked_add(b) {
@@ -403,7 +409,8 @@ macro_rules! sub_rr {
 macro_rules! sub_ri {
     ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr) => {{
         let y_val = $cpu.get_register($y);
-        let z_val = $cpu.get_register($z);
+        // Z is the literal operand, not a register.
+        let z_val = $z as u64;
         let a = y_val as i64;
         let b = $z as i64;
         let flags = match a.checked_sub(b) {
@@ -1900,6 +1907,16 @@ impl MMix {
         }
     }
 
+    /// `RA_V` when a store's value, read as signed, does not fit `lo..=hi`,
+    /// the destination width's range; otherwise no flag.
+    fn store_overflow_flag(value: u64, lo: i64, hi: i64) -> u64 {
+        if (lo..=hi).contains(&(value as i64)) {
+            0
+        } else {
+            RA_V
+        }
+    }
+
     /// Whether every byte of the tetra at `addr` came from `write_image` (or
     /// a test's `write_loaded_byte`) rather than reading as zero by default.
     /// Backs the unloaded-vector halt in [`MMix::trip`]: unassembled memory
@@ -3033,7 +3050,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIX", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let f = Self::u64_to_f64(z_val);
                 let rounded = Self::round_with_mode(f, mode);
@@ -3073,7 +3091,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIXU", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let f = Self::u64_to_f64(z_val);
                 let rounded = Self::round_with_mode(f, mode);
@@ -3115,7 +3134,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOT", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let v = z_val as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
@@ -3128,8 +3148,10 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTI", y),
                 };
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
+                // Y is the rounding-mode field and Z the literal operand,
+                // neither a register.
+                let y_val = y as u64;
+                let z_val = z as u64;
                 let v = (z as i8) as i64;
                 let flags = Self::int_to_f64_inexact(v.unsigned_abs());
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
@@ -3141,7 +3163,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTU", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let v = self.get_register(z);
                 let flags = Self::int_to_f64_inexact(v);
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
@@ -3153,8 +3176,10 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTUI", y),
                 };
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
+                // Y is the rounding-mode field and Z the literal operand,
+                // neither a register.
+                let y_val = y as u64;
+                let z_val = z as u64;
                 let flags = Self::int_to_f64_inexact(z as u64);
                 let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z as f64, mode);
                 self.set_register(x, Self::f64_to_u64(narrowed));
@@ -3270,7 +3295,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FSQRT", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(z_val);
                 let r_near = a.sqrt();
@@ -3300,7 +3326,8 @@ impl MMix {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FINT", y),
                 };
-                let y_val = self.get_register(y);
+                // Y is the rounding-mode field, not a register operand.
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let v = Self::u64_to_f64(z_val);
                 let r = if v.is_finite() {
@@ -3748,35 +3775,21 @@ impl MMix {
 
             // Store instructions
             Opcode::STB => {
-                // STB $X, $Y, $Z - Store byte (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z_val);
+                // STB $X, $Y, $Z - Store byte (with overflow check). A trip
+                // sets rY to the address and rZ to the value being stored.
+                let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
-                // Check if value fits in signed byte range [-128, 127]
-                let signed_value = value as i64;
-                let flags = if !(-128..=127).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i8::MIN as i64, i8::MAX as i64);
                 self.write_byte(addr, value as u8);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STBI => {
                 // STB $X, $Y, Z - Store byte immediate (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z as u64);
+                let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
-                let signed_value = value as i64;
-                let flags = if !(-128..=127).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i8::MIN as i64, i8::MAX as i64);
                 self.write_byte(addr, value as u8);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STBU => {
                 // STBU $X, $Y, $Z - Store byte unsigned (no overflow check)
@@ -3795,34 +3808,21 @@ impl MMix {
                 true
             }
             Opcode::STW => {
-                // STW $X, $Y, $Z - Store wyde (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z_val);
+                // STW $X, $Y, $Z - Store wyde (with overflow check). A trip
+                // sets rY to the address and rZ to the value being stored.
+                let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
-                let signed_value = value as i64;
-                let flags = if !(-32768..=32767).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i16::MIN as i64, i16::MAX as i64);
                 self.write_wyde(addr, value as u16);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STWI => {
                 // STW $X, $Y, Z - Store wyde immediate (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z as u64);
+                let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
-                let signed_value = value as i64;
-                let flags = if !(-32768..=32767).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i16::MIN as i64, i16::MAX as i64);
                 self.write_wyde(addr, value as u16);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STWU => {
                 // STWU $X, $Y, $Z - Store wyde unsigned (no overflow check)
@@ -3841,34 +3841,21 @@ impl MMix {
                 true
             }
             Opcode::STT => {
-                // STT $X, $Y, $Z - Store tetra (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z_val);
+                // STT $X, $Y, $Z - Store tetra (with overflow check). A trip
+                // sets rY to the address and rZ to the value being stored.
+                let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = self.get_register(x);
-                let signed_value = value as i64;
-                let flags = if !(-2147483648..=2147483647).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i32::MIN as i64, i32::MAX as i64);
                 self.write_tetra(addr, value as u32);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STTI => {
                 // STT $X, $Y, Z - Store tetra immediate (with overflow check)
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
-                let addr = y_val.wrapping_add(z as u64);
+                let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = self.get_register(x);
-                let signed_value = value as i64;
-                let flags = if !(-2147483648..=2147483647).contains(&signed_value) {
-                    RA_V
-                } else {
-                    0
-                };
+                let flags = Self::store_overflow_flag(value, i32::MIN as i64, i32::MAX as i64);
                 self.write_tetra(addr, value as u32);
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, addr, value)
             }
             Opcode::STTU => {
                 // STTU $X, $Y, $Z - Store tetra unsigned (no overflow check)
@@ -3932,7 +3919,8 @@ impl MMix {
             }
             Opcode::STSFI => {
                 let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
+                // Z is the literal offset, not a register.
+                let z_val = z as u64;
                 let addr = y_val.wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
                 let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
@@ -4143,7 +4131,7 @@ impl MMix {
             Opcode::NEG => {
                 // NEG $X, Y, $Z - Negate with overflow check
                 // Y is immediate constant, $Z is register
-                let y_val = self.get_register(y);
+                let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let a = y as i64;
                 let b = z_val as i64;
@@ -4162,8 +4150,8 @@ impl MMix {
             Opcode::NEGI => {
                 // NEG $X, Y, Z - Negate immediate with overflow check
                 // Both Y and Z are immediate constants
-                let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
+                let y_val = y as u64;
+                let z_val = z as u64;
                 let a = y as i64;
                 let b = z as i64;
                 let flags = match a.checked_sub(b) {
@@ -4224,7 +4212,8 @@ impl MMix {
             Opcode::SLI => {
                 // SLI $X, $Y, Z - Shift left immediate with overflow check
                 let y_val = self.get_register(y);
-                let z_val = self.get_register(z);
+                // Z is the literal shift amount, not a register.
+                let z_val = z as u64;
                 let val_y = y_val as i64;
                 let shift = z as u64;
                 let flags = if shift >= 64 {
@@ -9652,6 +9641,52 @@ Main\tSETI\t$1,100
             "rY holds $5's value from before ADD overwrote it"
         );
         assert_eq!(mmix.get_special(SpecialReg::RA) & RA_V, 0);
+    }
+
+    #[test]
+    fn test_immediate_overflow_trip_reports_the_literal_z() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x20, 0xFD000000); // V's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_V << 8); // enable V only
+        mmix.set_pc(0x100);
+        mmix.set_register(2, i64::MAX as u64);
+        // $5 holds a value distinct from the literal Z=5: a revert that reads
+        // get_register(5) instead of the literal would report this instead.
+        mmix.set_register(5, 0xDEAD_BEEF);
+        mmix.write_tetra(0x100, 0x21030205); // ADDI $3,$2,5
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x20);
+        assert_eq!(
+            mmix.get_special(SpecialReg::RZ),
+            5,
+            "rZ holds the literal Z, not $5's contents"
+        );
+    }
+
+    #[test]
+    fn test_store_overflow_trip_reports_address_and_stored_value() {
+        let mut mmix = MMix::new();
+        load_tetra(&mut mmix, 0x20, 0xFD000000); // V's vector loaded
+        mmix.set_special(SpecialReg::RA, RA_V << 8); // enable V only
+        mmix.set_pc(0x100);
+        mmix.set_register(1, 200); // out of signed byte range: overflows
+        mmix.set_register(2, 0x4000);
+        mmix.set_register(3, 8);
+        mmix.write_tetra(0x100, 0xA0010203); // STB $1,$2,$3
+
+        assert!(mmix.execute_instruction());
+        assert_eq!(mmix.get_pc(), 0x20);
+        assert_eq!(
+            mmix.get_special(SpecialReg::RY),
+            0x4008,
+            "rY holds the computed address, not raw $Y"
+        );
+        assert_eq!(
+            mmix.get_special(SpecialReg::RZ),
+            200,
+            "rZ holds the stored value, not raw $Z"
+        );
     }
 
     #[test]

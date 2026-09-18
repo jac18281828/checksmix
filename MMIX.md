@@ -184,10 +184,15 @@ not leftmost is dropped entirely — no trip, no event flag.
 A trip — explicit or arithmetic — sets `rB ← $255`, `$255 ← rJ`, `rW` to the
 address of the instruction after the one that trips, and `rX` to `#80000000`
 in the high tetra with that instruction's own opcode/X/Y/Z in the low tetra
-(always negative, since the top bit is set). `rY` and `rZ` take that
-instruction's `$Y` and `$Z`. An arithmetic trip's operands are captured
-before the instruction's own destination write, so `ADD $5,$5,$3` overflowing
-still shows the handler the pre-`ADD` `$5` in `rY`.
+(always negative, since the top bit is set). `rY` and `rZ` take the operand
+values the instruction used: a register operand's contents, or the literal
+field for an immediate or non-register operand — `ADDI $3,$2,5` gives
+`rZ = 5`, and `FIX`/`FLOT`'s rounding-mode `Y` and `NEG`'s immediate `Y` are
+non-register fields too. A store trip (`STB`/`STW`/`STT`, either form) sets
+`rY` to the computed address and `rZ` to the value being stored. An
+arithmetic trip's operands are captured before the instruction's own
+destination write, so `ADD $5,$5,$3` overflowing still shows the handler the
+pre-`ADD` `$5` in `rY`.
 
 `RESUME 0` returns from a handler: if `rX` is negative — always true right
 after a trip — execution continues at `rW`. Otherwise `rX`'s top byte is a
