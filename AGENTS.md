@@ -21,6 +21,7 @@ Establish functionality from canonical reference prior to implementation
 - Do not include expository or 'my way' style comments.
 - Do not include comments that focus on the change itself and lack suitable generality ('low overhead version', 'fully optimal version', etc.).
 - Comments should document the code, not the change being made.
+- Keep each source file under about 2,500 lines of non-test code; code review enforces it; `src/mmixal.rs` is a tracked exception until its own split.
 
 ## Naming
 - Naming must be semantic, not pattern-based.
