@@ -418,7 +418,7 @@ fn fgetws_rounds_an_odd_buffer_address_down() {
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fgetws_odd.txt");
     let guard = TempFileGuard(path.clone());
-    fs::write(&path, [b'H', b'i']).unwrap();
+    fs::write(&path, *b"Hi").unwrap();
 
     assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
     // 77_001 is odd; Fgetws must round down to 77_000 before writing.

@@ -1,6 +1,5 @@
 //! PUSHJ/PUSHGO/POP frames and SAVE/UNSAVE contexts.
 
-use super::super::*;
 use super::*;
 
 #[test]

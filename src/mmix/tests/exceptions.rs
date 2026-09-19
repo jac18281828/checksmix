@@ -1,6 +1,5 @@
 //! rA exception routing, TRIP, and overflow/divide-check flags.
 
-use super::super::*;
 use super::*;
 
 #[test]

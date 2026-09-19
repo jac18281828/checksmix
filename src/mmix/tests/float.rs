@@ -1,6 +1,5 @@
 //! Floating-point opcodes, rounding modes, and NaN handling.
 
-use super::super::*;
 use super::*;
 
 #[test]

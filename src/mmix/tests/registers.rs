@@ -1,6 +1,5 @@
 //! General/special register access and the PUT family guard rails.
 
-use super::super::*;
 use super::*;
 
 #[test]

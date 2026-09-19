@@ -261,7 +261,7 @@ impl MmoGenerator {
             payload.push(0);
         }
 
-        for tetra in payload.chunks_exact(4) {
+        for tetra in payload.as_chunks::<4>().0 {
             if tetra[0] == MM {
                 mmo.push(MM);
                 mmo.push(MmoRecordType::LopQuote as u8);

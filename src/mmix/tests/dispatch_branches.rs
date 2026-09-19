@@ -1,6 +1,5 @@
 //! Conditional branches, JMP, GETA, PUSHJ/GO targets.
 
-use super::super::*;
 use super::*;
 
 #[test]

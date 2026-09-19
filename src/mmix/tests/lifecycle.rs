@@ -1,6 +1,5 @@
 //! MMix construction, reset, run/run_bounded, and Stop.
 
-use super::super::*;
 use super::*;
 
 #[test]

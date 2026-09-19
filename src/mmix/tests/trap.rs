@@ -1,6 +1,5 @@
 //! TRAP opcodes (file I/O, time, debug) and the Host they route through.
 
-use super::super::*;
 use super::*;
 
 // ========== TRAP Handler Tests ==========

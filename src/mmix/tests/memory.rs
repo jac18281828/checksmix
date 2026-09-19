@@ -1,6 +1,5 @@
 //! Sparse memory, the journal, and the LOAD/STORE opcode family.
 
-use super::super::*;
 use super::*;
 
 #[test]

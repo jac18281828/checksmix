@@ -1,6 +1,5 @@
 //! The MMix Display impl.
 
-use super::super::*;
 use super::*;
 
 /// The dump labels each slot with the name of the register that slot

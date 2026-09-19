@@ -1,6 +1,5 @@
 //! Conditional-set/zero-set families, SWYM, SYNC, and RESUME.
 
-use super::super::*;
 use super::*;
 
 #[test]

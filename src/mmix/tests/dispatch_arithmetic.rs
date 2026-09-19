@@ -1,6 +1,5 @@
 //! ADD/SUB/NEG/MUL/DIV, bitwise ops, and shifts.
 
-use super::super::*;
 use super::*;
 
 #[test]
