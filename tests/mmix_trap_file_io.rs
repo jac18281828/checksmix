@@ -210,16 +210,29 @@ fn fopen_invalid_mode_fails() {
 
 #[test]
 fn fopen_mode_above_four_fails_even_with_the_low_byte_valid() {
-    // #100 (256): a truncating check would read this as mode 0 (TextRead)
-    // and succeed. The contract fails any mode above 4.
+    // #104 (260): a truncating check reads this as mode 4
+    // (BinaryReadWrite), which creates the file. Check before the guard's
+    // drop deletes it regardless of whether `Fopen` did.
     let mut mmix = MMix::new();
-    let path = unique_tmp_path("fopen_wide_mode.txt");
+    let path = unique_tmp_path("fopen_wide_mode_create.txt");
     let guard = TempFileGuard(path.clone());
 
-    assert_eq!(fopen(&mut mmix, 3, &path, 0x100), -1);
+    assert_eq!(fopen(&mut mmix, 3, &path, 0x104), -1);
+    assert!(!path.exists());
 
     drop(guard);
-    assert!(!path.exists());
+
+    // #100 (256): a truncating check reads this as mode 0 (TextRead),
+    // which succeeds against an existing file without touching it.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_wide_mode_read.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "unchanged").unwrap();
+
+    assert_eq!(fopen(&mut mmix, 3, &path, 0x100), -1);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "unchanged");
+
+    drop(guard);
 }
 
 #[test]
