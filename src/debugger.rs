@@ -1488,7 +1488,8 @@ AddFunc\tADDU\t$0,$0,$1
         dbg.execute(Command::Run);
 
         // Expected values from the same push_frame/pop_frame slide already
-        // exercised by test_pushj_window_slide_return_value (src/mmix.rs):
+        // exercised by test_pushj_window_slide_return_value
+        // (src/mmix/tests/stack.rs):
         // the two SETIs grow rL to 3 ($1, then $2, each >= the then-current
         // rL); PUSHJ $0 slides caller's $1, $2 (40, 2) down to callee's $0,
         // $1; POP 1 places the callee's $0 (the sum) at the caller's hole
