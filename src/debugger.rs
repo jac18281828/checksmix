@@ -142,6 +142,8 @@ pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
         }
     }
 
+    mmix.set_debug_strings(assembler.debug_strings().to_vec());
+
     for &(reg, value) in &assembler.greg_inits {
         mmix.set_register(reg, value);
     }
@@ -782,11 +784,6 @@ Main    SETI    $1,7
 ";
 
     /// Writes `Hi` to fd 1, then halts.
-    ///
-    /// Uses the literal 1 rather than the `StdOut` symbol: `StdOut` resolves
-    /// through `stdio_raw_identifiers`, which yields a raw handle on Windows
-    /// rather than 1, and only fd 1 and 2 reach the host. These tests are
-    /// about host routing, not symbol resolution.
     const GREETING_PROGRAM: &str = "\
 \tLOC\t#100
 Main\tLDA\t$255,Text

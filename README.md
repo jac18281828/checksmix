@@ -8,7 +8,7 @@ MMIX assembler and emulator with fast feedback for learning, experimenting, and 
 - `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
 - `mmixasm`: assemble `.mms` to `.mmo` for reuse or distribution.
 - `mmixdb`: interactive source-level debugger for `.mms` programs (step, breakpoints, print, Emacs GUD mode).
-- Emulator: 256 general-purpose registers, 32 special registers, sparse 64-bit address space, and basic TRAP support (Halt and Fputs for console output).
+- Emulator: 256 general-purpose registers, 32 special registers, sparse 64-bit address space, and the MMIXAL reference's TRAP file-I/O ABI (`Halt`, `Fopen`/`Fclose`/`Fread`/`Fwrite`/`Fgets`/`Fgetws`/`Fputs`/`Fputws`/`Fseek`/`Ftell`), plus checksmix's own `Fputc`, `Time`, and `Debug` (backing the `debug "text"` directive).
 
 ## Quick start
 1) Install Rust (stable toolchain).  

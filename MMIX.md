@@ -71,18 +71,11 @@ file is a hard error naming the file.
 INCLUDE lib.mms      % pulls lib.mms in as if inserted here
 ```
 
-Three known limitations:
+Two known limitations:
 
 - **Own line, no label.** `INCLUDE` must occupy its own line; a line whose
   first token is not `INCLUDE`/`.INCLUDE` is left untouched, so a label cannot
   be attached to an `INCLUDE` line.
-- **`debug` label collisions.** The `debug` extension's generated `DbgStr_NNNN`
-  labels are numbered per preprocessing call, and splitting a host file into
-  multiple units around an `INCLUDE` means multiple such calls -- so two units
-  that both use `debug` can generate the same label. This is a pre-existing
-  limitation (two `debug`-using files on the command line already collide
-  today, independent of `INCLUDE`); it surfaces loudly as a `symbol '...'
-  redefined` error, never silently.
 - **`source_text` first-match-on-filename.** Splitting a host file at an
   `INCLUDE` produces multiple units that share the same filename. The
   debug-info API `source_text(file, line)` resolves a unit by the first match
@@ -216,29 +209,82 @@ debugger can see why.
 
 ## TRAP interface
 
-`TRAP 0, Code, Z` invokes a system call identified by the predefined symbol *Code*. Register `$255` holds the primary argument or return value; additional arguments use `$0`–`$2` as described below.
+`TRAP 0, Code, Handle` invokes a system call identified by the predefined
+symbol *Code*, numbered per the MMIXAL reference. `Handle` (`Z`) names an
+open handle, 0–255. A call with one further argument takes it in `$255`
+directly; a call with two takes an address in `$255`, the first argument as
+the octa there and the second as the octa at `$255+8`. The result replaces
+`$255`; a negative result means failure.
 
-`TRAP 0,Trip,Z` (the `Trip` code below) is unrelated to the `TRIP` instruction
-in "User trips": it is the kernel's dynamic-trap entry point, jumping to `rTT`.
-
-| Code | Value | Description | Key registers |
+| Code | Value | Extra arguments | Result in `$255` |
 | --- | --- | --- | --- |
-| `Halt` | 0 | Stop execution, exit code in `$255` | `$255` = exit code |
-| `Trip` | 1 | Cause a forced trip | — |
-| `Fopen` | 2 | Open a file | `$255` = filename ptr, `$0` = mode; returns fd in `$255` |
-| `Fclose` | 3 | Close a file descriptor | `$255` = fd |
-| `Fread` | 4 | Read bytes from fd | `$255` = fd, `$0` = buf ptr, `$1` = count; returns bytes read |
-| `Fgets` | 5 | Read a line (null-terminated) from fd | `$255` = fd, `$0` = buf ptr, `$1` = max bytes |
-| `Fgetws` | 6 | Read a wide string from fd | `$255` = fd, `$0` = buf ptr, `$1` = max wydes |
-| `Fwrite` | 7 | Write bytes to fd | `$255` = fd, `$0` = buf ptr, `$1` = count; returns bytes written |
-| `Fputs` | 8 | Write null-terminated string to fd | `$255` = fd, `$0` = string ptr; bytes ≥ 0x80 emitted raw |
-| `Fputc` | 9 | Write one byte to fd | `$255` = fd, `$0` = byte; high byte of `$0` emitted raw |
-| `Fputws` | 10 | Write null-terminated wide string to fd | `$255` = fd, `$0` = string ptr |
-| `Fseek` | 11 | Seek within fd | `$255` = fd, `$0` = offset, `$1` = whence |
-| `Ftell` | 12 | Get current position in fd | `$255` = fd; returns position in `$255` |
-| `Time` | 13 | Current time | returns microseconds since Unix epoch in `$255` |
+| `Halt` | 0 | `$255` = exit code | — (halts) |
+| `Fopen` | 1 | name address, mode | 0, or −1 |
+| `Fclose` | 2 | — | 0, or −1 |
+| `Fread` | 3 | buffer, size | 0 if all `size` bytes read; `n − size` if end of file after `n`; `−1 − size` on error |
+| `Fgets` | 4 | buffer, size | characters stored, or −1 |
+| `Fgetws` | 5 | buffer, size | wydes stored, or −1 |
+| `Fwrite` | 6 | buffer, size | 0, or `n − size` after writing `n` |
+| `Fputs` | 7 | `$255` = string address | bytes written, or −1 |
+| `Fputws` | 8 | `$255` = string address | wydes written, or −1 |
+| `Fseek` | 9 | `$255` = offset | 0, or −1 |
+| `Ftell` | 10 | — | position, or −1 |
 
-Standard file descriptors: `StdIn = 0`, `StdOut = 1`, `StdErr = 2` (predefined symbols).
+`Fopen`'s mode is one of `TextRead` (0), `TextWrite` (1), `BinaryRead` (2),
+`BinaryWrite` (3), `BinaryReadWrite` (4). A handle carries four capability
+bits: read, write, seek, and read-write. Text modes grant read or write
+alone; binary read/write modes add seek; `BinaryReadWrite` grants all four
+and switches — a read clears the write capability and a write clears the
+read capability, until `Fseek` restores both. The three write modes
+truncate an existing file. A call on a handle lacking the needed capability
+fails with the table's failure value and touches no file. `Fopen` lets the
+program choose the handle; opening one already open closes it first, and a
+failed open leaves the handle closed.
+
+`Fgets` reads until `size − 1` characters or a newline, then a zero byte,
+returning the count stored (a partial last line at end of file included), or
+−1 when `size` is 0 or nothing was read. `Fgetws`/`Fputws` move wyde
+characters, two bytes each in memory order, raw to and from the file:
+`Fgetws` rounds its buffer address down to even and stops at the wyde
+`#000A`, `size − 1` wydes, or end of file; `Fputws` writes up to, not
+including, the first zero wyde. `Fputs` writes up to, not including, the
+first zero byte, with no byte value translated. `Fseek`'s offset, `≥ 0`,
+positions that many bytes from the start; `< 0` positions `−offset − 1`
+bytes before the end, so `−1` is the end itself.
+
+Handles 0, 1 and 2 (`StdIn`, `StdOut`, `StdErr`, the predefined symbols'
+values) are open at start with `TextRead`, `TextWrite`, `TextWrite`.
+**Departure from the reference:** `Fopen`/`Fclose` on any of them return −1
+and leave the stream as it was, rather than letting the program rebind them
+— checksmix routes handles 1 and 2 through the host's own write, which has
+no file underneath to rebind, and a `StdIn` read always fails, since the
+host has no read primitive.
+
+### Extensions
+
+Three codes are checksmix's own, numbered `#80`–`#82` so an old binary's
+codes 11–13 reach the unhandled-TRAP diagnostic rather than the wrong call:
+
+| Code | Value | Behavior |
+| --- | --- | --- |
+| `Fputc` | `#80` | Write one byte (`$255`'s low byte) to `Handle`; shares `Fputs`'s capability check and read-write switching. Returns 0, or −1. |
+| `Time` | `#81` | `Handle` (`Z`) selects the unit: 0 seconds, 1 milliseconds, 2 microseconds since the Unix epoch. Returns the time in `$255`. |
+| `Debug` | `#82` | Backs the `debug "text"` directive, below. |
+
+### `debug "text"`
+
+`debug "text"` is a checksmix extension, not part of MMIXAL. It assembles to
+one `TRAP 0,Debug,K` at its own address — labelled with the directive's own
+label, if it has one — where `K` is the directive's index, 0-based, in
+program order across every translation unit assembled together. `K` is one
+byte, so a 257th `debug` directive in one program is an assembly error
+naming its file and line.
+
+The directive's text lives in a table outside guest memory: nothing is
+written to guest memory and no label is generated. Running the TRAP writes
+the string and a newline (`#0A`) to handle 1, changing no register —
+`$255` included. A `K` past the table's end prints nothing and reports a
+diagnostic instead.
 
 ## Register stack
 
@@ -269,11 +315,6 @@ local — where `rO` stood before the matching `SAVE`.
 
 Both instructions ignore their must-be-zero fields (`SAVE`'s `Y` and `Z`,
 `UNSAVE`'s `X` and `Y`) rather than rejecting a nonzero value there.
-
-The `debug "text"` extension's generated stub opens with `SAVE $254,0`, which
-needs `$254` global. Once `PUT rG,255` makes `$254` local, a `debug` line
-halts there instead of printing — accepted until a later unit replaces the
-stub with a single `TRAP`.
 
 Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
 through `$X`. For an instruction whose `X` field is a general-register

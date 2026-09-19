@@ -448,12 +448,12 @@ pub const RA_ROUND_SHIFT: u32 = 16;
 /// Widest value `PUT` may write to rA: the register holds 18 bits.
 pub const RA_MAX: u64 = 0x3FFFF;
 
-/// TRAP code identifiers for MMIX.
-/// These codes are used in TRAP instructions to invoke system calls.
-/// The TRAP instruction format is: TRAP X, Y, Z where:
-/// - X is unused (typically 0)
-/// - Y is the trap code
-/// - Z is an argument (varies by trap code)
+/// TRAP code identifiers for MMIX, numbered per the MMIXAL reference: every
+/// call is `TRAP 0,Code,Handle`, `Z` names the handle (0-255), and `$255`
+/// carries any further argument (an address, for a call that takes two).
+/// `Fputc`, `Time` and `Debug` are checksmix's own extensions, given codes
+/// (`#80`-`#82`) well above the reference's range so an old binary's codes
+/// 11-13 reach the unhandled-TRAP diagnostic rather than the wrong call.
 ///
 /// More trap codes may be added in future releases, so downstream matches
 /// must carry a wildcard arm.
@@ -461,20 +461,20 @@ pub const RA_MAX: u64 = 0x3FFFF;
 #[repr(u8)]
 #[non_exhaustive]
 pub enum TrapCode {
-    Halt = 0,    // Stop execution
-    Trip = 1,    // Cause a trip (not implemented)
-    Fopen = 2,   // Open file
-    Fclose = 3,  // Close file
-    Fread = 4,   // Read from file
-    Fgets = 5,   // Read line from file
-    Fgetws = 6,  // Read wide string from file
-    Fwrite = 7,  // Write to file
-    Fputs = 8,   // Write null-terminated string
-    Fputc = 9,   // Write character
-    Fputws = 10, // Write wide string
-    Fseek = 11,  // Seek in file
-    Ftell = 12,  // Get file position
-    Time = 13,   // current time in microseconds since Unix epoch
+    Halt = 0,
+    Fopen = 1,
+    Fclose = 2,
+    Fread = 3,
+    Fgets = 4,
+    Fgetws = 5,
+    Fwrite = 6,
+    Fputs = 7,
+    Fputws = 8,
+    Fseek = 9,
+    Ftell = 10,
+    Fputc = 0x80,
+    Time = 0x81,
+    Debug = 0x82,
 }
 
 impl TrapCode {
@@ -482,19 +482,19 @@ impl TrapCode {
     pub fn from_u8(n: u8) -> Option<Self> {
         match n {
             0 => Some(TrapCode::Halt),
-            1 => Some(TrapCode::Trip),
-            2 => Some(TrapCode::Fopen),
-            3 => Some(TrapCode::Fclose),
-            4 => Some(TrapCode::Fread),
-            5 => Some(TrapCode::Fgets),
-            6 => Some(TrapCode::Fgetws),
-            7 => Some(TrapCode::Fwrite),
-            8 => Some(TrapCode::Fputs),
-            9 => Some(TrapCode::Fputc),
-            10 => Some(TrapCode::Fputws),
-            11 => Some(TrapCode::Fseek),
-            12 => Some(TrapCode::Ftell),
-            13 => Some(TrapCode::Time),
+            1 => Some(TrapCode::Fopen),
+            2 => Some(TrapCode::Fclose),
+            3 => Some(TrapCode::Fread),
+            4 => Some(TrapCode::Fgets),
+            5 => Some(TrapCode::Fgetws),
+            6 => Some(TrapCode::Fwrite),
+            7 => Some(TrapCode::Fputs),
+            8 => Some(TrapCode::Fputws),
+            9 => Some(TrapCode::Fseek),
+            10 => Some(TrapCode::Ftell),
+            0x80 => Some(TrapCode::Fputc),
+            0x81 => Some(TrapCode::Time),
+            0x82 => Some(TrapCode::Debug),
             _ => None,
         }
     }
@@ -675,9 +675,11 @@ struct SaveContextLayout {
 /// losing it to the process.
 ///
 /// File-descriptor traps (`Fopen`/`Fclose`/`Fread`/`Fgets`/`Fgetws`/
-/// `Fwrite`/`Fseek`/`Ftell`, and fd 3+ of `Fputs`/`Fputc`/`Fputws`) do not go
-/// through the host — they keep using `std::fs` directly and fail naturally
-/// on platforms without a filesystem.
+/// `Fwrite`/`Fseek`/`Ftell` on a handle above 2, and fd 3+ of `Fputs`/
+/// `Fputc`/`Fputws`) do not go through the host — they keep using `std::fs`
+/// directly and fail naturally on platforms without a filesystem. Handles
+/// 0-2 belong to the host: `Fopen`/`Fclose` reject them, and their reads and
+/// writes route through `Host` rather than `std::fs`.
 ///
 /// `flush` and `trap` have no-op defaults, so an embedder implements only
 /// what it needs. The trait is object-safe — `MMix` stores it as
@@ -723,7 +725,7 @@ struct SaveContextLayout {
 /// let mut mmix = MMix::with_host(Capture(out.clone()));
 ///
 /// mmix.set_register(255, u64::from(b'X'));
-/// mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), fd 1
+/// mmix.write_tetra(0, 0x00008001); // TRAP 0, Fputc (#80), fd 1
 /// mmix.execute_instruction();
 ///
 /// assert_eq!(&*out.borrow(), b"X");
@@ -762,7 +764,7 @@ pub trait Host: Any {
     /// `arg255` and `result255` do not mean the same thing for every trap:
     /// - `Halt` never writes `$255`, so `result255` is simply the exit code
     ///   the program supplied in `$255` before the trap, echoed back.
-    /// - `Trip` never writes `$255` either, so `arg255` and `result255` are
+    /// - `Debug` never writes `$255` either, so `arg255` and `result255` are
     ///   both whatever `$255` happened to hold — before and after are equal.
     /// - `Time` takes its unit in `arg` (the Z operand), not in `$255`, so
     ///   `arg255` is stale on entry and only `result255` reflects the trap.
@@ -811,7 +813,7 @@ impl<H: Host + ?Sized> Host for Box<H> {
 /// `SystemTime` for the clock, and `eprintln!` for diagnostics.
 ///
 /// `write_bytes_to_fd` only ever calls `Host::write` with fd 1 or 2 (fd 3+
-/// stays on `file_handles`), but `StdHost` is a general `Host`
+/// reads its `File` from `file_handles`), but `StdHost` is a general `Host`
 /// implementation, so it treats any other fd as an error rather than
 /// assuming that invariant.
 pub struct StdHost;
@@ -841,6 +843,26 @@ impl Host for StdHost {
     fn diagnostic(&mut self, msg: &str) {
         eprintln!("{msg}");
     }
+}
+
+/// One of `checksmix`'s open TRAP handles. Handles 0-2 are the standard
+/// streams: no backing `File` (`Fclose`d reads and writes for them route
+/// through the installed [`Host`]) and fixed capabilities. Handles 3-255 are
+/// whatever `Fopen`'s mode granted.
+///
+/// `read`, `write` and `seek` gate `Fread`/`Fgets`/`Fgetws`,
+/// `Fwrite`/`Fputs`/`Fputc`/`Fputws`, and `Fseek`/`Ftell` respectively.
+/// `read_write` marks a handle opened `BinaryReadWrite`: on such a handle a
+/// read clears `write` and a write clears `read`, and `Fseek` restores both
+/// — the reference's read-write switching rule. A handle opened
+/// `BinaryRead`/`BinaryWrite` carries `seek` without `read_write`, so its
+/// single capability never toggles.
+struct FileHandle {
+    file: Option<File>,
+    read: bool,
+    write: bool,
+    seek: bool,
+    read_write: bool,
 }
 
 /// The MMIX computer architecture.
@@ -879,13 +901,10 @@ pub struct MMix {
     /// Program counter (location of next instruction)
     pc: u64,
 
-    /// Open file handles for TRAP calls
-    /// Maps file descriptor numbers to File objects
-    /// 0 = stdin, 1 = stdout, 2 = stderr, 3+ = user-opened files
-    file_handles: HashMap<u8, File>,
-
-    /// Counter for allocating new file descriptors
-    next_fd: u8,
+    /// Open TRAP handles, numbered 0-255 as the caller chooses (`Fopen`
+    /// picks 3+; 0-2 are the standard streams, seeded at [`MMix::initialize`]
+    /// and never reassigned).
+    file_handles: HashMap<u8, FileHandle>,
 
     /// Exit code from HALT trap (to be returned as process exit code)
     exit_code: u64,
@@ -894,6 +913,11 @@ pub struct MMix {
     /// events) go. `MMix::new()` installs `StdHost`; `MMix::with_host`
     /// installs anything else.
     host: Box<dyn Host>,
+
+    /// The strings every `debug` directive collected, `K`-indexed. Installed
+    /// by [`MMix::set_debug_strings`] at load time; [`TrapCode::Debug`]
+    /// reads it and touches nothing else.
+    debug_strings: Vec<Vec<u8>>,
 
     /// Whether [`MMix::write_byte`] records the address it touches. Survives
     /// [`MMix::reset`]; see [`MMix::set_journal`].
@@ -945,9 +969,9 @@ impl MMix {
             memory: HashMap::new(),
             pc: 0,
             file_handles: HashMap::new(),
-            next_fd: 3, // 0, 1, 2 are reserved for stdin, stdout, stderr
             exit_code: 0,
             host,
+            debug_strings: Vec::new(),
             journal_enabled: false,
             journal: HashSet::new(),
             loaded: BTreeSet::new(),
@@ -958,8 +982,7 @@ impl MMix {
 
     /// Return the machine to its freshly-constructed state — every register,
     /// all of memory, the program counter, the call-frame stack, open file
-    /// handles, the next descriptor to allocate, and the exit code — while
-    /// keeping the installed [`Host`].
+    /// handles, and the exit code — while keeping the installed [`Host`].
     ///
     /// A caller that injected a host to capture output needs this: dropping
     /// the machine and building another would take the host with it, and only
@@ -1025,6 +1048,39 @@ impl MMix {
         // and move together for the life of the machine.
         self.set_special(SpecialReg::RO, STACK_SEGMENT_START);
         self.set_special(SpecialReg::RS, STACK_SEGMENT_START);
+
+        // StdIn/StdOut/StdErr are open at start, TextRead/TextWrite/TextWrite
+        // per the reference. None carries a `File`: fd 0's reads and fd 1/2's
+        // writes route through the installed `Host`.
+        self.file_handles.insert(
+            0,
+            FileHandle {
+                file: None,
+                read: true,
+                write: false,
+                seek: false,
+                read_write: false,
+            },
+        );
+        for fd in [1u8, 2] {
+            self.file_handles.insert(
+                fd,
+                FileHandle {
+                    file: None,
+                    read: false,
+                    write: true,
+                    seek: false,
+                    read_write: false,
+                },
+            );
+        }
+    }
+
+    /// Install the string table every `debug` directive's `TRAP 0,Debug,K`
+    /// reads from, `K`-indexed. The loader (`write_image`, `run_mmo`) calls
+    /// this once, before the program runs.
+    pub fn set_debug_strings(&mut self, strings: Vec<Vec<u8>>) {
+        self.debug_strings = strings;
     }
 
     /// Get the value of a general-purpose register.
@@ -2382,7 +2438,6 @@ impl MMix {
         let arg255 = self.get_register(255);
         let result = match trap_code {
             TrapCode::Halt => self.handle_halt(arg),
-            TrapCode::Trip => self.handle_trip(arg),
             TrapCode::Fopen => self.handle_fopen(arg),
             TrapCode::Fclose => self.handle_fclose(arg),
             TrapCode::Fread => self.handle_fread(arg),
@@ -2395,6 +2450,7 @@ impl MMix {
             TrapCode::Fseek => self.handle_fseek(arg),
             TrapCode::Ftell => self.handle_ftell(arg),
             TrapCode::Time => self.handle_time(arg),
+            TrapCode::Debug => self.handle_debug(arg),
         };
         let result255 = self.get_register(255);
         self.host.trap(trap_code, arg, arg255, result255);
@@ -2419,307 +2475,360 @@ impl MMix {
         false
     }
 
-    /// TRAP 1: Trip - cause a dynamic trap
-    /// This saves state and jumps to the handler at rTT (if set)
-    fn handle_trip(&mut self, arg: u8) -> bool {
-        debug!("TRAP: Trip");
+    /// Whether `handle` is open and grants read access.
+    fn handle_readable(&self, handle: u8) -> bool {
+        self.file_handles.get(&handle).is_some_and(|h| h.read)
+    }
 
-        let handler_addr = self.get_special(SpecialReg::RTT);
+    /// Whether `handle` is open and grants write access.
+    fn handle_writable(&self, handle: u8) -> bool {
+        self.file_handles.get(&handle).is_some_and(|h| h.write)
+    }
 
-        if handler_addr == 0 {
-            self.host.diagnostic(&format!(
-                "TRIP trap at PC={:#018x} - rTT not set, treating as NOP",
-                self.pc
-            ));
+    /// Whether `handle` is open and grants seek access.
+    fn handle_seekable(&self, handle: u8) -> bool {
+        self.file_handles.get(&handle).is_some_and(|h| h.seek)
+    }
+
+    /// A read on a `BinaryReadWrite` handle clears its write capability
+    /// until `Fseek` restores both.
+    fn note_read(&mut self, handle: u8) {
+        if let Some(entry) = self.file_handles.get_mut(&handle)
+            && entry.read_write
+        {
+            entry.write = false;
+        }
+    }
+
+    /// A write on a `BinaryReadWrite` handle clears its read capability
+    /// until `Fseek` restores both.
+    fn note_write(&mut self, handle: u8) {
+        if let Some(entry) = self.file_handles.get_mut(&handle)
+            && entry.read_write
+        {
+            entry.read = false;
+        }
+    }
+
+    /// `Fseek` restores both capabilities on a `BinaryReadWrite` handle.
+    fn note_seek(&mut self, handle: u8) {
+        if let Some(entry) = self.file_handles.get_mut(&handle)
+            && entry.read_write
+        {
+            entry.read = true;
+            entry.write = true;
+        }
+    }
+
+    /// TRAP 1: Fopen. `Z` is the handle the caller chooses, 0-255; `$255`
+    /// addresses a two-octa block holding the name address and the mode.
+    /// Handles 0-2 belong to the host and always fail. Opening a handle
+    /// already open closes it first; on failure the handle is left closed.
+    fn handle_fopen(&mut self, handle: u8) -> bool {
+        if handle <= 2 {
+            debug!(handle, "TRAP: Fopen rejects a standard handle");
+            self.set_register(255, (-1i64) as u64);
             self.advance_pc();
             return true;
         }
 
-        // Save interrupted state to special registers
-        // rW: where interrupted (PC of next instruction)
-        self.set_special(SpecialReg::RW, self.pc.wrapping_add(4));
-        // rX: execution register (would be the instruction being executed)
-        // rY, rZ: operands (Y and Z fields, with X and opcode in high bits)
-        self.set_special(SpecialReg::RY, 0);
-        self.set_special(SpecialReg::RZ, arg as u64);
+        let param_addr = self.get_register(255);
+        let name_addr = self.read_octa(param_addr);
+        let mode = self.read_octa(param_addr.wrapping_add(8)) as u8;
+        let filename = self.read_cstring(name_addr, 256);
 
-        // Jump to trap handler
-        debug!("Jumping to TRIP handler at {:#018x}", handler_addr);
-        self.pc = handler_addr;
-        true
-    }
+        debug!(handle, filename = %filename, mode, "TRAP: Fopen");
 
-    /// TRAP 2: Fopen - open a file
-    /// Parameters in $255: filename address
-    /// Auxiliary parameter: mode (0=read, 1=write, 2=append)
-    /// Returns file descriptor in $255, or -1 on error
-    fn handle_fopen(&mut self, mode: u8) -> bool {
-        let filename_addr = self.get_register(255);
-        let filename = self.read_cstring(filename_addr, 256);
-
-        debug!(filename = %filename, mode, "TRAP: Fopen");
-
-        let result = match mode {
-            0 => File::open(&filename).ok(),
-            1 => OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&filename)
-                .ok(),
-            2 => OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&filename)
-                .ok(),
+        // TextRead=0, TextWrite=1, BinaryRead=2, BinaryWrite=3,
+        // BinaryReadWrite=4: (read, write, seek, read_write).
+        let caps = match mode {
+            0 => (true, false, false, false),
+            1 => (false, true, false, false),
+            2 => (true, false, true, false),
+            3 => (false, true, true, false),
+            4 => (true, true, true, true),
             _ => {
-                debug!("Invalid file open mode: {}", mode);
-                None
+                debug!(mode, "Invalid file open mode");
+                self.file_handles.remove(&handle);
+                self.set_register(255, (-1i64) as u64);
+                self.advance_pc();
+                return true;
             }
         };
 
-        match result {
-            Some(file) => {
-                let fd = self.next_fd;
-                self.file_handles.insert(fd, file);
-                self.next_fd = self.next_fd.wrapping_add(1);
-                if self.next_fd < 3 {
-                    self.next_fd = 3;
-                }
-                self.set_register(255, fd as u64);
-                debug!(fd, "File opened successfully");
-            }
-            None => {
-                self.set_register(255, (-1i64) as u64);
-                debug!("File open failed");
-            }
-        }
-        self.advance_pc();
-        true
-    }
+        // Opening an already-open handle closes it first.
+        self.file_handles.remove(&handle);
 
-    /// TRAP 3: Fclose - close a file
-    /// Parameter in $255: file descriptor
-    /// Returns 0 on success, -1 on error in $255
-    fn handle_fclose(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(255) as u8;
-        debug!(fd, "TRAP: Fclose");
+        let opened = match mode {
+            0 | 2 => OpenOptions::new().read(true).open(&filename),
+            1 | 3 => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&filename),
+            _ => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&filename),
+        };
 
-        match self.file_handles.remove(&fd) {
-            Some(_) => {
+        match opened {
+            Ok(file) => {
+                let (read, write, seek, read_write) = caps;
+                self.file_handles.insert(
+                    handle,
+                    FileHandle {
+                        file: Some(file),
+                        read,
+                        write,
+                        seek,
+                        read_write,
+                    },
+                );
                 self.set_register(255, 0);
-                debug!(fd, "File closed successfully");
+                debug!(handle, "File opened successfully");
             }
-            None => {
-                self.set_register(255, -1i64 as u64);
-                debug!(fd, "File not open");
+            Err(_) => {
+                self.set_register(255, (-1i64) as u64);
+                debug!(handle, "File open failed");
             }
         }
         self.advance_pc();
         true
     }
 
-    /// TRAP 4: Fread - read from file
-    /// Parameter in $255: address of parameter block containing:
-    ///   OCTA 0: file descriptor
-    ///   OCTA 1: buffer address
-    ///   OCTA 2: number of bytes to read
-    /// Returns number of bytes read in $255, or -1 on error
-    fn handle_fread(&mut self, _arg: u8) -> bool {
+    /// TRAP 2: Fclose. `Z` is the handle. Handles 0-2 belong to the host and
+    /// always fail.
+    fn handle_fclose(&mut self, handle: u8) -> bool {
+        debug!(handle, "TRAP: Fclose");
+        if handle <= 2 {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        match self.file_handles.remove(&handle) {
+            Some(_) => self.set_register(255, 0),
+            None => self.set_register(255, (-1i64) as u64),
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP 3: Fread. `Z` is the handle; `$255` addresses a two-octa block
+    /// holding the buffer address and the byte count. Reads in a loop so a
+    /// short `Read::read` never masks bytes the file still has to give;
+    /// stops at the requested size, end of file, or an I/O error, whichever
+    /// comes first, and reports a mid-read error the same as an early EOF —
+    /// the short-read count, not the all-or-nothing failure value.
+    fn handle_fread(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
-        let fd = self.read_octa(param_addr) as u8;
-        let buffer_addr = self.read_octa(param_addr.wrapping_add(8));
-        let size = self.read_octa(param_addr.wrapping_add(16)) as usize;
+        let buffer_addr = self.read_octa(param_addr);
+        let size = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
-            fd,
+            handle,
             buffer_addr = format!("0x{:X}", buffer_addr),
             size,
             "TRAP: Fread"
         );
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => {
-                let mut buffer = vec![0u8; size];
-                match file.read(&mut buffer) {
-                    Ok(bytes_read) => {
-                        for (i, &byte) in buffer[..bytes_read].iter().enumerate() {
-                            self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
-                        }
-                        self.set_register(255, bytes_read as u64);
-                        debug!(bytes_read, "Read successful");
-                    }
-                    Err(_) => {
-                        self.set_register(255, (-1i64) as u64);
-                        debug!("Read failed");
-                    }
+        if !self.handle_readable(handle) || handle == 0 {
+            // Handle 0 (StdIn) has no host read primitive.
+            self.set_register(255, (-1i64 - size as i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_read(handle);
+
+        let mut buffer = vec![0u8; size];
+        let mut total = 0usize;
+        let mut had_error = false;
+        while total < size {
+            let file = self.open_file(handle);
+            match file.read(&mut buffer[total..]) {
+                Ok(0) => break,
+                Ok(n) => total += n,
+                Err(_) => {
+                    had_error = true;
+                    break;
                 }
             }
-            None => {
-                self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open for read");
+        }
+
+        if had_error && total == 0 {
+            self.set_register(255, (-1i64 - size as i64) as u64);
+        } else {
+            for (i, &byte) in buffer[..total].iter().enumerate() {
+                self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
             }
+            let result = total as i64 - size as i64;
+            self.set_register(255, result as u64);
         }
         self.advance_pc();
         true
     }
 
-    /// TRAP 5: Fgets - read a line from file (up to newline)
-    /// Parameter in $255: address of parameter block containing:
-    ///   OCTA 0: buffer address
-    ///   OCTA 1: maximum buffer size
-    /// Auxiliary parameter (Z): file descriptor (0=stdin)
-    /// Returns number of bytes read in $255, or -1 on error
-    fn handle_fgets(&mut self, fd: u8) -> bool {
+    /// TRAP 4: Fgets. `Z` is the handle; `$255` addresses a two-octa block
+    /// holding the buffer address and the buffer size. Reads until `size -
+    /// 1` characters or a newline, then a zero byte; returns the count
+    /// stored, or -1 when `size` is 0 or end of file/an error comes before
+    /// any character.
+    fn handle_fgets(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
         let buffer_addr = self.read_octa(param_addr);
         let max_size = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
-            fd,
+            handle,
             buffer_addr = format!("0x{:X}", buffer_addr),
             max_size,
             "TRAP: Fgets"
         );
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => {
-                let mut buffer = Vec::new();
-                let mut one_byte = [0u8; 1];
-                let mut bytes_read = 0;
+        if max_size == 0 || !self.handle_readable(handle) || handle == 0 {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_read(handle);
 
-                while bytes_read < max_size - 1 {
-                    match file.read_exact(&mut one_byte) {
-                        Ok(_) => {
-                            buffer.push(one_byte[0]);
-                            bytes_read += 1;
-                            if one_byte[0] == b'\n' {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
+        let mut count = 0usize;
+        while count < max_size - 1 {
+            let mut byte = [0u8; 1];
+            let file = self.open_file(handle);
+            match file.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => {
+                    self.write_byte(buffer_addr.wrapping_add(count as u64), byte[0]);
+                    count += 1;
+                    if byte[0] == b'\n' {
+                        break;
                     }
                 }
-
-                if bytes_read > 0 || !buffer.is_empty() {
-                    for (i, &byte) in buffer.iter().enumerate() {
-                        self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
-                    }
-                    self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
-                    self.set_register(255, bytes_read as u64);
-                    debug!(bytes_read, "Fgets successful");
-                } else {
-                    self.set_register(255, 0);
-                    debug!("EOF reached");
-                }
-            }
-            None => {
-                self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open for read");
+                Err(_) => break,
             }
         }
+        self.write_byte(buffer_addr.wrapping_add(count as u64), 0);
+        self.set_register(
+            255,
+            if count == 0 {
+                (-1i64) as u64
+            } else {
+                count as u64
+            },
+        );
         self.advance_pc();
         true
     }
 
-    /// TRAP 6: Fgetws - read a wide string from file (same as Fgets for now)
-    /// Parameter in $255: address of parameter block containing:
-    ///   OCTA 0: buffer address
-    ///   OCTA 1: maximum buffer size
-    /// Auxiliary parameter (Z): file descriptor
-    /// Returns number of bytes read in $255, or -1 on error
-    fn handle_fgetws(&mut self, fd: u8) -> bool {
+    /// TRAP 5: Fgetws. `Z` is the handle; `$255` addresses a two-octa block
+    /// holding the buffer address (rounded down to even) and the buffer
+    /// size in wydes. Wydes are read raw, two bytes each in memory order;
+    /// stops at the wyde `#000A`, `size - 1` wydes, end of file, or an
+    /// error, then stores a zero wyde. Returns the wyde count, or -1 when
+    /// `size` is 0 or nothing was read.
+    fn handle_fgetws(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
-        let buffer_addr = self.read_octa(param_addr);
-        let max_size = self.read_octa(param_addr.wrapping_add(8)) as usize;
+        let buffer_addr = self.read_octa(param_addr) & !1u64;
+        let max_wydes = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
-            fd,
+            handle,
             buffer_addr = format!("0x{:X}", buffer_addr),
-            max_size,
+            max_wydes,
             "TRAP: Fgetws"
         );
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => {
-                let mut buffer = Vec::new();
-                let mut one_byte = [0u8; 1];
-                let mut bytes_read = 0;
+        if max_wydes == 0 || !self.handle_readable(handle) || handle == 0 {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_read(handle);
 
-                while bytes_read < max_size - 1 {
-                    match file.read_exact(&mut one_byte) {
-                        Ok(_) => {
-                            buffer.push(one_byte[0]);
-                            bytes_read += 1;
-                            if one_byte[0] == b'\n' {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
+        let mut count = 0usize;
+        while count < max_wydes - 1 {
+            let mut wyde = [0u8; 2];
+            let file = self.open_file(handle);
+            match file.read_exact(&mut wyde) {
+                Ok(_) => {
+                    self.write_byte(buffer_addr.wrapping_add((count * 2) as u64), wyde[0]);
+                    self.write_byte(buffer_addr.wrapping_add((count * 2 + 1) as u64), wyde[1]);
+                    count += 1;
+                    if wyde == [0x00, 0x0A] {
+                        break;
                     }
                 }
-
-                if bytes_read > 0 || !buffer.is_empty() {
-                    for (i, &byte) in buffer.iter().enumerate() {
-                        self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
-                    }
-                    self.write_byte(buffer_addr.wrapping_add(bytes_read as u64), 0);
-                    self.set_register(255, bytes_read as u64);
-                    debug!(bytes_read, "Fgetws successful");
-                } else {
-                    self.set_register(255, 0);
-                    debug!("EOF reached");
-                }
-            }
-            None => {
-                self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open for read");
+                Err(_) => break,
             }
         }
+        self.write_byte(buffer_addr.wrapping_add((count * 2) as u64), 0);
+        self.write_byte(buffer_addr.wrapping_add((count * 2 + 1) as u64), 0);
+        self.set_register(
+            255,
+            if count == 0 {
+                (-1i64) as u64
+            } else {
+                count as u64
+            },
+        );
         self.advance_pc();
         true
     }
 
-    /// TRAP 7: Fwrite - write to file
-    /// Parameter in $255: address of parameter block containing:
-    ///   OCTA 0: file descriptor
-    ///   OCTA 1: buffer address
-    ///   OCTA 2: number of bytes to write
-    /// Returns number of bytes written in $255, or -1 on error
-    fn handle_fwrite(&mut self, _arg: u8) -> bool {
+    /// TRAP 6: Fwrite. `Z` is the handle; `$255` addresses a two-octa block
+    /// holding the buffer address and the byte count. Writes in a loop, so
+    /// a short underlying write is reflected in the result rather than
+    /// masked. Returns 0 if all `size` bytes were written, else `n - size`
+    /// for the `n` bytes actually written (`-size` if the handle lacks
+    /// write access, `n` then being 0).
+    fn handle_fwrite(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
-        let fd = self.read_octa(param_addr) as u8;
-        let buffer_addr = self.read_octa(param_addr.wrapping_add(8));
-        let size = self.read_octa(param_addr.wrapping_add(16)) as usize;
+        let buffer_addr = self.read_octa(param_addr);
+        let size = self.read_octa(param_addr.wrapping_add(8)) as usize;
 
         debug!(
-            fd,
+            handle,
             buffer_addr = format!("0x{:X}", buffer_addr),
             size,
             "TRAP: Fwrite"
         );
+
+        if !self.handle_writable(handle) {
+            self.set_register(255, (-(size as i64)) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_write(handle);
 
         let mut buffer = Vec::with_capacity(size);
         for i in 0..size {
             buffer.push(self.read_byte(buffer_addr.wrapping_add(i as u64)));
         }
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => match file.write_all(&buffer) {
-                Ok(_) => {
-                    self.set_register(255, size as u64);
-                    debug!(size, "Write successful");
-                }
-                Err(_) => {
-                    self.set_register(255, (-1i64) as u64);
-                    debug!("Write failed");
-                }
+        let written = match handle {
+            1 | 2 => match self.host.write(handle, &buffer) {
+                Ok(_) => buffer.len(),
+                Err(_) => 0,
             },
-            None => {
-                self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open for write");
+            _ => {
+                let file = self.open_file(handle);
+                let mut total = 0usize;
+                while total < buffer.len() {
+                    match file.write(&buffer[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => total += n,
+                        Err(_) => break,
+                    }
+                }
+                total
             }
-        }
+        };
+
+        let result = written as i64 - size as i64;
+        self.set_register(255, result as u64);
         self.advance_pc();
         true
     }
@@ -2747,6 +2856,19 @@ impl MMix {
         bytes
     }
 
+    /// The open `File` behind `handle`, for a read/write/seek call past its
+    /// capability check. Infallible there: `handle_readable`/
+    /// `handle_writable`/`handle_seekable` already confirmed an entry
+    /// exists, and every caller either excludes handle 0/1/2 (whose entries
+    /// carry no `File`) or, for a read, has already turned handle 0 aside
+    /// before reaching here.
+    fn open_file(&mut self, handle: u8) -> &mut File {
+        self.file_handles
+            .get_mut(&handle)
+            .and_then(|entry| entry.file.as_mut())
+            .expect("capability check already confirmed handle is open with a real file")
+    }
+
     /// Write raw bytes to the destination identified by an MMIX file
     /// descriptor: 1 and 2 go through the installed `Host` (locked
     /// stdout/stderr writes for `StdHost`); anything else is looked up in
@@ -2754,26 +2876,36 @@ impl MMix {
     fn write_bytes_to_fd(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {
         match fd {
             1 | 2 => self.host.write(fd, bytes),
-            _ => match self.file_handles.get_mut(&fd) {
+            _ => match self.file_handles.get_mut(&fd).and_then(|h| h.file.as_mut()) {
                 Some(file) => file.write_all(bytes),
                 None => Err(std::io::Error::other("file descriptor not open")),
             },
         }
     }
 
-    /// TRAP 8: Fputs - write null-terminated string
-    /// Parameter in $255: string address
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
-    /// a handle previously returned by Fopen)
-    /// Returns byte count written in $255, or -1 on error
-    fn handle_fputs(&mut self, fd: u8) -> bool {
+    /// TRAP 7: Fputs. `Z` is the handle; `$255` is the string address.
+    /// Writes bytes up to, not including, the first zero byte, with no
+    /// byte value translated. Returns the byte count written, or -1.
+    fn handle_fputs(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
         let bytes = self.read_byte_string(str_addr, 10000, "Fputs");
-        debug!(fd, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputs");
-        match self.write_bytes_to_fd(fd, &bytes) {
+        debug!(
+            handle,
+            str_addr = format!("0x{:X}", str_addr),
+            "TRAP: Fputs"
+        );
+
+        if !self.handle_writable(handle) {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_write(handle);
+
+        match self.write_bytes_to_fd(handle, &bytes) {
             Ok(_) => self.set_register(255, bytes.len() as u64),
             Err(_) => {
-                debug!(fd, "Fputs write failed");
+                debug!(handle, "Fputs write failed");
                 self.set_register(255, (-1i64) as u64);
             }
         }
@@ -2781,18 +2913,24 @@ impl MMix {
         true
     }
 
-    /// TRAP 9: Fputc - write a character
-    /// Parameter in $255: character code (low 8 bits)
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
-    /// a handle previously returned by Fopen)
-    /// Returns 0 on success, -1 on error in $255
-    fn handle_fputc(&mut self, fd: u8) -> bool {
+    /// TRAP #80: Fputc, checksmix's own extension. `Z` is the handle;
+    /// `$255`'s low byte is the character. Shares `Fputs`'s write-capability
+    /// check and read-write switching. Returns 0 on success, or -1.
+    fn handle_fputc(&mut self, handle: u8) -> bool {
         let ch = (self.get_register(255) & 0xFF) as u8;
-        debug!(fd, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
-        match self.write_bytes_to_fd(fd, &[ch]) {
+        debug!(handle, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
+
+        if !self.handle_writable(handle) {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_write(handle);
+
+        match self.write_bytes_to_fd(handle, &[ch]) {
             Ok(_) => self.set_register(255, 0),
             Err(_) => {
-                debug!(fd, "Fputc write failed");
+                debug!(handle, "Fputc write failed");
                 self.set_register(255, (-1i64) as u64);
             }
         }
@@ -2800,19 +2938,48 @@ impl MMix {
         true
     }
 
-    /// TRAP 10: Fputws - write a wide string to file (same as Fputs for now)
-    /// Parameter in $255: string address
-    /// Auxiliary parameter (Z): file descriptor (1=stdout, 2=stderr, or
-    /// a handle previously returned by Fopen)
-    /// Returns byte count written in $255, or -1 on error
-    fn handle_fputws(&mut self, fd: u8) -> bool {
+    /// TRAP 8: Fputws. `Z` is the handle; `$255` is the string address.
+    /// Wyde characters, two bytes each in memory order, written up to, not
+    /// including, the first zero wyde. Returns the wyde count written, or
+    /// -1.
+    fn handle_fputws(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
-        let bytes = self.read_byte_string(str_addr, 10000, "Fputws");
-        debug!(fd, str_addr = format!("0x{:X}", str_addr), "TRAP: Fputws");
-        match self.write_bytes_to_fd(fd, &bytes) {
-            Ok(_) => self.set_register(255, bytes.len() as u64),
+        let mut bytes = Vec::new();
+        let mut addr = str_addr;
+        let mut wyde_count = 0usize;
+        loop {
+            let hi = self.read_byte(addr);
+            let lo = self.read_byte(addr.wrapping_add(1));
+            if hi == 0 && lo == 0 {
+                break;
+            }
+            bytes.push(hi);
+            bytes.push(lo);
+            wyde_count += 1;
+            if wyde_count >= 5000 {
+                self.host
+                    .diagnostic("Warning: Fputws string too long, truncating");
+                break;
+            }
+            addr = addr.wrapping_add(2);
+        }
+        debug!(
+            handle,
+            str_addr = format!("0x{:X}", str_addr),
+            "TRAP: Fputws"
+        );
+
+        if !self.handle_writable(handle) {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_write(handle);
+
+        match self.write_bytes_to_fd(handle, &bytes) {
+            Ok(_) => self.set_register(255, wyde_count as u64),
             Err(_) => {
-                debug!(fd, "Fputws write failed");
+                debug!(handle, "Fputws write failed");
                 self.set_register(255, (-1i64) as u64);
             }
         }
@@ -2820,76 +2987,87 @@ impl MMix {
         true
     }
 
-    /// TRAP 11: Fseek - seek in file
-    /// Parameter in $255: address of parameter block containing:
-    ///   OCTA 0: file descriptor
-    ///   OCTA 1: offset (as i64)
-    ///   OCTA 2: whence (0=start, 1=current, 2=end)
-    /// Returns new position in $255, or -1 on error
-    fn handle_fseek(&mut self, _arg: u8) -> bool {
-        let param_addr = self.get_register(255);
-        let fd = self.read_octa(param_addr) as u8;
-        let offset = self.read_octa(param_addr.wrapping_add(8)) as i64;
-        let whence = self.read_octa(param_addr.wrapping_add(16)) as u8;
+    /// TRAP 9: Fseek. `Z` is the handle; `$255` is the offset. `offset >= 0`
+    /// positions `offset` bytes from the start; `offset < 0` positions
+    /// `-offset - 1` bytes before the end. On a `BinaryReadWrite` handle,
+    /// restores both read and write capability. Returns the new position,
+    /// or -1.
+    fn handle_fseek(&mut self, handle: u8) -> bool {
+        let offset = self.get_register(255) as i64;
+        debug!(handle, offset, "TRAP: Fseek");
 
-        debug!(fd, offset, whence, "TRAP: Fseek");
+        if !self.handle_seekable(handle) {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        self.note_seek(handle);
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => {
-                let seek_from = match whence {
-                    0 => SeekFrom::Start(offset as u64),
-                    1 => SeekFrom::Current(offset),
-                    2 => SeekFrom::End(offset),
-                    _ => {
-                        debug!("Invalid seek whence: {}", whence);
-                        self.set_register(255, (-1i64) as u64);
-                        self.advance_pc();
-                        return true;
-                    }
-                };
+        let seek_from = if offset >= 0 {
+            SeekFrom::Start(offset as u64)
+        } else {
+            SeekFrom::End(-offset - 1)
+        };
 
-                match file.seek(seek_from) {
-                    Ok(pos) => {
-                        self.set_register(255, pos);
-                        debug!(pos, "Seek successful");
-                    }
-                    Err(_) => {
-                        self.set_register(255, (-1i64) as u64);
-                        debug!("Seek failed");
-                    }
-                }
+        let file = self.open_file(handle);
+        match file.seek(seek_from) {
+            Ok(pos) => {
+                self.set_register(255, pos);
+                debug!(pos, "Seek successful");
             }
-            None => {
+            Err(_) => {
                 self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open");
+                debug!("Seek failed");
             }
         }
         self.advance_pc();
         true
     }
 
-    /// TRAP 12: Ftell - get file position
-    /// Parameter in $255: file descriptor
-    /// Returns current position in $255, or -1 on error
-    fn handle_ftell(&mut self, _arg: u8) -> bool {
-        let fd = self.get_register(255) as u8;
+    /// TRAP 10: Ftell. `Z` is the handle. Returns the current position, or
+    /// -1.
+    fn handle_ftell(&mut self, handle: u8) -> bool {
+        debug!(handle, "TRAP: Ftell");
 
-        debug!(fd, "TRAP: Ftell");
+        if !self.handle_seekable(handle) {
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
 
-        match self.file_handles.get_mut(&fd) {
-            Some(file) => match file.stream_position() {
-                Ok(pos) => {
-                    self.set_register(255, pos);
-                    debug!(pos, "Ftell successful");
-                }
-                Err(_) => {
-                    self.set_register(255, (-1i64) as u64);
-                    debug!("Ftell failed");
-                }
-            },
-            None => {
+        let file = self.open_file(handle);
+        match file.stream_position() {
+            Ok(pos) => {
+                self.set_register(255, pos);
+                debug!(pos, "Ftell successful");
+            }
+            Err(_) => {
                 self.set_register(255, (-1i64) as u64);
-                debug!(fd, "File not open");
+                debug!("Ftell failed");
+            }
+        }
+        self.advance_pc();
+        true
+    }
+
+    /// TRAP #82: Debug, checksmix's own extension backing the `debug
+    /// "text"` directive. `Z` indexes the table `set_debug_strings`
+    /// installed; writes that string and a newline to handle 1 through
+    /// `Host::write`. Changes no register, `$255` included. An index past
+    /// the table's end reports a diagnostic and continues.
+    fn handle_debug(&mut self, index: u8) -> bool {
+        match self.debug_strings.get(index as usize) {
+            Some(text) => {
+                let mut bytes = text.clone();
+                bytes.push(b'\n');
+                if let Err(err) = self.host.write(1, &bytes) {
+                    self.host
+                        .diagnostic(&format!("debug: write to handle 1 failed: {err}"));
+                }
+            }
+            None => {
+                self.host
+                    .diagnostic(&format!("debug: index {index} has no string in the table"));
             }
         }
         self.advance_pc();
@@ -11991,7 +12169,7 @@ Main\tSETI\t$1,100
         }
 
         mmix.set_register(255, str_addr); // Fputs reads string address from $255
-        mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputs (8), 1 (stdout)
+        mmix.write_tetra(0, 0x00000701); // TRAP 0, Fputs (7), 1 (stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_pc(), 4);
@@ -12012,7 +12190,7 @@ Main\tSETI\t$1,100
         }
 
         mmix.set_register(255, str_addr);
-        mmix.write_tetra(0, 0x00000802); // TRAP 0, Fputs (8), 2 (stderr)
+        mmix.write_tetra(0, 0x00000702); // TRAP 0, Fputs (7), 2 (stderr)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_pc(), 4);
@@ -12026,7 +12204,7 @@ Main\tSETI\t$1,100
         let (host, handle) = CaptureHost::new();
         let mut mmix = MMix::with_host(host);
         mmix.set_register(255, b'X' as u64);
-        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), 1 (stdout)
+        mmix.write_tetra(0, 0x00008001); // TRAP 0, Fputc (#80), 1 (stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 0); // Success (return code 0 in $255)
@@ -12038,20 +12216,18 @@ Main\tSETI\t$1,100
     fn test_trap_fputws() {
         let (host, handle) = CaptureHost::new();
         let mut mmix = MMix::with_host(host);
-        // TRAP 0, Fputws, 1 (write wide string to stdout)
-        let test_string = b"Wide string\0";
+        // One wyde ("Hi") then a terminating zero wyde.
         let str_addr = 3000u64;
-
-        for (i, &byte) in test_string.iter().enumerate() {
+        for (i, &byte) in [b'H', b'i', 0x00, 0x00].iter().enumerate() {
             mmix.write_byte(str_addr + i as u64, byte);
         }
 
         mmix.set_register(255, str_addr); // $255 contains string address
-        mmix.write_tetra(0, 0x00000A01); // TRAP 0, 10, 1 (Fputws to stdout)
+        mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputws (8), 1 (stdout)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
-        assert_eq!(mmix.get_register(255), 11); // Character count returned in $255
-        assert_eq!(handle.stdout(), b"Wide string");
+        assert_eq!(mmix.get_register(255), 1); // wyde count returned in $255
+        assert_eq!(handle.stdout(), b"Hi");
     }
 
     #[test]
@@ -12066,7 +12242,7 @@ Main\tSETI\t$1,100
         }
 
         mmix.set_register(255, str_addr);
-        mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputs (8), 1 (stdout)
+        mmix.write_tetra(0, 0x00000701); // TRAP 0, Fputs (7), 1 (stdout)
         assert!(mmix.execute_instruction());
 
         let traps = handle.traps();
@@ -12101,8 +12277,8 @@ Main\tSETI\t$1,100
         let (host, handle) = CaptureHost::with_clock(11);
         let mut mmix = MMix::with_host(host);
 
-        // Dirty seven of the nine fields. `file_handles` and `next_fd` need a
-        // real file, so they are left to `blank`'s exhaustive struct literal.
+        // Dirty most fields directly; `file_handles` needs a real file, so
+        // it is left to `blank`'s exhaustive struct literal.
         const SCRATCH: u64 = 0x5000; // never executed, so nothing overwrites it
         for reg in 0..=255u8 {
             mmix.set_register(reg, 0xDEAD_0000 | u64::from(reg));
@@ -12147,7 +12323,7 @@ Main\tSETI\t$1,100
 
         // The host survives, and is still the injected one.
         mmix.set_register(255, u64::from(b'A'));
-        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc, fd 1
+        mmix.write_tetra(0, 0x00008001); // TRAP 0, Fputc (#80), fd 1
         assert!(mmix.execute_instruction());
         assert_eq!(handle.stdout(), b"A");
     }
@@ -12159,11 +12335,11 @@ Main\tSETI\t$1,100
         let mut mmix = MMix::with_host(boxed);
 
         mmix.set_register(255, u64::from(b'Z'));
-        mmix.write_tetra(0, 0x00000901); // TRAP 0, Fputc (9), fd 1 -> write
+        mmix.write_tetra(0, 0x00008001); // TRAP 0, Fputc (#80), fd 1 -> write
         assert!(mmix.execute_instruction());
 
         mmix.set_pc(4);
-        mmix.write_tetra(4, 0x00000D00); // TRAP 0, Time (13), unit 0 -> now_micros
+        mmix.write_tetra(4, 0x00008100); // TRAP 0, Time (#81), unit 0 -> now_micros
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(255), 7);
 
@@ -12191,7 +12367,7 @@ Main\tSETI\t$1,100
     fn test_injected_clock_drives_handle_time() {
         let (host, _handle) = CaptureHost::with_clock(5_000_000); // 5s since epoch
         let mut mmix = MMix::with_host(host);
-        mmix.write_tetra(0, 0x00000D00); // TRAP 0, Time (13), unit=0 (seconds)
+        mmix.write_tetra(0, 0x00008100); // TRAP 0, Time (#81), unit=0 (seconds)
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), 5);
@@ -12215,9 +12391,8 @@ Main\tSETI\t$1,100
     #[test]
     fn test_trap_fclose_error() {
         let mut mmix = MMix::new();
-        // Try to close non-existent file
-        mmix.set_register(255, 99u64); // Non-existent FD in $255
-        mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
+        // Try to close a handle that was never opened.
+        mmix.write_tetra(0, 0x00000263); // TRAP 0, Fclose (2), 99
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
         assert_eq!(mmix.get_register(255), (-1i64) as u64); // Error returned in $255
@@ -12227,7 +12402,7 @@ Main\tSETI\t$1,100
     fn test_trap_time_microseconds() {
         let mut mmix = MMix::new();
         // TRAP 0, Time, 2 (get time in microseconds)
-        mmix.write_tetra(0, 0x00000D02); // TRAP 0, 13, 2 (Time in microseconds)
+        mmix.write_tetra(0, 0x00008102); // TRAP 0, Time (#81), 2 (microseconds)
 
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
@@ -12248,7 +12423,7 @@ Main\tSETI\t$1,100
     fn test_trap_time_milliseconds() {
         let mut mmix = MMix::new();
         // TRAP 0, Time, 1 (get time in milliseconds)
-        mmix.write_tetra(0, 0x00000D01); // TRAP 0, 13, 1 (Time in milliseconds)
+        mmix.write_tetra(0, 0x00008101); // TRAP 0, Time (#81), 1 (milliseconds)
 
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
@@ -12266,7 +12441,7 @@ Main\tSETI\t$1,100
     fn test_trap_time_seconds() {
         let mut mmix = MMix::new();
         // TRAP 0, Time, 0 (get time in seconds)
-        mmix.write_tetra(0, 0x00000D00); // TRAP 0, 13, 0 (Time in seconds)
+        mmix.write_tetra(0, 0x00008100); // TRAP 0, Time (#81), 0 (seconds)
 
         let should_continue = mmix.execute_instruction();
         assert!(should_continue);
@@ -12284,7 +12459,7 @@ Main\tSETI\t$1,100
     fn test_trap_time_monotonic() {
         let mut mmix = MMix::new();
         // Get time twice and ensure second is >= first (monotonic)
-        mmix.write_tetra(0, 0x00000D02); // TRAP 0, 13, 2 (microseconds)
+        mmix.write_tetra(0, 0x00008102); // TRAP 0, Time (#81), 2 (microseconds)
         mmix.execute_instruction();
         let time1 = mmix.get_register(255);
 
@@ -12307,8 +12482,8 @@ Main\tSETI\t$1,100
             mmix.write_byte(str_addr + i as u64, byte);
         }
         mmix.set_register(255, str_addr);
-        // TRAP 0, Fputs (8), 99 (no such fd)
-        mmix.write_tetra(0, 0x00000863);
+        // TRAP 0, Fputs (7), 99 (no such fd)
+        mmix.write_tetra(0, 0x00000763);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(255), (-1i64) as u64);
     }
@@ -12317,8 +12492,8 @@ Main\tSETI\t$1,100
     fn test_trap_fputc_unknown_fd_returns_error() {
         let mut mmix = MMix::new();
         mmix.set_register(255, b'A' as u64);
-        // TRAP 0, Fputc (9), 99
-        mmix.write_tetra(0, 0x00000963);
+        // TRAP 0, Fputc (#80), 99
+        mmix.write_tetra(0, 0x00008063);
         assert!(mmix.execute_instruction());
         assert_eq!(mmix.get_register(255), (-1i64) as u64);
     }
@@ -14182,11 +14357,12 @@ Nested\tSET\t$0,42
         assert_eq!(mmix.call_depth(), 0);
     }
 
-    /// At `rG = 255`, `$254` is local, so `debug`'s stub (`SAVE $254,0`)
-    /// breaks the `X >= rG` rule and halts before its `Fputs` ever runs.
-    /// Pinned until C8 replaces the stub with a single `TRAP`.
+    /// At `rG = 255`, every register but `rG` itself is local. `debug`
+    /// assembles to a single `TRAP` that touches no register, so it neither
+    /// inspects nor cares about `rG`'s value: the directive prints and the
+    /// program halts normally.
     #[test]
-    fn test_debug_after_put_rg_255_halts_at_the_stubs_save() {
+    fn test_debug_at_rg_255_prints_and_continues() {
         use crate::debugger::{entry_point, write_image};
         use crate::mmixal::MMixAssembler;
 
@@ -14194,7 +14370,8 @@ Nested\tSET\t$0,42
 \tLOC\t#100
 \tSET\t$1,255
 \tPUT\trG,$1
-\tdebug\t\"unreachable\"
+\tdebug\t\"reachable\"
+\tTRAP\t0,Halt,0
 ";
         let mut asm = MMixAssembler::new(SOURCE, "<test>");
         asm.parse().expect("program must assemble");
@@ -14206,12 +14383,8 @@ Nested\tSET\t$0,42
 
         let (_, stop) = mmix.run_bounded(100);
         assert_eq!(stop, Stop::Halted);
-        assert!(
-            handle.stdout().is_empty(),
-            "the stub halts before Fputs runs"
-        );
-        // run_bounded logs its own halt notice alongside SAVE's rejection.
-        assert!(handle.diagnostics().iter().any(|d| d.contains("SAVE")));
+        assert_eq!(handle.stdout(), b"reachable\n");
+        assert_eq!(mmix.get_special(SpecialReg::RG), 255);
     }
 
     /// Assembles `source`, runs it under a fresh `CaptureHost` for up to
@@ -14236,9 +14409,9 @@ Nested\tSET\t$0,42
     }
 
     /// A `debug` line followed by a trailing blank line at end of file, with
-    /// nothing after it to halt on: the guard ahead of the generated block
-    /// (`preprocess_debug`) halts the program instead of looping through the
-    /// stub forever, and the text prints exactly once.
+    /// nothing after it to halt on: falling off the end reads zeroed
+    /// memory, which decodes as `TRAP 0,Halt,0`, so the program halts and
+    /// the text prints exactly once.
     #[test]
     fn test_debug_directive_followed_by_a_blank_line_at_eof() {
         let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n\n";
@@ -14334,5 +14507,107 @@ Main\tdebug\t\"hi\"
         assert_eq!(stop, Stop::Halted);
         assert_eq!(stdout, "hi\n");
         assert_eq!(mmix.get_register(1), 7);
+    }
+
+    /// `TRAP 0,Debug,K` writes its string and a newline to handle 1 and
+    /// changes no register -- not even `$255`. Reverting to the stub
+    /// expansion (a `JMP`/`SAVE`/`GETA`/`TRAP`/`UNSAVE` sequence) would move
+    /// the PC through several extra instructions and touch `$254`/`$255`.
+    #[test]
+    fn test_debug_trap_writes_text_and_a_newline_touching_no_register() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_debug_strings(vec![b"hello".to_vec()]);
+
+        for reg in 0..=255u8 {
+            mmix.set_register(reg, 0xABCD_0000 | u64::from(reg));
+        }
+        let before: Vec<u64> = (0..=255u8).map(|r| mmix.get_register(r)).collect();
+
+        mmix.write_tetra(0, 0x00008200); // TRAP 0, Debug (#82), K=0
+        assert!(mmix.execute_instruction());
+
+        assert_eq!(handle.stdout(), b"hello\n");
+        assert_eq!(mmix.get_pc(), 4);
+        for reg in 0..=255u8 {
+            assert_eq!(
+                mmix.get_register(reg),
+                before[reg as usize],
+                "$#{reg} must survive debug untouched"
+            );
+        }
+    }
+
+    /// A `K` past the table's end prints nothing, reports a diagnostic, and
+    /// leaves execution running.
+    #[test]
+    fn test_debug_trap_index_past_the_table_reports_and_continues() {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_debug_strings(vec![b"only one".to_vec()]);
+
+        mmix.write_tetra(0, 0x00008201); // TRAP 0, Debug (#82), K=1 (no such string)
+        assert!(mmix.execute_instruction());
+
+        assert!(handle.stdout().is_empty());
+        assert_eq!(mmix.get_pc(), 4);
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert!(handle.diagnostics()[0].contains('1'));
+    }
+
+    /// Two translation units each print their own `debug` string: the
+    /// second unit's directive picks up `K` where the first left off.
+    #[test]
+    fn test_two_translation_units_each_print_their_own_debug_string() {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+
+        let mut asm = MMixAssembler::new("\tLOC\t#100\nMain\tdebug\t\"from a\"\n", "a.mms");
+        asm.add_source("\tdebug\t\"from b\"\n\tTRAP\t0,Halt,0\n", "b.mms");
+        asm.parse().expect("program must assemble");
+
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        write_image(&mut mmix, &asm);
+        mmix.set_pc(entry_point(&asm));
+        let (_, stop) = mmix.run_bounded(1_000);
+
+        // Wrong K assignment across units would print "from a" twice.
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(handle.stdout(), b"from a\nfrom b\n");
+    }
+
+    /// The `.mmo` round trip prints the same text a direct run does: the
+    /// string table survives `generate_object_code` -> `MmoDecoder::decode`
+    /// -> `set_debug_strings` unchanged.
+    #[test]
+    fn test_debug_string_survives_the_mmo_round_trip() {
+        use crate::debugger::{entry_point, write_image};
+        use crate::mmixal::MMixAssembler;
+        use crate::mmo::MmoDecoder;
+
+        let source = "\tLOC\t#100\nMain\tdebug\t\"roundtrip\"\n\tTRAP\t0,Halt,0\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().expect("program must assemble");
+        let object_code = asm.generate_object_code();
+
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        let decoder = MmoDecoder::new(object_code);
+        let entry = decoder.decode(|addr, byte| mmix.write_byte(addr, byte));
+        mmix.set_debug_strings(decoder.debug_strings());
+        mmix.set_pc(entry);
+
+        let (_, stop) = mmix.run_bounded(1_000);
+        assert_eq!(stop, Stop::Halted);
+        assert_eq!(handle.stdout(), b"roundtrip\n");
+
+        // The direct-run reference: write_image's table must match too.
+        let (host2, handle2) = CaptureHost::new();
+        let mut mmix2 = MMix::with_host(host2);
+        write_image(&mut mmix2, &asm);
+        mmix2.set_pc(entry_point(&asm));
+        mmix2.run_bounded(1_000);
+        assert_eq!(handle.stdout(), handle2.stdout());
     }
 }

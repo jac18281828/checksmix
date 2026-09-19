@@ -283,6 +283,7 @@ fn run_mmo(filename: &str, value_format: ValueFormat) {
     let entry = decoder.decode(|addr, byte| {
         mmix.write_byte(addr, byte);
     });
+    mmix.set_debug_strings(decoder.debug_strings());
 
     start_program(&mut mmix, entry);
 

@@ -1,10 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-#[cfg(any(unix, windows))]
-use std::io::{stderr, stdin, stdout};
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
-#[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
 
@@ -15,30 +9,6 @@ use regex::Regex;
 const DATA_SEGMENT_START: u64 = 0x2000000000000000;
 
 const POOL_SEGMENT_START: u64 = 0x4000000000000000;
-
-#[cfg(unix)]
-fn stdio_raw_identifiers() -> (u64, u64, u64) {
-    (
-        stdin().as_raw_fd() as u64,
-        stdout().as_raw_fd() as u64,
-        stderr().as_raw_fd() as u64,
-    )
-}
-
-#[cfg(windows)]
-fn stdio_raw_identifiers() -> (u64, u64, u64) {
-    (
-        stdin().as_raw_handle() as usize as u64,
-        stdout().as_raw_handle() as usize as u64,
-        stderr().as_raw_handle() as usize as u64,
-    )
-}
-
-#[cfg(not(any(unix, windows)))]
-fn stdio_raw_identifiers() -> (u64, u64, u64) {
-    // Fallback: conventional descriptor ordering
-    (0, 1, 2)
-}
 
 #[derive(Parser)]
 #[grammar = "mmixal.pest"]
@@ -934,21 +904,17 @@ struct RelativeField {
 }
 
 /// One input translation unit: its filename, the PREPROCESSED source the
-/// parser walks, and enough of the ORIGINAL (un-preprocessed) source to
-/// support source-level debug info (`SourceLoc`, `source_text`).
+/// parser walks, and the ORIGINAL (un-preprocessed) source `source_text`
+/// reads from. `debug "text"` is the only rewrite `preprocess_debug` makes,
+/// and it replaces exactly one line with exactly one line, so a preprocessed
+/// line and its original always share the same 1-based number — no line map
+/// to carry between them.
 #[derive(Clone)]
 struct SourceUnit {
     filename: String,
     preprocessed: String,
     /// Original, un-preprocessed source text as the user wrote it.
     original: String,
-    /// Preprocessed line N (1-based; `line_map[N - 1]`) is the original
-    /// line it came from. A `debug` directive expands to two preprocessed
-    /// lines that both map to its own original line; every other line
-    /// maps to itself. A preprocessed line past the end of this map is
-    /// compiler-generated code (the appended `debug` subroutine block)
-    /// with no original line at all.
-    line_map: Vec<usize>,
 }
 
 pub struct MMixAssembler {
@@ -972,13 +938,20 @@ pub struct MMixAssembler {
     pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
     /// Index into `sources` of the translation unit currently being walked
     /// (command-line order), set at the start of each unit in both passes.
-    /// Used, rather than `current_filename` alone, to resolve `line_map`
-    /// unambiguously even when two inputs share a filename.
+    /// Used, rather than `current_filename` alone, to disambiguate two
+    /// inputs that share a filename.
     current_unit_index: usize,
     /// Address -> original source location, populated during pass 2.
-    /// Only addresses whose statement came from a real user line (not the
-    /// appended debug-subroutine block) get an entry.
     debug_info: BTreeMap<u64, SourceLoc>,
+    /// The strings every `debug` directive collected so far, `K`-indexed in
+    /// program order across every translation unit added. What
+    /// `debug_strings()` returns, and what `generate_object_code` hands the
+    /// `.mmo` writer.
+    debug_strings: Vec<Vec<u8>>,
+    /// The file and original line of the first `debug` directive past the
+    /// table's 256-entry limit, if the program has one. `parse` turns this
+    /// into an assembly error before walking either pass.
+    debug_directive_overflow: Option<(String, usize)>,
 }
 
 /// The original (user-facing) source location of an assembled instruction:
@@ -991,91 +964,55 @@ pub struct SourceLoc {
 }
 
 impl MMixAssembler {
-    /// Preprocess the source to expand `debug "text"` directives, returning
-    /// the preprocessed text and its line map (`SourceUnit::line_map`).
+    /// Rewrite each `debug "text"` directive in `source` into
+    /// `TRAP 0,Debug,K` on the directive's own line and label, and collect
+    /// its decoded text. `start_index` is the `K` the first directive here
+    /// receives — the count of directives every earlier translation unit
+    /// contributed. Nothing is written to guest memory and no label is
+    /// generated, so `K` costs one byte and the directive costs one tetra.
     ///
-    /// `debug "text"` becomes a `JMP` to a generated subroutine and, right
-    /// after it on its own line, a `SWYM` no-op labelled with a fresh
-    /// `DbgRet_NNNN` -- the landing pad the subroutine jumps back to.
-    /// Neither instruction inspects or depends on anything past the
-    /// directive's own line, so whatever follows -- end of file, a blank or
-    /// comment line, another label, a `GREG` or `IS` line -- assembles
-    /// exactly as if `debug` were not there. `DbgRet_NNNN` shares the
-    /// generated-label prefix family with the stub label `DbgStr_NNNN`.
-    ///
-    /// The subroutine `SAVE`s the full machine state before printing and
-    /// `UNSAVE`s it after, so every general register and every special
-    /// register but `rJ` -- `rL` and `rG` included, whatever their values
-    /// -- comes back exactly as it was; `rJ` is simply never written, by
-    /// either instruction the directive expands to.
-    fn preprocess_debug(source: &str) -> (String, Vec<usize>) {
+    /// Returns the preprocessed source, the strings this source's
+    /// directives contributed (in `K` order), and the file/line of the
+    /// first directive to exceed the table's 256-entry limit, if any —
+    /// `parse` turns that into an assembly error rather than emitting a `K`
+    /// that cannot fit `TRAP`'s one-byte `Z`.
+    fn preprocess_debug(
+        source: &str,
+        filename: &str,
+        start_index: usize,
+    ) -> (String, Vec<Vec<u8>>, Option<(String, usize)>) {
         // A directive, optionally preceded by its own label. A fixed,
         // valid pattern compiled once per call: infallible.
         let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?debug\s+"([^"]*)"\s*$"#).unwrap();
 
         let mut result = String::new();
-        let mut line_map = Vec::new();
-        let mut stubs = Vec::new();
-        let mut counter = 0usize;
+        let mut strings = Vec::new();
+        let mut overflow = None;
 
         for (index, line) in source.lines().enumerate() {
-            let original_line = index + 1;
             match debug_re.captures(line) {
                 Some(caps) => {
-                    counter += 1;
-                    let label = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-                    let stub_label = format!("DbgStr_{counter:04}");
-                    let ret_label = format!("DbgRet_{counter:04}");
-                    Self::emit_debug_call(&mut result, label, &stub_label, &ret_label);
-                    line_map.push(original_line);
-                    line_map.push(original_line);
-                    stubs.push((stub_label, caps[2].to_string(), ret_label));
+                    let k = start_index + strings.len();
+                    if k > 255 {
+                        if overflow.is_none() {
+                            overflow = Some((filename.to_string(), index + 1));
+                        }
+                    } else {
+                        let label = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                        result.push_str(label);
+                        result.push_str(&format!("\tTRAP\t0,Debug,{k}\n"));
+                    }
+                    strings.push(Self::decode_byte_string(&caps[2]));
                 }
                 None => {
                     result.push_str(line);
                     result.push('\n');
-                    line_map.push(original_line);
                 }
             }
         }
 
-        if !stubs.is_empty() {
-            result.push('\n');
-            result.push_str("; debug subroutines generated by the preprocessor\n");
-            // A program that falls off its own last real statement with no
-            // explicit HALT -- `debug` as that statement included -- must
-            // not fall into a stub instead: SAVE/GETA/TRAP/UNSAVE misreads
-            // whatever state is live there, and the final JMP back to its
-            // own landing pad loops forever. Guard the block with a halt
-            // no well-formed program ever reaches.
-            result.push_str("\tTRAP\t0,Halt,0\n");
-            for (stub_label, text, ret_label) in &stubs {
-                Self::emit_debug_stub(&mut result, stub_label, text, ret_label);
-            }
-        }
-
         debug!("Preprocessed source:\n{}", result);
-        (result, line_map)
-    }
-
-    /// The two lines that replace one `debug` directive: its own label, if
-    /// any, on a jump to `stub_label`, then the no-op labelled `ret_label`
-    /// that the stub jumps back to.
-    fn emit_debug_call(out: &mut String, label: &str, stub_label: &str, ret_label: &str) {
-        out.push_str(label);
-        out.push_str(&format!("\tJMP\t{stub_label}\n"));
-        out.push_str(&format!("{ret_label}\tSWYM\n"));
-    }
-
-    /// The generated subroutine for one `debug` directive: print `text`,
-    /// restore the state `SAVE` captured, and jump back to `ret_label`.
-    fn emit_debug_stub(out: &mut String, stub_label: &str, text: &str, ret_label: &str) {
-        out.push_str(&format!("{stub_label}\tSAVE\t$254,0\n"));
-        out.push_str(&format!("\tGETA\t$255,{stub_label}Str\n"));
-        out.push_str("\tTRAP\t0,Fputs,StdOut\n");
-        out.push_str("\tUNSAVE\t0,$254\n");
-        out.push_str(&format!("\tJMP\t{ret_label}\n"));
-        out.push_str(&format!("{stub_label}Str\tBYTE\t\"{text}\",#a,0\n"));
+        (result, strings, overflow)
     }
 
     /// Count the actual number of bytes in a string literal, accounting for escape sequences
@@ -1149,17 +1086,27 @@ impl MMixAssembler {
             SymbolType::Constant(STACK_SEGMENT_START),
         );
 
-        // OS-specific raw stdio identifiers (fds on Unix, handles on Windows)
-        let (stdin_file_no, stdout_file_no, stderr_file_no) = stdio_raw_identifiers();
+        // Standard I/O handles: 0, 1, 2, exactly as the reference numbers
+        // them, and as `MMix::initialize` opens them.
+        Self::seed_predefined(&mut symbols, "StdIn", SymbolType::Constant(0));
+        Self::seed_predefined(&mut symbols, "StdOut", SymbolType::Constant(1));
+        Self::seed_predefined(&mut symbols, "StdErr", SymbolType::Constant(2));
 
-        // Standard I/O handles
-        Self::seed_predefined(&mut symbols, "StdIn", SymbolType::Constant(stdin_file_no));
-        Self::seed_predefined(&mut symbols, "StdOut", SymbolType::Constant(stdout_file_no));
-        Self::seed_predefined(&mut symbols, "StdErr", SymbolType::Constant(stderr_file_no));
-        // Common TRAP function codes (C library emulation)
+        // Fopen's mode argument (MMIXAL reference).
+        for (name, mode) in [
+            ("TextRead", 0u64),
+            ("TextWrite", 1),
+            ("BinaryRead", 2),
+            ("BinaryWrite", 3),
+            ("BinaryReadWrite", 4),
+        ] {
+            Self::seed_predefined(&mut symbols, name, SymbolType::Constant(mode));
+        }
+
+        // TRAP function codes: the reference's eleven, then checksmix's own
+        // extensions at #80-#82.
         for (name, code) in [
             ("Halt", TrapCode::Halt),
-            ("Trip", TrapCode::Trip),
             ("Fopen", TrapCode::Fopen),
             ("Fclose", TrapCode::Fclose),
             ("Fread", TrapCode::Fread),
@@ -1167,11 +1114,12 @@ impl MMixAssembler {
             ("Fgetws", TrapCode::Fgetws),
             ("Fwrite", TrapCode::Fwrite),
             ("Fputs", TrapCode::Fputs),
-            ("Fputc", TrapCode::Fputc),
             ("Fputws", TrapCode::Fputws),
             ("Fseek", TrapCode::Fseek),
             ("Ftell", TrapCode::Ftell),
+            ("Fputc", TrapCode::Fputc),
             ("Time", TrapCode::Time),
+            ("Debug", TrapCode::Debug),
         ] {
             Self::seed_predefined(&mut symbols, name, SymbolType::Constant(code as u64));
         }
@@ -1229,14 +1177,14 @@ impl MMixAssembler {
         }
 
         // Preprocess the source to expand debug directives
-        let (preprocessed_source, line_map) = Self::preprocess_debug(source);
+        let (preprocessed_source, debug_strings, overflow) =
+            Self::preprocess_debug(source, filename, 0);
 
         Self {
             sources: vec![SourceUnit {
                 filename: filename.to_string(),
                 preprocessed: preprocessed_source,
                 original: source.to_string(),
-                line_map,
             }],
             current_filename: filename.to_string(),
             current_prefix: String::new(),
@@ -1250,6 +1198,8 @@ impl MMixAssembler {
             greg_inits: Vec::new(),
             current_unit_index: 0,
             debug_info: BTreeMap::new(),
+            debug_strings,
+            debug_directive_overflow: overflow,
         }
     }
 
@@ -1257,13 +1207,26 @@ impl MMixAssembler {
     /// are added; symbols, labels, GREG state, and `current_addr` carry over,
     /// so the result is identical to assembling the concatenation of inputs.
     pub fn add_source(&mut self, source: &str, filename: &str) {
-        let (preprocessed, line_map) = Self::preprocess_debug(source);
+        let start_index = self.debug_strings.len();
+        let (preprocessed, mut strings, overflow) =
+            Self::preprocess_debug(source, filename, start_index);
+        self.debug_strings.append(&mut strings);
+        if self.debug_directive_overflow.is_none() {
+            self.debug_directive_overflow = overflow;
+        }
         self.sources.push(SourceUnit {
             filename: filename.to_string(),
             preprocessed,
             original: source.to_string(),
-            line_map,
         });
+    }
+
+    /// The strings every `debug` directive collected, `K`-indexed in
+    /// program order across every translation unit: string `K` is at index
+    /// `K`, decoded as `BYTE` decodes a string literal, with no trailing
+    /// newline added.
+    pub fn debug_strings(&self) -> &[Vec<u8>] {
+        &self.debug_strings
     }
 
     /// Apply the active PREFIX to a raw identifier. Names starting with ':'
@@ -1321,21 +1284,16 @@ impl MMixAssembler {
         Ok(())
     }
 
-    /// Format Pest parse errors in a user-friendly way. `line_map` translates
-    /// the preprocessed line Pest reports back to the line the user wrote;
-    /// a line past the map's end (compiler-generated code) reports as-is.
-    fn format_parse_error(
-        error: &pest::error::Error<Rule>,
-        filename: &str,
-        line_map: &[usize],
-    ) -> String {
+    /// Format Pest parse errors in a user-friendly way. Pest reports a line
+    /// in the preprocessed text, which is also the line the user wrote it
+    /// on (`preprocess_debug` never changes a source's line count).
+    fn format_parse_error(error: &pest::error::Error<Rule>, filename: &str) -> String {
         use pest::error::LineColLocation;
 
         let (line, col) = match error.line_col {
             LineColLocation::Pos((l, c)) => (l, c),
             LineColLocation::Span((l, c), _) => (l, c),
         };
-        let line = line_map.get(line - 1).copied().unwrap_or(line);
 
         // Create a user-friendly error message based on what was expected
         let expected_msg = match &error.variant {
@@ -1376,6 +1334,13 @@ impl MMixAssembler {
 
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
+        if let Some((file, line)) = &self.debug_directive_overflow {
+            return Err(format!(
+                "{file}:{line}: error: too many `debug` directives in this \
+                 program; the string table holds at most 256"
+            ));
+        }
+
         debug!("Starting MMIXAL parsing (two-pass)");
         match self.parse_two_pass() {
             Ok(_) => {
@@ -1411,7 +1376,7 @@ impl MMixAssembler {
             self.current_filename = unit.filename.clone();
             self.current_unit_index = index;
             let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
-                .map_err(|e| Self::format_parse_error(&e, &unit.filename, &unit.line_map))?;
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1443,7 +1408,7 @@ impl MMixAssembler {
             self.current_filename = unit.filename.clone();
             self.current_unit_index = index;
             let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
-                .map_err(|e| Self::format_parse_error(&e, &unit.filename, &unit.line_map))?;
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1475,7 +1440,6 @@ impl MMixAssembler {
             match inner_pair.as_rule() {
                 Rule::label_def => {
                     let (line, _) = inner_pair.line_col();
-                    let line = self.original_line(line).unwrap_or(line);
                     let ident = inner_pair.into_inner().next().unwrap();
                     pending_label = Some((ident.as_str().to_string(), line));
                 }
@@ -1645,32 +1609,13 @@ impl MMixAssembler {
         Ok(())
     }
 
-    /// Translate `preprocessed`, a line in the active translation unit's
-    /// (`current_unit_index`) preprocessed text, back to its original line
-    /// through that unit's `line_map`. `None` for a line past the map's
-    /// end: compiler-generated code (the appended debug-subroutine block),
-    /// which has no original line.
-    fn original_line(&self, preprocessed: usize) -> Option<usize> {
-        self.sources[self.current_unit_index]
-            .line_map
-            .get(preprocessed - 1)
-            .copied()
-    }
-
-    /// Record `addr`'s source location in the active translation unit, or
-    /// skip it if `line` maps to no original line at all (generated code).
+    /// Record `addr`'s source location in the active translation unit:
+    /// `line`, in the preprocessed text pest walked, is also the line the
+    /// user wrote it on (`preprocess_debug` never changes a source's line
+    /// count).
     fn record_debug_info(&mut self, addr: u64, line: usize) {
-        let Some(original_line) = self.original_line(line) else {
-            return;
-        };
         let file = self.sources[self.current_unit_index].filename.clone();
-        self.debug_info.insert(
-            addr,
-            SourceLoc {
-                file,
-                line: original_line,
-            },
-        );
+        self.debug_info.insert(addr, SourceLoc { file, line });
     }
 
     /// Peek at instruction type to determine size without modifying state
@@ -1901,7 +1846,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
 
         let value_pair = if pair.as_rule() == Rule::register {
             let inner = pair
@@ -2426,7 +2370,6 @@ impl MMixAssembler {
         let y = self.parse_number(parts.next().unwrap())? as u8;
         let z_operand = parts.next().unwrap();
         let (line, col) = z_operand.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let z = self.imm_byte(self.parse_number(z_operand)?, &name, line, col)?;
 
         match name.as_str() {
@@ -2984,7 +2927,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
@@ -3019,7 +2961,6 @@ impl MMixAssembler {
 
     fn parse_inst_jmp(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let mnem = parts.next();
         let operands = parts.next().unwrap();
@@ -3039,7 +2980,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
         let operands = parts.next().unwrap();
@@ -3076,7 +3016,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
         let operand = parts.next().unwrap(); // Get operand_reg_imm
@@ -3121,7 +3060,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
         let operand = parts.next().unwrap(); // Get operand_reg_imm
@@ -3183,7 +3121,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
@@ -3205,7 +3142,6 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
@@ -3576,7 +3512,6 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let lhs = parts.next().unwrap();
         let (line, _) = lhs.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
@@ -3621,7 +3556,6 @@ impl MMixAssembler {
         mnem: &str,
     ) -> Result<ZForm, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
         match pair.as_rule() {
             Rule::register => {
                 let inner = pair
@@ -3687,7 +3621,6 @@ impl MMixAssembler {
 
     fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
 
         // If the pair is a `register` rule, it might have an inner rule (register_num or symbol)
         let text = if pair.as_rule() == Rule::register {
@@ -3729,7 +3662,6 @@ impl MMixAssembler {
     fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let rule = pair.as_rule();
         let (line, col) = pair.line_col();
-        let line = self.original_line(line).unwrap_or(line);
 
         // Handle container rules that have children
         if rule == Rule::expr_value || rule == Rule::number_literal || rule == Rule::operand_imm {
@@ -3857,19 +3789,19 @@ impl MMixAssembler {
 
     /// Generate object code in MMO format
     pub fn generate_object_code(&self) -> Vec<u8> {
-        crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone()).generate()
+        crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone())
+            .with_debug_strings(self.debug_strings.clone())
+            .generate()
     }
 
-    /// The original source location of the code at `addr`, or `None` for
-    /// compiler-generated code (e.g. the appended debug-subroutine block) or
-    /// an address no statement emitted.
+    /// The original source location of the code at `addr`, or `None` for an
+    /// address no statement emitted.
     ///
     /// `addr` need not be an entry address: an address inside a multi-tetra
     /// expansion resolves to the statement that emitted it. Each entry
     /// covers exactly the bytes its own item emitted, so an address past the
     /// end of a run maps to nothing -- the gap between the text and data
-    /// segments, and the generated block after the last user statement, both
-    /// stay unmapped.
+    /// segments stays unmapped.
     pub fn source_loc(&self, addr: u64) -> Option<&SourceLoc> {
         let (&start, loc) = self.debug_info.range(..=addr).next_back()?;
         (addr - start < self.emitted_size(start)?).then_some(loc)
@@ -4426,14 +4358,52 @@ mod tests {
     }
 
     #[test]
-    fn test_two_debug_directives_assemble() {
-        // preprocess_debug appends one subroutine per directive, each ending in
-        // a BYTE string; the next subroutine's SAVE follows it directly. Without
-        // instruction alignment the source assembles only when the first
-        // string's length is 0 mod 4.
-        let source = "        LOC     #100\nMain    debug \"one\"\n        debug \"two\"\n        TRAP    0,Halt,0\n";
+    fn test_two_debug_directives_assemble_to_one_tetra_each() {
+        // Each directive costs exactly one tetra: Main and the second
+        // directive's TRAP sit four bytes apart, and Halt follows another
+        // four bytes on -- no label, no data, no generated block.
+        let source = "        LOC     #100\nMain    debug \"one\"\nSecond  debug \"two\"\n        TRAP    0,Halt,0\n";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
+
+        let main_addr = *asm.labels.get("Main").expect("Main label");
+        let second_addr = *asm.labels.get("Second").expect("Second label");
+        assert_eq!(second_addr, main_addr + 4);
+        assert_eq!(asm.instructions.len(), 3);
+        assert_eq!(asm.debug_strings(), &[b"one".to_vec(), b"two".to_vec()]);
+    }
+
+    /// `K` is one byte: a 257th `debug` directive in one program is an
+    /// assembly error naming its file and line, not a wrapped or truncated
+    /// index.
+    #[test]
+    fn test_a_257th_debug_directive_is_an_assembly_error() {
+        let mut source = String::new();
+        for _ in 0..256 {
+            source.push_str("debug \"x\"\n");
+        }
+        source.push_str("debug \"overflow\"\n"); // line 257
+        let mut asm = MMixAssembler::new(&source, "many.mms");
+        let err = asm
+            .parse()
+            .expect_err("a 257th directive must not assemble");
+        assert!(
+            err.starts_with("many.mms:257:"),
+            "must name the overflowing directive's file and line, got {err:?}"
+        );
+    }
+
+    /// Two translation units contribute to one shared, program-order `K`
+    /// space: the second unit's directive picks up where the first left off.
+    #[test]
+    fn test_debug_strings_span_translation_units_in_program_order() {
+        let mut asm = MMixAssembler::new("debug \"first\"\n", "a.mms");
+        asm.add_source("debug \"second\"\n", "b.mms");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.debug_strings(),
+            &[b"first".to_vec(), b"second".to_vec()]
+        );
     }
 
     #[test]
@@ -5870,6 +5840,49 @@ ZSEVI $7,$8,128
         }
     }
 
+    /// The reference's eleven TRAP codes, checksmix's three extensions, the
+    /// five `Fopen` modes, and the three standard handles, all at the
+    /// values the ABI table names. Reverting `TrapCode`'s numbering turns
+    /// one of these red.
+    #[test]
+    fn test_predefined_trap_symbols_match_the_reference_abi() {
+        let asm = MMixAssembler::new("", "<test>");
+        for (name, value) in [
+            ("Halt", 0u64),
+            ("Fopen", 1),
+            ("Fclose", 2),
+            ("Fread", 3),
+            ("Fgets", 4),
+            ("Fgetws", 5),
+            ("Fwrite", 6),
+            ("Fputs", 7),
+            ("Fputws", 8),
+            ("Fseek", 9),
+            ("Ftell", 10),
+            ("Fputc", 0x80),
+            ("Time", 0x81),
+            ("Debug", 0x82),
+            ("TextRead", 0),
+            ("TextWrite", 1),
+            ("BinaryRead", 2),
+            ("BinaryWrite", 3),
+            ("BinaryReadWrite", 4),
+            ("StdIn", 0),
+            ("StdOut", 1),
+            ("StdErr", 2),
+        ] {
+            assert_eq!(
+                asm.symbols.get(name).copied(),
+                Some(SymbolType::Constant(value)),
+                "{name} must resolve to {value}"
+            );
+        }
+        assert!(
+            !asm.symbols.contains_key("Trip"),
+            "Trip is not a symbol: the TRIP instruction does user trips now"
+        );
+    }
+
     #[test]
     fn test_lda_selects_addus_two_opcodes() {
         assert_first_instruction("LDA $1,$2,$3", MMixInstruction::LDA(1, 2, 3));
@@ -6702,25 +6715,6 @@ ZSP  $3,$4,2
 
         let lda_text = asm.source_text("<test>", 2).expect("line 2 exists");
         assert!(lda_text.contains("LDA"));
-    }
-
-    /// Compiler-generated code (the appended debug-subroutine block) has no
-    /// user source line.
-    #[test]
-    fn test_generated_debug_subroutine_has_no_source_loc() {
-        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n";
-        let mut asm = MMixAssembler::new(source, "<test>");
-        asm.parse().unwrap();
-
-        let debug_sub_addr = *asm
-            .labels
-            .get("DbgStr_0001")
-            .expect("generated debug subroutine label exists");
-        assert_eq!(
-            asm.source_loc(debug_sub_addr),
-            None,
-            "generated code must not map to a user source line"
-        );
     }
 
     /// A syntax error after a `debug` line must name the ORIGINAL line, not

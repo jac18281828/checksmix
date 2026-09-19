@@ -1,5 +1,6 @@
-//! Integration tests for the MMIX VM's file-I/O TRAP handlers
-//! (Fopen/Fread/Fwrite/Fgets/Fclose/Fseek/Ftell/Fgetws/Fputs/Fputc/Fputws).
+//! Integration tests for the MMIX VM's file-I/O TRAP handlers, per the
+//! MMIXAL reference ABI: `TRAP 0,Code,Handle`, with `$255` carrying any
+//! further argument (an address, for a call that takes two).
 //!
 //! These necessarily touch the real filesystem (that's what's under test),
 //! so per AGENTS.md they belong here rather than in `src/mmix.rs`'s unit
@@ -26,29 +27,126 @@ impl Drop for TempFileGuard {
     }
 }
 
-/// Opens `path` via a real `TRAP 0,Fopen,mode` instruction (mode 0=read,
-/// 1=write/create/truncate, 2=append/create) at PC 0, and resets PC back to
-/// 0 afterward so the caller can write its next instruction there. Returns
-/// the fd `Fopen` allocated (via the public API only — `MMix::file_handles`
-/// is a private field, so this is the only way an integration test can
-/// obtain an open fd).
-fn open_via_trap(mmix: &mut MMix, path: &Path, mode: u8) -> u8 {
+// TRAP codes (MMIXAL reference, plus checksmix's own Fputc extension).
+const FOPEN: u8 = 1;
+const FCLOSE: u8 = 2;
+const FREAD: u8 = 3;
+const FGETS: u8 = 4;
+const FGETWS: u8 = 5;
+const FWRITE: u8 = 6;
+const FPUTS: u8 = 7;
+const FPUTWS: u8 = 8;
+const FSEEK: u8 = 9;
+const FTELL: u8 = 10;
+const FPUTC: u8 = 0x80;
+
+// Fopen modes (MMIXAL reference).
+const TEXT_READ: u8 = 0;
+const TEXT_WRITE: u8 = 1;
+const BINARY_READ: u8 = 2;
+const BINARY_WRITE: u8 = 3;
+const BINARY_READ_WRITE: u8 = 4;
+
+/// `TRAP 0,Y,Z`'s tetra, the immediate form every call in this file uses.
+fn trap_tetra(y: u8, z: u8) -> u32 {
+    ((y as u32) << 8) | (z as u32)
+}
+
+/// Runs `TRAP 0,Y,handle` at PC 0 and returns `$255` as a signed result.
+/// Resets PC to 0 first, so callers never have to track it between calls.
+fn run_trap(mmix: &mut MMix, y: u8, handle: u8) -> i64 {
+    mmix.set_pc(0);
+    mmix.write_tetra(0, trap_tetra(y, handle));
+    assert!(mmix.execute_instruction(), "TRAP should not halt");
+    mmix.get_register(255) as i64
+}
+
+/// `Fopen`: builds the two-octa block (name address, mode) at a fixed
+/// scratch address, points `$255` at it, and runs the call.
+fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u8) -> i64 {
     let mut filename = path.to_string_lossy().into_owned().into_bytes();
     filename.push(0);
-    let filename_addr = 100u64;
+    let filename_addr = 50_000u64;
     for (i, &byte) in filename.iter().enumerate() {
         mmix.write_byte(filename_addr + i as u64, byte);
     }
-    mmix.set_register(255, filename_addr);
-    mmix.write_tetra(0, 0x00000200 | mode as u32); // TRAP 0, Fopen(2), mode
-    assert!(mmix.execute_instruction(), "Fopen TRAP should not halt");
-    let fd = mmix.get_register(255) as u8;
-    assert!(
-        fd > 2 && fd < 255,
-        "Fopen should return a valid fd, got {fd}"
-    );
-    mmix.set_pc(0);
-    fd
+    let param_addr = 40_000u64;
+    mmix.write_octa(param_addr, filename_addr);
+    mmix.write_octa(param_addr + 8, mode as u64);
+    mmix.set_register(255, param_addr);
+    run_trap(mmix, FOPEN, handle)
+}
+
+fn fclose(mmix: &mut MMix, handle: u8) -> i64 {
+    run_trap(mmix, FCLOSE, handle)
+}
+
+/// `Fread`/`Fgets`/`Fgetws`/`Fwrite` share the two-octa (buffer, size)
+/// block; the block's own address is fixed and distinct from `fopen`'s.
+fn two_arg_block(mmix: &mut MMix, first: u64, second: u64) {
+    let param_addr = 41_000u64;
+    mmix.write_octa(param_addr, first);
+    mmix.write_octa(param_addr + 8, second);
+    mmix.set_register(255, param_addr);
+}
+
+fn fread(mmix: &mut MMix, handle: u8, buffer_addr: u64, size: u64) -> i64 {
+    two_arg_block(mmix, buffer_addr, size);
+    run_trap(mmix, FREAD, handle)
+}
+
+fn fgets(mmix: &mut MMix, handle: u8, buffer_addr: u64, size: u64) -> i64 {
+    two_arg_block(mmix, buffer_addr, size);
+    run_trap(mmix, FGETS, handle)
+}
+
+fn fgetws(mmix: &mut MMix, handle: u8, buffer_addr: u64, size: u64) -> i64 {
+    two_arg_block(mmix, buffer_addr, size);
+    run_trap(mmix, FGETWS, handle)
+}
+
+fn fwrite(mmix: &mut MMix, handle: u8, data: &[u8]) -> i64 {
+    let buffer_addr = 60_000u64;
+    for (i, &b) in data.iter().enumerate() {
+        mmix.write_byte(buffer_addr + i as u64, b);
+    }
+    two_arg_block(mmix, buffer_addr, data.len() as u64);
+    run_trap(mmix, FWRITE, handle)
+}
+
+fn fputs(mmix: &mut MMix, handle: u8, bytes: &[u8]) -> i64 {
+    let str_addr = 61_000u64;
+    for (i, &b) in bytes.iter().enumerate() {
+        mmix.write_byte(str_addr + i as u64, b);
+    }
+    mmix.write_byte(str_addr + bytes.len() as u64, 0);
+    mmix.set_register(255, str_addr);
+    run_trap(mmix, FPUTS, handle)
+}
+
+fn fputc(mmix: &mut MMix, handle: u8, byte: u8) -> i64 {
+    mmix.set_register(255, byte as u64);
+    run_trap(mmix, FPUTC, handle)
+}
+
+/// `bytes` is copied verbatim (no NUL terminator): `Fputws` stops at the
+/// first zero wyde, so the caller supplies one when it wants to.
+fn fputws(mmix: &mut MMix, handle: u8, bytes: &[u8]) -> i64 {
+    let str_addr = 62_000u64;
+    for (i, &b) in bytes.iter().enumerate() {
+        mmix.write_byte(str_addr + i as u64, b);
+    }
+    mmix.set_register(255, str_addr);
+    run_trap(mmix, FPUTWS, handle)
+}
+
+fn fseek(mmix: &mut MMix, handle: u8, offset: i64) -> i64 {
+    mmix.set_register(255, offset as u64);
+    run_trap(mmix, FSEEK, handle)
+}
+
+fn ftell(mmix: &mut MMix, handle: u8) -> i64 {
+    run_trap(mmix, FTELL, handle)
 }
 
 #[test]
@@ -86,331 +184,354 @@ fn temp_file_guard_removes_file_on_panic() {
 }
 
 #[test]
-fn trap_fopen_write() {
+fn fopen_write_then_close_succeed() {
     let mut mmix = MMix::new();
-    let path = unique_tmp_path("fopen.txt");
+    let path = unique_tmp_path("fopen_write.txt");
     let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &path, 1);
-    assert!(fd > 2 && fd < 255);
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    assert_eq!(fclose(&mut mmix, 3), 0);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_invalid_mode_fails() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_bad_mode.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, 5), -1);
 
     drop(guard);
     assert!(!path.exists());
 }
 
 #[test]
-fn trap_fwrite_basic() {
+fn fopen_and_fclose_on_standard_handles_fail() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("write.txt");
-    let guard = TempFileGuard(test_file.clone());
+    let path = unique_tmp_path("fopen_standard.txt");
+    let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &test_file, 1);
-
-    // Prepare data in memory
-    let data = b"Hello, File!\0";
-    let data_addr = 2000u64;
-    for (i, &byte) in data.iter().enumerate() {
-        mmix.write_byte(data_addr + i as u64, byte);
+    for handle in [0u8, 1, 2] {
+        assert_eq!(fopen(&mut mmix, handle, &path, TEXT_WRITE), -1);
+        assert_eq!(fclose(&mut mmix, handle), -1);
     }
 
-    // Write 12 bytes (excluding null terminator)
-    // Set up parameter block for Fwrite at address 5000
-    let param_addr = 5000u64;
-    mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
-    mmix.write_octa(param_addr + 8, data_addr); // OCTA 1: buffer address
-    mmix.write_octa(param_addr + 16, 12); // OCTA 2: number of bytes
-    mmix.set_register(255, param_addr); // $255 points to parameter block
-    mmix.write_tetra(0, 0x00000700); // TRAP 0, 7, 0
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-    assert_eq!(mmix.get_register(255), 12); // Bytes written returned in $255
-
-    // Verify file contents
-    let contents = fs::read_to_string(&test_file).unwrap();
-    assert_eq!(contents, "Hello, File!");
-
     drop(guard);
-    assert!(!test_file.exists());
+    assert!(!path.exists());
 }
 
 #[test]
-fn trap_fread_basic() {
+fn fopen_reopening_an_open_handle_closes_it_first() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("read.txt");
-    let guard = TempFileGuard(test_file.clone());
-    fs::write(&test_file, "Test Content").unwrap();
+    let path_a = unique_tmp_path("fopen_reopen_a.txt");
+    let path_b = unique_tmp_path("fopen_reopen_b.txt");
+    let guard_a = TempFileGuard(path_a.clone());
+    let guard_b = TempFileGuard(path_b.clone());
+    fs::write(&path_a, "AAAA").unwrap();
+    fs::write(&path_b, "BBBB").unwrap();
 
-    let fd = open_via_trap(&mut mmix, &test_file, 0);
+    assert_eq!(fopen(&mut mmix, 3, &path_a, TEXT_READ), 0);
+    // Reopening handle 3 on a different file, without an explicit Fclose,
+    // must still succeed and read from the new file.
+    assert_eq!(fopen(&mut mmix, 3, &path_b, TEXT_READ), 0);
 
-    // Read into buffer at address 3000
-    let buffer_addr = 3000u64;
-    // Set up parameter block for Fread at address 4000
-    let param_addr = 4000u64;
-    mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
-    mmix.write_octa(param_addr + 8, buffer_addr); // OCTA 1: buffer address
-    mmix.write_octa(param_addr + 16, 20); // OCTA 2: max bytes to read
-    mmix.set_register(255, param_addr); // $255 points to parameter block
-    mmix.write_tetra(0, 0x00000400); // TRAP 0, 4, 0
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
+    let buffer_addr = 70_000u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), 0);
+    let read: Vec<u8> = (0..4).map(|i| mmix.read_byte(buffer_addr + i)).collect();
+    assert_eq!(read, b"BBBB");
 
-    let bytes_read = mmix.get_register(255);
-    assert_eq!(bytes_read, 12); // "Test Content" is 12 bytes
-
-    // Verify read data
-    let mut result = String::new();
-    for i in 0..bytes_read {
-        result.push(mmix.read_byte(buffer_addr + i) as char);
-    }
-    assert_eq!(result, "Test Content");
-
-    drop(guard);
-    assert!(!test_file.exists());
+    drop(guard_a);
+    drop(guard_b);
 }
 
 #[test]
-fn trap_fgets_basic() {
+fn fwrite_and_fread_round_trip_exact_size() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("gets.txt");
-    let guard = TempFileGuard(test_file.clone());
-    fs::write(&test_file, "First Line\nSecond Line\n").unwrap();
+    let path = unique_tmp_path("fwrite_fread.txt");
+    let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &test_file, 0);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"Hello, File!"), 0); // 0: all bytes written
+    assert_eq!(fclose(&mut mmix, 3), 0);
 
-    // Read line into buffer
-    let buffer_addr = 4000u64;
-    // Set up parameter block for Fgets at address 5000
-    let param_addr = 5000u64;
-    mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
-    mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
-    mmix.set_register(255, param_addr); // $255 points to parameter block
-    mmix.write_tetra(0, 0x00000503); // TRAP 0, 5, 3 (Fgets from fd 3)
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-
-    let bytes_read = mmix.get_register(255);
-    // Read line includes the newline character, so "First Line\n" = 11 bytes
-    assert_eq!(bytes_read, 11);
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    let buffer_addr = 71_000u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 12), 0);
+    let read: Vec<u8> = (0..12).map(|i| mmix.read_byte(buffer_addr + i)).collect();
+    assert_eq!(read, b"Hello, File!");
+    assert_eq!(fclose(&mut mmix, 3), 0);
 
     drop(guard);
-    assert!(!test_file.exists());
+    assert!(!path.exists());
 }
 
 #[test]
-fn trap_fclose_success() {
+fn fread_short_at_eof_returns_n_minus_size() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("close.txt");
-    let guard = TempFileGuard(test_file.clone());
+    let path = unique_tmp_path("fread_short.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "Test Content").unwrap(); // 12 bytes
 
-    let fd = open_via_trap(&mut mmix, &test_file, 1);
-
-    mmix.set_register(255, fd as u64); // $255 contains file descriptor
-    mmix.write_tetra(0, 0x00000300); // TRAP 0, 3, 0
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-    assert_eq!(mmix.get_register(255), 0); // Success returned in $255
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    let buffer_addr = 72_000u64;
+    // Ask for 20; only 12 are there, so the result is 12 - 20 = -8.
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 20), 12i64 - 20);
+    let read: Vec<u8> = (0..12).map(|i| mmix.read_byte(buffer_addr + i)).collect();
+    assert_eq!(read, b"Test Content");
 
     drop(guard);
-    assert!(!test_file.exists());
+    assert!(!path.exists());
 }
 
 #[test]
-fn trap_fseek_basic() {
+fn fread_on_a_write_only_handle_fails_without_touching_the_file() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("seek.txt");
-    let guard = TempFileGuard(test_file.clone());
-    fs::write(&test_file, "0123456789ABCDEF").unwrap();
+    let path = unique_tmp_path("fread_capability.txt");
+    let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &test_file, 0);
-
-    // Seek to position 5
-    let param_addr = 5000u64;
-    mmix.write_octa(param_addr, fd as u64); // OCTA 0: file descriptor
-    mmix.write_octa(param_addr + 8, 5i64 as u64); // OCTA 1: offset
-    mmix.write_octa(param_addr + 16, 0); // OCTA 2: whence = start
-    mmix.set_register(255, param_addr); // $255 points to parameter block
-    mmix.write_tetra(0, 0x00000B00); // TRAP 0, 11, 0
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-    assert_eq!(mmix.get_register(255), 5); // New position returned in $255
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    let buffer_addr = 73_000u64;
+    mmix.write_byte(buffer_addr, 0xAA); // sentinel: must survive untouched
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 5), -1 - 5);
+    assert_eq!(mmix.read_byte(buffer_addr), 0xAA);
 
     drop(guard);
-    assert!(!test_file.exists());
 }
 
 #[test]
-fn trap_ftell_basic() {
+fn fwrite_on_a_read_only_handle_fails() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("tell.txt");
-    let guard = TempFileGuard(test_file.clone());
-    fs::write(&test_file, "Test Data").unwrap();
+    let path = unique_tmp_path("fwrite_capability.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "unchanged").unwrap();
 
-    let fd = open_via_trap(&mut mmix, &test_file, 0);
-
-    // Get current position (should be 0)
-    mmix.set_register(255, fd as u64); // $255 contains file descriptor
-    mmix.write_tetra(0, 0x00000C00); // TRAP 0, 12, 0
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-    assert_eq!(mmix.get_register(255), 0); // Position 0 returned in $255
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"nope"), -4); // -size
+    assert_eq!(fs::read_to_string(&path).unwrap(), "unchanged");
 
     drop(guard);
-    assert!(!test_file.exists());
 }
 
 #[test]
-fn trap_fgetws_basic() {
+fn fread_and_fwrite_on_a_closed_handle_fail() {
     let mut mmix = MMix::new();
-    let test_file = unique_tmp_path("getws.txt");
-    let guard = TempFileGuard(test_file.clone());
-    fs::write(&test_file, "Wide line\nAnother line\n").unwrap();
-
-    let fd = open_via_trap(&mut mmix, &test_file, 0);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
-
-    let buffer_addr = 5000u64;
-    // Set up parameter block for Fgetws at address 6000
-    let param_addr = 6000u64;
-    mmix.write_octa(param_addr, buffer_addr); // OCTA 0: buffer address
-    mmix.write_octa(param_addr + 8, 50); // OCTA 1: max size
-    mmix.set_register(255, param_addr); // $255 points to parameter block
-    mmix.write_tetra(0, 0x00000603); // TRAP 0, 6, 3 (Fgetws from fd 3)
-    let should_continue = mmix.execute_instruction();
-    assert!(should_continue);
-
-    let bytes_read = mmix.get_register(255); // Return value in $255
-    assert!(bytes_read > 0);
-
-    drop(guard);
-    assert!(!test_file.exists());
+    assert_eq!(fread(&mut mmix, 3, 74_000, 5), -1 - 5);
+    assert_eq!(fwrite(&mut mmix, 3, b"nope"), -4);
+    assert_eq!(fclose(&mut mmix, 3), -1);
 }
 
 #[test]
-fn trap_fputs_to_file_descriptor() {
-    // Fputs targeted at an Fopen'd fd must write the bytes through to that
-    // file, not silently no-op as it did when fd>2 was unsupported.
+fn fgets_reads_a_line_and_the_partial_last_line_at_eof() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fgets.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "First Line\nSecond").unwrap(); // no trailing newline
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+
+    let buffer_addr = 75_000u64;
+    let n = fgets(&mut mmix, 3, buffer_addr, 50);
+    assert_eq!(n, 11); // "First Line\n"
+    assert_eq!(mmix.read_byte(buffer_addr + 11), 0);
+
+    // The last line has no newline: still returned, not -1.
+    let n2 = fgets(&mut mmix, 3, buffer_addr, 50);
+    assert_eq!(n2, 6); // "Second"
+    assert_eq!(mmix.read_byte(buffer_addr + 6), 0);
+
+    // Nothing left: end of file before any character.
+    let n3 = fgets(&mut mmix, 3, buffer_addr, 50);
+    assert_eq!(n3, -1);
+
+    drop(guard);
+}
+
+#[test]
+fn fgets_with_size_zero_fails() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fgets_zero.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "text").unwrap();
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    assert_eq!(fgets(&mut mmix, 3, 76_000, 0), -1);
+
+    drop(guard);
+}
+
+#[test]
+fn fputws_and_fgetws_round_trip_wydes_byte_exact() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fputws_fgetws.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    // Two wydes ("Hi") then a terminating zero wyde Fputws must not write.
+    assert_eq!(fputws(&mut mmix, 3, &[b'H', b'i', 0x00, 0x00]), 1);
+    assert_eq!(fclose(&mut mmix, 3), 0);
+    assert_eq!(fs::read(&path).unwrap(), b"Hi");
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    let buffer_addr = 77_000u64;
+    let n = fgetws(&mut mmix, 3, buffer_addr, 50);
+    assert_eq!(n, 1);
+    assert_eq!(mmix.read_byte(buffer_addr), b'H');
+    assert_eq!(mmix.read_byte(buffer_addr + 1), b'i');
+    assert_eq!(mmix.read_byte(buffer_addr + 2), 0);
+    assert_eq!(mmix.read_byte(buffer_addr + 3), 0);
+
+    drop(guard);
+}
+
+#[test]
+fn fgetws_rounds_an_odd_buffer_address_down() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fgetws_odd.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, [b'H', b'i']).unwrap();
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    // 77_001 is odd; Fgetws must round down to 77_000 before writing.
+    let n = fgetws(&mut mmix, 3, 77_001, 50);
+    assert_eq!(n, 1);
+    assert_eq!(mmix.read_byte(77_000), b'H');
+    assert_eq!(mmix.read_byte(77_001), b'i');
+
+    drop(guard);
+}
+
+#[test]
+fn fseek_negative_one_lands_at_the_end_and_ftell_agrees() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fseek_end.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "0123456789ABCDEF").unwrap(); // 16 bytes
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    assert_eq!(fseek(&mut mmix, 3, -1), 16);
+    assert_eq!(ftell(&mut mmix, 3), 16);
+
+    assert_eq!(fseek(&mut mmix, 3, 5), 5);
+    assert_eq!(ftell(&mut mmix, 3), 5);
+
+    drop(guard);
+}
+
+#[test]
+fn fseek_and_ftell_need_seek_capability() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fseek_capability.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "text").unwrap();
+
+    // TextRead/TextWrite grant read or write alone, never seek.
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_READ), 0);
+    assert_eq!(fseek(&mut mmix, 3, 0), -1);
+    assert_eq!(ftell(&mut mmix, 3), -1);
+
+    drop(guard);
+}
+
+#[test]
+fn binary_read_write_switches_capability_and_fseek_restores_it() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("read_write_switch.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ_WRITE), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"0123456789"), 0);
+    assert_eq!(fseek(&mut mmix, 3, 0), 0);
+
+    // A read clears write; writing again fails until Fseek restores it.
+    let buffer_addr = 78_000u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"XX"), -2); // -size: write cleared
+
+    assert_eq!(fseek(&mut mmix, 3, 0), 0); // restores both
+    assert_eq!(fwrite(&mut mmix, 3, b"XX"), 0);
+
+    // A write clears read; reading again fails until Fseek restores it.
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), -1 - 4); // read cleared
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_on_binary_write_and_binary_read_never_switches() {
+    // A single-capability binary handle carries `seek` but never toggles:
+    // there is nothing to switch to.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("binary_single_capability.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_WRITE), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"data"), 0);
+    assert_eq!(fseek(&mut mmix, 3, 0), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"more"), 0); // still writable
+    assert_eq!(fclose(&mut mmix, 3), 0);
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    let buffer_addr = 79_000u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), 0);
+    assert_eq!(fseek(&mut mmix, 3, 0), 0);
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), 0); // still readable
+
+    drop(guard);
+}
+
+#[test]
+fn fputs_to_a_file_descriptor() {
+    // Fputs targeted at an Fopen'd handle must write the bytes through to
+    // that file.
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fputs_to_fd.txt");
     let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &path, 1);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    assert_eq!(fputs(&mut mmix, 3, b"Hello, file fd!"), 15);
+    assert_eq!(fclose(&mut mmix, 3), 0);
 
-    let test_string = b"Hello, file fd!\0";
-    let str_addr = 1500u64;
-    for (i, &byte) in test_string.iter().enumerate() {
-        mmix.write_byte(str_addr + i as u64, byte);
-    }
-    mmix.set_register(255, str_addr);
-    // TRAP 0, Fputs (8), 3
-    mmix.write_tetra(0, 0x00000803);
-    assert!(mmix.execute_instruction());
-    assert_eq!(mmix.get_register(255), 15); // bytes written, not -1
-
-    // Close via TRAP so the OS flushes contents before reading (no direct
-    // access to file_handles from an integration test).
-    mmix.set_pc(4);
-    mmix.set_register(255, fd as u64);
-    mmix.write_tetra(4, 0x00000300); // TRAP 0, Fclose(3), 0
-    assert!(mmix.execute_instruction());
-
-    let contents = fs::read(&path).unwrap();
-    assert_eq!(contents, b"Hello, file fd!");
+    assert_eq!(fs::read(&path).unwrap(), b"Hello, file fd!");
 
     drop(guard);
     assert!(!path.exists());
 }
 
 #[test]
-fn trap_fputs_high_bytes_to_file_are_raw() {
+fn fputs_high_bytes_to_file_are_raw() {
     // Bytes 0x80..=0xFF must be written verbatim, not widened via UTF-8.
-    // Pre-fix code did `output.push(byte as char)`, so 0xFF on stdout came
-    // out as 0xC3 0xBF.
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fputs_raw_bytes.bin");
     let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &path, 1);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_WRITE), 0);
+    assert_eq!(fputs(&mut mmix, 3, &[0xFF, 0x80, 0x41]), 3);
+    assert_eq!(fclose(&mut mmix, 3), 0);
 
-    let bytes = [0xFFu8, 0x80, 0x41, 0x00];
-    let str_addr = 700u64;
-    for (i, &b) in bytes.iter().enumerate() {
-        mmix.write_byte(str_addr + i as u64, b);
-    }
-    mmix.set_register(255, str_addr);
-    mmix.write_tetra(0, 0x00000803); // TRAP 0, Fputs (8), 3
-    assert!(mmix.execute_instruction());
-    assert_eq!(mmix.get_register(255), 3);
-
-    mmix.set_pc(4);
-    mmix.set_register(255, fd as u64);
-    mmix.write_tetra(4, 0x00000300); // TRAP 0, Fclose(3), 0
-    assert!(mmix.execute_instruction());
-
-    let contents = fs::read(&path).unwrap();
-    assert_eq!(contents, vec![0xFFu8, 0x80, 0x41]);
+    assert_eq!(fs::read(&path).unwrap(), vec![0xFFu8, 0x80, 0x41]);
 
     drop(guard);
-    assert!(!path.exists());
 }
 
 #[test]
-fn trap_fputc_high_byte_to_file_is_raw() {
-    // Same regression as Fputs: a byte ≥ 0x80 must be written as one raw
-    // byte, not UTF-8-expanded.
+fn fputc_high_byte_to_file_is_raw() {
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fputc_raw.bin");
     let guard = TempFileGuard(path.clone());
 
-    let fd = open_via_trap(&mut mmix, &path, 1);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_WRITE), 0);
+    assert_eq!(fputc(&mut mmix, 3, 0xFF), 0);
+    assert_eq!(fclose(&mut mmix, 3), 0);
 
-    mmix.set_register(255, 0xFF);
-    mmix.write_tetra(0, 0x00000903); // TRAP 0, Fputc (9), 3
-    assert!(mmix.execute_instruction());
-    assert_eq!(mmix.get_register(255), 0);
-
-    mmix.set_pc(4);
-    mmix.set_register(255, fd as u64);
-    mmix.write_tetra(4, 0x00000300); // TRAP 0, Fclose(3), 0
-    assert!(mmix.execute_instruction());
-
-    let contents = fs::read(&path).unwrap();
-    assert_eq!(contents, vec![0xFFu8]);
+    assert_eq!(fs::read(&path).unwrap(), vec![0xFFu8]);
 
     drop(guard);
-    assert!(!path.exists());
 }
 
 #[test]
-fn trap_fputws_to_file_descriptor() {
+fn fputc_on_an_unknown_handle_returns_error() {
     let mut mmix = MMix::new();
-    let path = unique_tmp_path("fputws_to_fd.txt");
-    let guard = TempFileGuard(path.clone());
-
-    let fd = open_via_trap(&mut mmix, &path, 1);
-    assert_eq!(fd, 3, "first fd allocated by a fresh MMix is always 3");
-
-    let test_string = b"wide\0";
-    let str_addr = 800u64;
-    for (i, &byte) in test_string.iter().enumerate() {
-        mmix.write_byte(str_addr + i as u64, byte);
-    }
-    mmix.set_register(255, str_addr);
-    mmix.write_tetra(0, 0x00000A03); // TRAP 0, Fputws (10), 3
-    assert!(mmix.execute_instruction());
-    assert_eq!(mmix.get_register(255), 4);
-
-    mmix.set_pc(4);
-    mmix.set_register(255, fd as u64);
-    mmix.write_tetra(4, 0x00000300); // TRAP 0, Fclose(3), 0
-    assert!(mmix.execute_instruction());
-
-    let contents = fs::read(&path).unwrap();
-    assert_eq!(contents, b"wide");
-
-    drop(guard);
-    assert!(!path.exists());
+    assert_eq!(fputc(&mut mmix, 3, b'A'), -1);
 }

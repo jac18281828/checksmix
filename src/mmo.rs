@@ -32,6 +32,7 @@
 //! - 0x0C (lop_end): End of file (YZ=symbol table length)
 
 use crate::mmixal::MMixInstruction;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -39,6 +40,11 @@ use crate::encode::encode_instruction_bytes;
 
 /// MMO escape code - all MMO files must start with this
 pub const MM: u8 = 0x98;
+
+/// `lop_spec`'s type field for a `debug` directive's string table:
+/// distinguishes checksmix's own records from any other special-data record
+/// a `.mmo` file might carry, which the decoder skips.
+pub const LOP_SPEC_DEBUG_STRING: u16 = 0x4442;
 
 /// MMO record types (lopcodes), as the MMIXAL reference defines them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +108,10 @@ pub struct MmoGenerator {
     instructions: Vec<(u64, MMixInstruction)>,
     /// Symbol table (labels)
     labels: HashMap<String, u64>,
+    /// The `debug` directive string table, `K`-indexed, written as
+    /// `lop_spec` records ahead of `lop_post`. Empty unless
+    /// `with_debug_strings` was called.
+    debug_strings: Vec<Vec<u8>>,
 }
 
 impl MmoGenerator {
@@ -110,7 +120,15 @@ impl MmoGenerator {
         Self {
             instructions,
             labels,
+            debug_strings: Vec::new(),
         }
+    }
+
+    /// Attach the `debug` directive string table this object file's
+    /// `lop_spec` records should carry, in `K` order.
+    pub fn with_debug_strings(mut self, strings: Vec<Vec<u8>>) -> Self {
+        self.debug_strings = strings;
+        self
     }
 
     /// Generate MMIX object code in .mmo format
@@ -170,6 +188,10 @@ impl MmoGenerator {
             self.emit_lop_quote(&mut mmo, &pending_bytes);
         }
 
+        for text in &self.debug_strings {
+            self.emit_debug_string(&mut mmo, text);
+        }
+
         // Write postamble: lop_post with entry point
         // Find Main label or use first instruction address
         let entry_point = self
@@ -222,6 +244,34 @@ impl MmoGenerator {
         }
     }
 
+    /// Emit one `debug` directive's string as a `lop_spec` record: the type
+    /// field `LOP_SPEC_DEBUG_STRING`, then a payload tetra holding the byte
+    /// length, then the bytes zero-padded to a tetra boundary. A payload
+    /// tetra whose first byte collides with `MM` is preceded by `lop_quote`,
+    /// as the object format requires of every data tetra.
+    fn emit_debug_string(&self, mmo: &mut Vec<u8>, text: &[u8]) {
+        mmo.push(MM);
+        mmo.push(MmoRecordType::LopSpec as u8);
+        mmo.push((LOP_SPEC_DEBUG_STRING >> 8) as u8);
+        mmo.push((LOP_SPEC_DEBUG_STRING & 0xFF) as u8);
+
+        let mut payload = (text.len() as u32).to_be_bytes().to_vec();
+        payload.extend_from_slice(text);
+        while !payload.len().is_multiple_of(4) {
+            payload.push(0);
+        }
+
+        for tetra in payload.chunks_exact(4) {
+            if tetra[0] == MM {
+                mmo.push(MM);
+                mmo.push(MmoRecordType::LopQuote as u8);
+                mmo.push(0x00);
+                mmo.push(0x01);
+            }
+            mmo.extend_from_slice(tetra);
+        }
+    }
+
     /// Emit lop_loc: set current loading address
     /// Format: MM lop_loc YZ X (4 bytes), followed by 2 tetras (8 bytes) for 64-bit address
     /// Total: 12 bytes
@@ -258,12 +308,56 @@ impl MmoGenerator {
 /// MMO file decoder
 pub struct MmoDecoder {
     data: Vec<u8>,
+    /// The `debug` directive string table `decode` collected from any
+    /// `lop_spec` records of type `LOP_SPEC_DEBUG_STRING`, `K`-indexed.
+    /// Interior-mutable because `decode` takes `&self`.
+    debug_strings: RefCell<Vec<Vec<u8>>>,
 }
 
 impl MmoDecoder {
     /// Create a new MMO decoder
     pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        Self {
+            data,
+            debug_strings: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The `debug` directive string table the last `decode` call collected,
+    /// in `K` order.
+    pub fn debug_strings(&self) -> Vec<Vec<u8>> {
+        self.debug_strings.borrow().clone()
+    }
+
+    /// Read one payload tetra of a `lop_spec` record at `self.data[pos..]`,
+    /// honoring the `lop_quote` escape a tetra whose first byte collides
+    /// with `MM` requires. Returns the tetra and how many bytes it and any
+    /// escape consumed, or `None` past the end of the file.
+    fn read_payload_tetra(&self, pos: usize) -> Option<([u8; 4], usize)> {
+        if pos + 4 > self.data.len() {
+            return None;
+        }
+        if self.data[pos] == MM {
+            let quoted = pos + 4;
+            if quoted + 4 > self.data.len() {
+                return None;
+            }
+            let tetra = [
+                self.data[quoted],
+                self.data[quoted + 1],
+                self.data[quoted + 2],
+                self.data[quoted + 3],
+            ];
+            Some((tetra, 8))
+        } else {
+            let tetra = [
+                self.data[pos],
+                self.data[pos + 1],
+                self.data[pos + 2],
+                self.data[pos + 3],
+            ];
+            Some((tetra, 4))
+        }
     }
 
     /// Decode MMO format and load into memory
@@ -274,6 +368,7 @@ impl MmoDecoder {
         F: FnMut(u64, u8),
     {
         debug!("Decoding MMIX object code (.mmo format)");
+        self.debug_strings.borrow_mut().clear();
         let mut entry_point = 0x100u64; // Default entry point
         let mut i = 0;
         let mut current_addr = 0u64;
@@ -409,6 +504,42 @@ impl MmoDecoder {
                 Ok(MmoRecordType::LopEnd) => {
                     // lop_end: End of file
                     break;
+                }
+                Ok(MmoRecordType::LopSpec) => {
+                    // lop_spec: YZ names the record's type; a debug-string
+                    // record's payload is a length tetra then that many
+                    // bytes, zero-padded to a tetra boundary. A record of
+                    // any other type is read the same way and discarded, so
+                    // the stream stays in sync without needing to know what
+                    // it means.
+                    if i + 2 > self.data.len() {
+                        break;
+                    }
+                    let record_type = ((self.data[i] as u16) << 8) | (self.data[i + 1] as u16);
+                    i += 2;
+
+                    let Some((len_tetra, consumed)) = self.read_payload_tetra(i) else {
+                        break;
+                    };
+                    i += consumed;
+                    let byte_len = u32::from_be_bytes(len_tetra) as usize;
+                    let padded_len = byte_len.div_ceil(4) * 4;
+
+                    let mut payload = Vec::with_capacity(padded_len);
+                    let mut remaining = padded_len;
+                    while remaining > 0 {
+                        let Some((tetra, consumed)) = self.read_payload_tetra(i) else {
+                            break;
+                        };
+                        i += consumed;
+                        payload.extend_from_slice(&tetra);
+                        remaining -= 4;
+                    }
+
+                    if record_type == LOP_SPEC_DEBUG_STRING {
+                        payload.truncate(byte_len);
+                        self.debug_strings.borrow_mut().push(payload);
+                    }
                 }
                 Ok(_) => {
                     // Other lopcodes we don't handle yet - skip the YZ bytes
@@ -742,5 +873,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_debug_strings_round_trip_through_lop_spec_records() {
+        let instructions = vec![(0x100, MMixInstruction::TRAP(0, 0, 0))];
+        let strings = vec![b"one".to_vec(), b"two, longer".to_vec()];
+
+        let generator =
+            MmoGenerator::new(instructions, HashMap::new()).with_debug_strings(strings.clone());
+        let mmo_data = generator.generate();
+
+        let decoder = MmoDecoder::new(mmo_data);
+        let mut memory = HashMap::new();
+        decoder.decode(|addr, byte| {
+            memory.insert(addr, byte);
+        });
+
+        assert_eq!(decoder.debug_strings(), strings);
+        // The instruction stream survives alongside the string table.
+        assert!(memory.contains_key(&0x100));
+    }
+
+    #[test]
+    fn test_debug_string_payload_starting_with_mm_is_quoted() {
+        // A string whose bytes happen to start with the MM escape code: the
+        // encoder must precede that payload tetra with lop_quote, and the
+        // decoder must still recover the original bytes.
+        let text = vec![MM, 0x02, 0x03, 0x04];
+
+        let generator =
+            MmoGenerator::new(Vec::new(), HashMap::new()).with_debug_strings(vec![text.clone()]);
+        let mmo_data = generator.generate();
+
+        // The escaped tetra shows up as MM, lop_quote, 00, 01, then MM again
+        // (the payload byte itself), which a naive "every MM starts a
+        // record" reader would misparse -- proof the generator emits it and
+        // the decoder's own reader (below) consumes it correctly.
+        assert!(
+            mmo_data
+                .windows(4)
+                .any(|w| w == [MM, MmoRecordType::LopQuote as u8, 0x00, 0x01])
+        );
+
+        let decoder = MmoDecoder::new(mmo_data);
+        decoder.decode(|_, _| {});
+        assert_eq!(decoder.debug_strings(), vec![text]);
+    }
+
+    #[test]
+    fn test_decoder_skips_lop_spec_records_of_another_type() {
+        // A hand-built stream: lop_pre, an unrelated lop_spec record (type
+        // 0x1234, four bytes of payload), a debug-string lop_spec record,
+        // then lop_post. The unrelated record must not appear in
+        // `debug_strings()`, and must not desync the reader that follows it.
+        let mut data = vec![MM, MmoRecordType::LopPre as u8, 0x00, 0x01];
+        data.extend_from_slice(&[MM, MmoRecordType::LopSpec as u8, 0x12, 0x34]);
+        data.extend_from_slice(&[0, 0, 0, 4]); // length tetra: 4 bytes
+        data.extend_from_slice(&[9, 9, 9, 9]); // payload, ignored
+        data.extend_from_slice(&[
+            MM,
+            MmoRecordType::LopSpec as u8,
+            (LOP_SPEC_DEBUG_STRING >> 8) as u8,
+            (LOP_SPEC_DEBUG_STRING & 0xFF) as u8,
+        ]);
+        data.extend_from_slice(&[0, 0, 0, 2]); // length tetra: 2 bytes
+        data.extend_from_slice(b"ok\0\0"); // payload, padded to a tetra
+        data.extend_from_slice(&[MM, MmoRecordType::LopPost as u8, 0x00, 0xFF]);
+        data.extend_from_slice(&[0, 0, 0, 0, 0, 0, 1, 0]); // entry point 0x100
+
+        let decoder = MmoDecoder::new(data);
+        let entry = decoder.decode(|_, _| {});
+        assert_eq!(entry, 0x100);
+        assert_eq!(decoder.debug_strings(), vec![b"ok".to_vec()]);
     }
 }
