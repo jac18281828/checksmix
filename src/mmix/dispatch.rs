@@ -110,6 +110,18 @@ impl MMix {
         // and claiming a local X here would raise rL before SAVE's own
         // rejection runs, breaking its promise to leave a rejected machine
         // unchanged. SAVE's arm validates X itself.
+        //
+        // GET's Z must name a register before this claim runs, so a
+        // rejected GET leaves rL untouched; a legal GET claims $X here like
+        // every other destination opcode, so GET $X,rL sees the value rL
+        // rises to.
+        if opcode == Opcode::GET && SpecialReg::from_u8(z).is_none() {
+            return self.reject(&format!(
+                "GET X={x},Z={z}: no special register above 31 at PC={:#018x}",
+                self.pc
+            ));
+        }
+
         if Self::writes_general_register_x(op_byte) && opcode != Opcode::SAVE {
             self.claim_local(x);
         }
@@ -2286,12 +2298,12 @@ impl MMix {
                 true
             }
             Opcode::GET => {
-                // GET $X, $Z - Get from special register
-                let special_reg_num = z;
-                if let Some(special_reg) = SpecialReg::from_u8(special_reg_num) {
-                    let value = self.get_special(special_reg);
-                    self.set_register(x, value);
-                }
+                // GET $X, $Z - Get from special register. Z is validated
+                // ahead of the pre-dispatch $X claim, above.
+                let special_reg = SpecialReg::from_u8(z)
+                    .expect("dispatch rejected an unnamed Z before this arm ran");
+                let value = self.get_special(special_reg);
+                self.set_register(x, value);
                 self.advance_pc();
                 true
             }

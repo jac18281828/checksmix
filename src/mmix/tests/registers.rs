@@ -686,6 +686,63 @@ fn test_get_of_rl_into_a_marginal_destination_sees_the_raised_value() {
 }
 
 #[test]
+fn test_get_z_at_32_and_255_are_rejected_with_no_special_register_above_31() {
+    for z in [0x20u32, 0xFF] {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.set_special(SpecialReg::RB, 111);
+        mmix.set_special(SpecialReg::RJ, 222);
+        mmix.set_special(SpecialReg::RG, 40);
+        mmix.set_special(SpecialReg::RL, 5);
+        mmix.set_special(SpecialReg::RA, 333);
+
+        // GET $1,Z
+        mmix.write_tetra(0, 0xFE010000 | z);
+        assert!(!mmix.execute_instruction());
+
+        assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+        assert_eq!(mmix.get_register(1), 0, "$X did not change");
+        assert_eq!(mmix.get_special(SpecialReg::RB), 111);
+        assert_eq!(mmix.get_special(SpecialReg::RJ), 222);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 40);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 5);
+        assert_eq!(mmix.get_special(SpecialReg::RA), 333);
+        assert_eq!(handle.diagnostics().len(), 1);
+    }
+}
+
+#[test]
+fn test_get_z_ge_32_into_a_marginal_destination_leaves_rl_unchanged() {
+    let (host, _handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_special(SpecialReg::RG, 40);
+    mmix.set_special(SpecialReg::RL, 5);
+
+    // GET $10,32 -- $10 is marginal (rL = 5), Z = 32 names no register
+    mmix.write_tetra(0, 0xFE0A0020);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_special(SpecialReg::RL), 5, "rL did not rise");
+    assert_eq!(
+        mmix.get_register(10),
+        0,
+        "the marginal destination reads zero"
+    );
+}
+
+#[test]
+fn test_get_z_at_31_still_succeeds() {
+    let mut mmix = MMix::new();
+
+    // GET $1,31 (rZZ)
+    mmix.write_tetra(0, 0xFE01001F);
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 4);
+    assert_eq!(mmix.get_register(1), mmix.get_special(SpecialReg::RZZ));
+}
+
+#[test]
 fn test_arithmetic_destination_rise_leaves_a_marginal_source_reading_zero() {
     let mut mmix = MMix::new();
     mmix.set_register(40, 0xDEAD); // global while rG = 32

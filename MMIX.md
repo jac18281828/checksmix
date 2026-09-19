@@ -606,9 +606,9 @@ Measured on MMIXware:
 | `GOI` | `GO $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
 | `GETA` | `GETA $X, addr` | Get relative address into `$X` |
 | `GETAB` | `GETAB $X, addr` | Get relative address (backward hint) |
-| `GET` | `GET $X, Z` | Read special register Z into `$X` |
-| `PUT` | `PUT X, $Z` | Write `$Z` into special register X |
-| `PUTI` | `PUT X, Z` | Write immediate Z into special register X |
+| `GET` | `GET $X, Z` | Read special register Z into `$X`; `Z ≥ 32` halts |
+| `PUT` | `PUT X, $Z` | Write `$Z` into special register X; `X ≥ 32` halts; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18) are read-only in user mode; `rG` must be 32–255 and at least `rL`; `rA` at most `#3FFFF` |
+| `PUTI` | `PUT X, Z` | Write immediate Z into special register X; same rejections as `PUT` |
 | `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address |
 | `UNSAVE` | `UNSAVE 0, $Z` | Restore the context `$Z` addresses from the register stack |
 | `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
