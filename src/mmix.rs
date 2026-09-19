@@ -2490,6 +2490,17 @@ impl MMix {
         self.file_handles.get(&handle).is_some_and(|h| h.seek)
     }
 
+    /// Fails a TRAP whose precondition `ok` does not hold: stores `failure`
+    /// in `$255`, advances the PC, and reports `true` so the caller returns
+    /// immediately. `false` when `ok` holds and the call proceeds.
+    fn fail_unless(&mut self, ok: bool, failure: i64) -> bool {
+        if !ok {
+            self.set_register(255, failure as u64);
+            self.advance_pc();
+        }
+        !ok
+    }
+
     /// A read on a `BinaryReadWrite` handle clears its write capability
     /// until `Fseek` restores both.
     fn note_read(&mut self, handle: u8) {
@@ -2534,10 +2545,19 @@ impl MMix {
 
         let param_addr = self.get_register(255);
         let name_addr = self.read_octa(param_addr);
-        let mode = self.read_octa(param_addr.wrapping_add(8)) as u8;
+        let mode_octa = self.read_octa(param_addr.wrapping_add(8));
         let filename = self.read_cstring(name_addr, 256);
 
-        debug!(handle, filename = %filename, mode, "TRAP: Fopen");
+        debug!(handle, filename = %filename, mode = mode_octa, "TRAP: Fopen");
+
+        if mode_octa > 4 {
+            debug!(mode = mode_octa, "Invalid file open mode");
+            self.file_handles.remove(&handle);
+            self.set_register(255, (-1i64) as u64);
+            self.advance_pc();
+            return true;
+        }
+        let mode = mode_octa as u8;
 
         // TextRead=0, TextWrite=1, BinaryRead=2, BinaryWrite=3,
         // BinaryReadWrite=4: (read, write, seek, read_write).
@@ -2546,14 +2566,7 @@ impl MMix {
             1 => (false, true, false, false),
             2 => (true, false, true, false),
             3 => (false, true, true, false),
-            4 => (true, true, true, true),
-            _ => {
-                debug!(mode, "Invalid file open mode");
-                self.file_handles.remove(&handle);
-                self.set_register(255, (-1i64) as u64);
-                self.advance_pc();
-                return true;
-            }
+            _ => (true, true, true, true), // mode == 4, checked above
         };
 
         // Opening an already-open handle closes it first.
@@ -2634,10 +2647,11 @@ impl MMix {
             "TRAP: Fread"
         );
 
-        if !self.handle_readable(handle) || handle == 0 {
-            // Handle 0 (StdIn) has no host read primitive.
-            self.set_register(255, (-1i64 - size as i64) as u64);
-            self.advance_pc();
+        // Handle 0 (StdIn) has no host read primitive.
+        if self.fail_unless(
+            self.handle_readable(handle) && handle != 0,
+            -1 - size as i64,
+        ) {
             return true;
         }
         self.note_read(handle);
@@ -2687,9 +2701,8 @@ impl MMix {
             "TRAP: Fgets"
         );
 
-        if max_size == 0 || !self.handle_readable(handle) || handle == 0 {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        let ok = max_size != 0 && self.handle_readable(handle) && handle != 0;
+        if self.fail_unless(ok, -1) {
             return true;
         }
         self.note_read(handle);
@@ -2741,9 +2754,8 @@ impl MMix {
             "TRAP: Fgetws"
         );
 
-        if max_wydes == 0 || !self.handle_readable(handle) || handle == 0 {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        let ok = max_wydes != 0 && self.handle_readable(handle) && handle != 0;
+        if self.fail_unless(ok, -1) {
             return true;
         }
         self.note_read(handle);
@@ -2796,9 +2808,7 @@ impl MMix {
             "TRAP: Fwrite"
         );
 
-        if !self.handle_writable(handle) {
-            self.set_register(255, (-(size as i64)) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_writable(handle), -(size as i64)) {
             return true;
         }
         self.note_write(handle);
@@ -2895,9 +2905,7 @@ impl MMix {
             "TRAP: Fputs"
         );
 
-        if !self.handle_writable(handle) {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_writable(handle), -1) {
             return true;
         }
         self.note_write(handle);
@@ -2920,9 +2928,7 @@ impl MMix {
         let ch = (self.get_register(255) & 0xFF) as u8;
         debug!(handle, ch = format!("0x{:02X}", ch), "TRAP: Fputc");
 
-        if !self.handle_writable(handle) {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_writable(handle), -1) {
             return true;
         }
         self.note_write(handle);
@@ -2969,9 +2975,7 @@ impl MMix {
             "TRAP: Fputws"
         );
 
-        if !self.handle_writable(handle) {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_writable(handle), -1) {
             return true;
         }
         self.note_write(handle);
@@ -2990,15 +2994,12 @@ impl MMix {
     /// TRAP 9: Fseek. `Z` is the handle; `$255` is the offset. `offset >= 0`
     /// positions `offset` bytes from the start; `offset < 0` positions
     /// `-offset - 1` bytes before the end. On a `BinaryReadWrite` handle,
-    /// restores both read and write capability. Returns the new position,
-    /// or -1.
+    /// restores both read and write capability. Returns 0, or -1.
     fn handle_fseek(&mut self, handle: u8) -> bool {
         let offset = self.get_register(255) as i64;
         debug!(handle, offset, "TRAP: Fseek");
 
-        if !self.handle_seekable(handle) {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_seekable(handle), -1) {
             return true;
         }
         self.note_seek(handle);
@@ -3012,7 +3013,7 @@ impl MMix {
         let file = self.open_file(handle);
         match file.seek(seek_from) {
             Ok(pos) => {
-                self.set_register(255, pos);
+                self.set_register(255, 0);
                 debug!(pos, "Seek successful");
             }
             Err(_) => {
@@ -3029,9 +3030,7 @@ impl MMix {
     fn handle_ftell(&mut self, handle: u8) -> bool {
         debug!(handle, "TRAP: Ftell");
 
-        if !self.handle_seekable(handle) {
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
+        if self.fail_unless(self.handle_seekable(handle), -1) {
             return true;
         }
 

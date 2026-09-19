@@ -40,12 +40,13 @@ const FSEEK: u8 = 9;
 const FTELL: u8 = 10;
 const FPUTC: u8 = 0x80;
 
-// Fopen modes (MMIXAL reference).
-const TEXT_READ: u8 = 0;
-const TEXT_WRITE: u8 = 1;
-const BINARY_READ: u8 = 2;
-const BINARY_WRITE: u8 = 3;
-const BINARY_READ_WRITE: u8 = 4;
+// Fopen modes (MMIXAL reference). `u64`, matching the mode octa: `fopen`
+// checks the full 64 bits, not just its low byte.
+const TEXT_READ: u64 = 0;
+const TEXT_WRITE: u64 = 1;
+const BINARY_READ: u64 = 2;
+const BINARY_WRITE: u64 = 3;
+const BINARY_READ_WRITE: u64 = 4;
 
 /// `TRAP 0,Y,Z`'s tetra, the immediate form every call in this file uses.
 fn trap_tetra(y: u8, z: u8) -> u32 {
@@ -63,7 +64,7 @@ fn run_trap(mmix: &mut MMix, y: u8, handle: u8) -> i64 {
 
 /// `Fopen`: builds the two-octa block (name address, mode) at a fixed
 /// scratch address, points `$255` at it, and runs the call.
-fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u8) -> i64 {
+fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u64) -> i64 {
     let mut filename = path.to_string_lossy().into_owned().into_bytes();
     filename.push(0);
     let filename_addr = 50_000u64;
@@ -72,7 +73,7 @@ fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u8) -> i64 {
     }
     let param_addr = 40_000u64;
     mmix.write_octa(param_addr, filename_addr);
-    mmix.write_octa(param_addr + 8, mode as u64);
+    mmix.write_octa(param_addr + 8, mode);
     mmix.set_register(255, param_addr);
     run_trap(mmix, FOPEN, handle)
 }
@@ -202,6 +203,20 @@ fn fopen_invalid_mode_fails() {
     let guard = TempFileGuard(path.clone());
 
     assert_eq!(fopen(&mut mmix, 3, &path, 5), -1);
+
+    drop(guard);
+    assert!(!path.exists());
+}
+
+#[test]
+fn fopen_mode_above_four_fails_even_with_the_low_byte_valid() {
+    // #100 (256): a truncating check would read this as mode 0 (TextRead)
+    // and succeed. The contract fails any mode above 4.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_wide_mode.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, 0x100), -1);
 
     drop(guard);
     assert!(!path.exists());
@@ -410,11 +425,25 @@ fn fseek_negative_one_lands_at_the_end_and_ftell_agrees() {
     fs::write(&path, "0123456789ABCDEF").unwrap(); // 16 bytes
 
     assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
-    assert_eq!(fseek(&mut mmix, 3, -1), 16);
+    assert_eq!(fseek(&mut mmix, 3, -1), 0);
     assert_eq!(ftell(&mut mmix, 3), 16);
 
-    assert_eq!(fseek(&mut mmix, 3, 5), 5);
+    assert_eq!(fseek(&mut mmix, 3, 5), 0);
     assert_eq!(ftell(&mut mmix, 3), 5);
+
+    drop(guard);
+}
+
+#[test]
+fn fseek_to_a_nonzero_offset_returns_zero_not_the_position() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fseek_nonzero.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "0123456789ABCDEF").unwrap(); // 16 bytes
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    assert_eq!(fseek(&mut mmix, 3, 9), 0);
+    assert_eq!(ftell(&mut mmix, 3), 9);
 
     drop(guard);
 }
@@ -534,4 +563,148 @@ fn fputc_high_byte_to_file_is_raw() {
 fn fputc_on_an_unknown_handle_returns_error() {
     let mut mmix = MMix::new();
     assert_eq!(fputc(&mut mmix, 3, b'A'), -1);
+}
+
+#[test]
+fn every_handle_taking_call_keeps_its_own_failure_value() {
+    // Table-driven: each handle-taking call, run on (a) a closed handle and
+    // (b) an open handle that lacks the needed capability (where one
+    // exists — Fclose has none), must report exactly the failure value the
+    // ABI table names for it. The guards now share one shape; this pins
+    // that the failure value stays per call rather than collapsing to -1.
+    const SIZE: u64 = 5;
+    const CLOSED: u8 = 9; // never opened in this test
+
+    struct Case {
+        name: &'static str,
+        closed: i64,
+        wrong_mode: Option<u64>,
+        wrong: i64,
+        run: fn(&mut MMix, u8) -> i64,
+    }
+
+    fn buf() -> u64 {
+        90_000
+    }
+
+    let cases: Vec<Case> = vec![
+        Case {
+            name: "Fclose",
+            closed: -1,
+            wrong_mode: None,
+            wrong: 0,
+            run: fclose,
+        },
+        Case {
+            name: "Fread",
+            closed: -1 - SIZE as i64,
+            wrong_mode: Some(TEXT_WRITE),
+            wrong: -1 - SIZE as i64,
+            run: |m, h| fread(m, h, buf(), SIZE),
+        },
+        Case {
+            name: "Fgets",
+            closed: -1,
+            wrong_mode: Some(TEXT_WRITE),
+            wrong: -1,
+            run: |m, h| fgets(m, h, buf(), 50),
+        },
+        Case {
+            name: "Fgetws",
+            closed: -1,
+            wrong_mode: Some(TEXT_WRITE),
+            wrong: -1,
+            run: |m, h| fgetws(m, h, buf(), 50),
+        },
+        Case {
+            name: "Fwrite",
+            closed: -(SIZE as i64),
+            wrong_mode: Some(TEXT_READ),
+            wrong: -(SIZE as i64),
+            run: |m, h| fwrite(m, h, &[0u8; SIZE as usize]),
+        },
+        Case {
+            name: "Fputs",
+            closed: -1,
+            wrong_mode: Some(TEXT_READ),
+            wrong: -1,
+            run: |m, h| fputs(m, h, b"x"),
+        },
+        Case {
+            name: "Fputws",
+            closed: -1,
+            wrong_mode: Some(TEXT_READ),
+            wrong: -1,
+            run: |m, h| fputws(m, h, &[b'x', 0, 0, 0]),
+        },
+        Case {
+            name: "Fseek",
+            closed: -1,
+            wrong_mode: Some(TEXT_READ),
+            wrong: -1,
+            run: |m, h| fseek(m, h, 0),
+        },
+        Case {
+            name: "Ftell",
+            closed: -1,
+            wrong_mode: Some(TEXT_READ),
+            wrong: -1,
+            run: ftell,
+        },
+        Case {
+            name: "Fputc",
+            closed: -1,
+            wrong_mode: Some(TEXT_READ),
+            wrong: -1,
+            run: |m, h| fputc(m, h, b'x'),
+        },
+    ];
+
+    for case in cases {
+        let mut mmix = MMix::new();
+        assert_eq!(
+            (case.run)(&mut mmix, CLOSED),
+            case.closed,
+            "{}: closed handle",
+            case.name
+        );
+
+        if let Some(mode) = case.wrong_mode {
+            let path = unique_tmp_path(&format!("wrong_capability_{}.txt", case.name));
+            let guard = TempFileGuard(path.clone());
+            fs::write(&path, "content").unwrap(); // TEXT_READ needs the file to exist
+            assert_eq!(fopen(&mut mmix, 3, &path, mode), 0, "{}: fopen", case.name);
+            assert_eq!(
+                (case.run)(&mut mmix, 3),
+                case.wrong,
+                "{}: wrong capability",
+                case.name
+            );
+            drop(guard);
+        }
+    }
+}
+
+#[test]
+fn binary_read_write_switches_capability_for_fputc_too() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fputc_read_write_switch.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ_WRITE), 0);
+    assert_eq!(fwrite(&mut mmix, 3, b"0123456789"), 0);
+    assert_eq!(fseek(&mut mmix, 3, 0), 0);
+
+    // A read clears write; Fputc fails until Fseek restores it.
+    let buffer_addr = 78_600u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), 0);
+    assert_eq!(fputc(&mut mmix, 3, b'X'), -1);
+
+    assert_eq!(fseek(&mut mmix, 3, 0), 0); // restores both
+    assert_eq!(fputc(&mut mmix, 3, b'X'), 0);
+
+    // Fputc clears read; reading again fails until Fseek restores it.
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, 4), -1 - 4);
+
+    drop(guard);
 }
