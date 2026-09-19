@@ -395,8 +395,6 @@ pub enum Stop {
     Breakpoint(u64),
 }
 
-impl MMix {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
