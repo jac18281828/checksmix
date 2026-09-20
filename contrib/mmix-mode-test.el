@@ -67,7 +67,7 @@ INCLUDE is a preprocessor stage outside the grammar."
   "The mode's predefined symbols are exactly those the assembler seeds."
   (let* ((source (mmix-test--file-string "src/mmixal.rs"))
          (beg (string-search "pub fn new(source: &str" source))
-         (end (string-search "Self::preprocess_debug(source" source beg)))
+         (end (string-search "Self::preprocess_debug(" source beg)))
     (should (and beg end))
     (should
      (equal (mmix-test--matches "\"\\([A-Za-z_]+\\)\""
@@ -226,14 +226,15 @@ A name bound by IS or GREG is a variable, not a label."
     (should (eq (mmix-test--face-at "@") 'font-lock-number-face))))
 
 (ert-deftest mmix-comments-strings-and-character-literals ()
-  "Both comment characters work; neither opens a comment inside a literal."
+  "`%' opens a comment; `;' separates statements and fonts as neither.
+Neither character opens a comment inside a string or character literal."
   (mmix-test--with-buffer
       (concat "\tSETL\t$0,1\t% percent comment\n"
-              "\tSETL\t$0,1\t; semicolon comment\n"
+              "\tSETL\t$0,1\t; semicolon separator\n"
               "Text\tBYTE\t\"50% ; off\\\",'%',';','\\'',0\n"
               "\tSETL\t$1,2\n")
     (should (eq (mmix-test--face-at "percent") 'font-lock-comment-face))
-    (should (eq (mmix-test--face-at "semicolon") 'font-lock-comment-face))
+    (should-not (eq (mmix-test--face-at "semicolon") 'font-lock-comment-face))
     (should (eq (mmix-test--face-at "50%") 'font-lock-string-face))
     (should (eq (mmix-test--face-at "'%'") 'font-lock-string-face))
     (should (eq (mmix-test--face-at "';'") 'font-lock-string-face))

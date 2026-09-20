@@ -136,7 +136,7 @@ or autoload it instead:
 ```
 
 `contrib/mmix-mode.el` is a major mode for `.mms` source written to the dialect
-checksmix assembles: both `%` and `;` comments, column-free labels, the explicit
+checksmix assembles: `%` comments, column-free labels, the explicit
 immediate mnemonics and checksmix's extensions. It highlights and indents,
 colours each use of a label or `IS`/`GREG` name the file defines, shows
 the current line's instruction through eldoc, describes any instruction with

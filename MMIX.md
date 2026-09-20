@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal — `SET $1,010` loads 8 here, 10 in MMIXAL), or character literals; every operand is an MMIXAL expression (see "Expressions" below).
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), or character literals; every operand is an MMIXAL expression (see "Expressions" below). A leading `0` is an ordinary decimal digit, as in MMIXAL — `SET $1,010` loads 10, and there is no octal spelling.
 
 ## Memory access
 
@@ -22,6 +22,42 @@ Main    SETL    $0,42       % your code here
 
 A program starts with `$255` holding its entry address — `Main`'s, or the
 first instruction's when there is no `Main` (MMIXAL reference).
+
+## Line structure
+
+A line holds a label field, an opcode field and an operand field, each
+separated from the next by a blank; every field but the opcode is optional.
+A label with nothing but blanks and a comment after it is a statement on its
+own; anything else there means the opcode field held a word the assembler
+doesn't recognize, reported as an unknown operation with the statement
+printed in full.
+
+`;` separates statements — `SETL $1,1; ADD $1,$1,1` assembles both — and
+needs no blank on either side. A statement after a `;` is read exactly like
+one at the start of a line, label field included.
+
+`%` is the only comment character. It runs to the end of the line and wins
+over a later `;`: in `SETL $1,1 % note; ADD` the `; ADD` sits inside the
+comment, so no second statement begins.
+
+A line whose first character is not a letter, a digit, `:` or `_` is a
+comment in its entirety — `;`, `*`, `#`, `/` and `-` all open one this way.
+An indented line is not covered by this rule; its content parses normally.
+
+Once a statement's operands have parsed, text past them is ignored, provided
+a blank separates it from the operand field: `ADD $1,$2,$3 sum of the parts`
+assembles, the trailing words dropped. Text abutting the operand with no
+blank is a syntax error, as is text opening with a digit or with `,` `+` `-`
+`*` `/` `~` `&` `|` `^` `<` `>` or `$` — a digit there almost always means a
+dropped separator rather than a comment, so `HALT 2 apples` is an error, not
+a warning; a bare operand holds no blanks, so `SETL $1,2 + 3`
+would otherwise assemble as `2` with `+ 3` dropped in silence. `/` is in
+this set: `SET $1,2 / 3` is an error, though `SET $1,2/3` (no blank) still
+divides to `0` inside the expression itself.
+
+Whitespace around an operand list's commas stays legal — `TRAP 0, Time, 2`
+parses — a checksmix extension over MMIXAL, which ends the operand field at
+the first blank.
 
 ## Assembler directives
 
@@ -78,7 +114,9 @@ no symbol table to index).
 
 A bare expression — one with no enclosing parentheses — holds no whitespace:
 it is one unbroken run of characters ending at the first space, tab, comma,
-comment character or newline. Write a negative literal closed up:
+`;`, comment character or newline. What follows a bare expression is subject
+to the trailing-text rule in "Line structure" above. Write a negative
+literal closed up:
 `SET $1,-5`, never `SET $1,- 5`. A parenthesized group is the one place an
 expression may hold whitespace, a checksmix extension over MMIXAL's own
 closed-up syntax and a pure superset of it: `SET $1,(2 + 3)` assembles.
@@ -141,7 +179,9 @@ Two known limitations:
 
 - **Own line, no label.** `INCLUDE` must occupy its own line; a line whose
   first token is not `INCLUDE` is left untouched, so a label cannot be
-  attached to an `INCLUDE` line.
+  attached to an `INCLUDE` line. `;` cannot separate an `INCLUDE` from
+  anything else either: the operand runs to the end of the line, so a `;`
+  lands inside it and fails as an unreadable file naming the whole text.
 - **`source_text` first-match-on-filename.** Splitting a host file at an
   `INCLUDE` produces multiple units that share the same filename. The
   debug-info API `source_text(file, line)` resolves a unit by the first match

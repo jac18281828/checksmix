@@ -2,7 +2,7 @@
 // Based on TAOCP Vol 1 Fascicle 1 - MMIX Assembly Language
 
 WHITESPACE = _{ " " | "\t" | "\r" }
-COMMENT = _{ (";" | "%") ~ (!"\n" ~ ANY)* }
+COMMENT = _{ "%" ~ (!"\n" ~ ANY)* }
 
 // A keyword ends where an identifier could not continue: the complement of
 // an identifier's continuation set (ASCII_ALPHANUMERIC or '_'). Every
@@ -15,14 +15,14 @@ word_end = _{ !(ASCII_ALPHANUMERIC | "_") }
 // are distinct keys in the symbol table.
 global_id = @{ ":"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Numeric literals: decimal, hex (#... or 0x...), octal (0...)
+// Numeric literals: decimal (a leading '0' is an ordinary digit -- the
+// MMIXAL reference has no octal spelling) and hex (#... or 0x...).
 // @ represents current location
 at_symbol = @{ "@" }
 hex_literal = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
-oct_literal = @{ "0" ~ ASCII_OCT_DIGIT+ }
 dec_literal = @{ ASCII_DIGIT+ }
 char_literal = @{ "'" ~ ( "\\" ~ ( "n" | "r" | "t" | "0" | "\\" | "'" ) | (!"'" ~ ANY)) ~ "'" }
-constant = { hex_literal | oct_literal | dec_literal | char_literal }
+constant = { hex_literal | dec_literal | char_literal }
 
 // MMIXAL expressions: two left-associative precedence levels over unary
 // operators, parentheses and `@`. `expr` is compound-atomic end to end,
@@ -750,8 +750,15 @@ instruction = {
     inst_trap | inst_halt
 }
 
-// One logical line: optional statement on this line
-line = { statement? }
+// Text past a statement's operand field, up to the next statement
+// separator or end of line. Never itself parsed: `parse_two_pass` inspects
+// its span against the raw source to enforce the blank-before-it and
+// no-leading-operator rules a bare rule match can't express.
+remainder = @{ (!(NEWLINE | ";") ~ ANY)* }
+
+// One logical line: `;` separates statements, each trailed by whatever
+// free text follows its operand field before the next `;` or newline.
+line = { statement? ~ remainder ~ (";" ~ statement? ~ remainder)* }
 
 // Program is zero or more lines separated by newlines
 // This allows blank lines, comment-only lines, and empty files

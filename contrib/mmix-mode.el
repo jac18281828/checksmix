@@ -8,7 +8,8 @@
 ;; following the MMIXAL dialect checksmix assembles rather than canonical
 ;; MMIXAL. Where the two differ this mode follows checksmix:
 ;;
-;;   - `%' and `;' both start a comment that runs to the end of the line.
+;;   - `%' starts a comment that runs to the end of the line; `;'
+;;     separates statements.
 ;;   - A string literal has no escapes; a character literal accepts
 ;;     \n \r \t \0 \\ and \'.
 ;;   - A statement is not column-sensitive.  Its first word is a label
@@ -251,7 +252,11 @@ no word is at point."
   (and bounds (buffer-substring-no-properties (car bounds) (cdr bounds))))
 
 (defun mmix--operands-at-point-p ()
-  "Return non-nil when point is before text that is not a comment."
+  "Return non-nil when point is before this statement's own text.
+Nil at end of line, before a `%' comment, or before a `;' -- checksmix
+reads a `;' as the start of a new statement, which this mode does not
+model; treating it the same as a comment stops this statement's own
+text there."
   (not (or (eolp) (looking-at-p "[%;]"))))
 
 (defun mmix--line-statement ()
@@ -348,13 +353,12 @@ other label an address.  A label with a trailing colon before one of
 (defvar mmix-mode-syntax-table
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?% "<" table)
-    (modify-syntax-entry ?\; "<" table)
     (modify-syntax-entry ?\n ">" table)
     (modify-syntax-entry ?\" "\"" table)
     (modify-syntax-entry ?\\ "." table)
     (modify-syntax-entry ?' "." table)
     (modify-syntax-entry ?_ "_" table)
-    (dolist (char '(?: ?$ ?# ?@ ?, ?- ?. ?+ ?* ?/ ?< ?> ?& ?| ?= ?~ ?! ??))
+    (dolist (char '(?\; ?: ?$ ?# ?@ ?, ?- ?. ?+ ?* ?/ ?< ?> ?& ?| ?= ?~ ?! ??))
       (modify-syntax-entry char "." table))
     table)
   "Syntax table for `mmix-mode'.")
@@ -367,8 +371,8 @@ other label an address.  A label with a trailing colon before one of
 
 (defun mmix--syntax-propertize (start end)
   "Mark character literals between START and END as strings.
-A quote inside one is otherwise punctuation, so `'%'' and `';'' would
-open a comment."
+A quote inside one is otherwise punctuation, so `'%'' would open a
+comment."
   (goto-char start)
   (while (re-search-forward mmix--char-literal-regexp end t)
     (unless (nth 8 (save-excursion (syntax-ppss (match-beginning 0))))
@@ -1242,7 +1246,7 @@ Report the text through eldoc's CALLBACK."
 
 \\{mmix-mode-map}"
   (setq-local comment-start "% ")
-  (setq-local comment-start-skip "[%;]+[ \t]*")
+  (setq-local comment-start-skip "%+[ \t]*")
   (setq-local comment-column 40)
   (setq-local syntax-propertize-function #'mmix--syntax-propertize)
   (setq-local font-lock-defaults '(mmix-font-lock-keywords nil nil))

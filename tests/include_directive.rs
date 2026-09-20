@@ -78,7 +78,7 @@ fn include_directive_resolves_label_from_included_file() {
 /// name instead, and this test would fail.
 #[test]
 fn include_directive_parse_error_names_the_included_file() {
-    let root_source = "; header, valid on its own\nINCLUDE include_bad_lib.mms\n";
+    let root_source = "% header, valid on its own\nINCLUDE include_bad_lib.mms\n";
     let units = MMixAssembler::resolve_includes(
         root_source,
         "include_diag_root.mms",

@@ -3865,9 +3865,9 @@ Test279c
 % POP. POP then reads x=1 back from that memory, retracting by only 2
 % octas instead of 6 -- proof it reads the hole from M8[rO-8] at POP
 % time, not any count PUSHJ cached. The rewrite itself still disturbs
-% $3, $4 below the new, smaller hole; harmless here since Test 281 --
-% the corpus's actual last test -- never reads $3 or $4, and writes
-% every register it touches before reading it.
+% $3, $4 below the new, smaller hole; harmless here since neither
+% Test 281 nor Test 282 reads $3 or $4, and each writes every register
+% it touches before reading it.
 % ========================================
 Test280 ADDU    TestNum,TestNum,1
         GET     $40,rO
@@ -3933,6 +3933,39 @@ Test281f
 Test281g
         LDOU    Result,$10,16
         SET     Expect,256
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test282
+        JMP     TestFail
+
+% ========================================
+% Test 282: lexical conformance -- `;` separates two statements on one
+% line with a label on the second, a leading `0` reads back as decimal,
+% free text past an operand is ignored, and `3/4` still divides to `0`
+% ========================================
+% Every register this test touches (Expect, Result, Temp) is written
+% here before it is ever read.
+% ========================================
+Test282 ADDU    TestNum,TestNum,1
+        SET     Expect,0
+        SET     Result,3;Test282Sep SET Expect,3
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test282b
+        JMP     TestFail
+Test282b
+        SET     Result,0144       % a leading `0` is decimal, not octal
+        SET     Expect,144
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test282c
+        JMP     TestFail
+Test282c
+        SET     Result,5 free text past the operand is ignored
+        SET     Expect,5
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test282d
+        JMP     TestFail
+Test282d
+        SET     Result,3/4        % division inside a bare expression is untouched
+        SET     Expect,0
         CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail

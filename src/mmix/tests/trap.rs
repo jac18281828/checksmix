@@ -427,7 +427,7 @@ fn test_debug_directive_followed_by_a_blank_line_at_eof() {
 /// A `debug` line followed by a trailing comment line at end of file.
 #[test]
 fn test_debug_directive_followed_by_a_comment_line_at_eof() {
-    let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n; nothing else follows\n";
+    let source = "\tLOC\t#100\nMain\tdebug \"hi\"\n% nothing else follows\n";
     let (_, stop, stdout) = assemble_and_run_bounded(source, 1_000);
     assert_eq!(stop, Stop::Halted, "must not loop, got {stdout:?}");
     assert_eq!(stdout, "hi\n");
