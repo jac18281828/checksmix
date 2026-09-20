@@ -67,7 +67,7 @@ INCLUDE is a preprocessor stage outside the grammar."
   "The mode's predefined symbols are exactly those the assembler seeds."
   (let* ((source (mmix-test--file-string "src/mmixal.rs"))
          (beg (string-search "pub fn new(source: &str" source))
-         (end (string-search "preprocess_debug(source)" source beg)))
+         (end (string-search "Self::preprocess_debug(source" source beg)))
     (should (and beg end))
     (should
      (equal (mmix-test--matches "\"\\([A-Za-z_]+\\)\""
@@ -109,7 +109,7 @@ INCLUDE is a preprocessor stage outside the grammar."
   "Special registers and TRAP codes are documented, case-sensitively."
   (should (equal (mmix-symbol-help "rJ")
                  "rJ: special register 4, return-jump register"))
-  (should (string-match-p "TRAP function 8: Write null-terminated string"
+  (should (string-match-p "TRAP function 7: Write a null-terminated string"
                           (mmix-symbol-help ":Fputs")))
   (should-not (mmix-symbol-help "rj")))
 

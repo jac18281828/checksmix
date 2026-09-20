@@ -140,34 +140,39 @@
     ("StdIn" . "standard input handle")
     ("StdOut" . "standard output handle")
     ("StdErr" . "standard error handle")
-    ("Halt"
-     . "TRAP function 0: Stop execution, exit code in $255; $255 = exit code")
-    ("Trip"
-     . "TRAP function 1: Cause a forced trip")
+    ("TextRead" . "Fopen mode 0: grants read")
+    ("TextWrite" . "Fopen mode 1: grants write")
+    ("BinaryRead" . "Fopen mode 2: grants read and seek")
+    ("BinaryWrite" . "Fopen mode 3: grants write and seek")
+    ("BinaryReadWrite"
+     . "Fopen mode 4: grants read, write and seek, switching between read and write")
+    ("Halt" . "TRAP function 0: Stop execution; TRAP 0,Halt,Handle; $255 = exit code")
     ("Fopen"
-     . "TRAP function 2: Open a file; $255 = filename ptr, $0 = mode; returns fd in $255")
+     . "TRAP function 1: Open a file; TRAP 0,Fopen,Handle; name address, mode; returns 0, or −1")
     ("Fclose"
-     . "TRAP function 3: Close a file descriptor; $255 = fd")
+     . "TRAP function 2: Close Handle; TRAP 0,Fclose,Handle; returns 0, or −1")
     ("Fread"
-     . "TRAP function 4: Read bytes from fd; $255 = fd, $0 = buf ptr, $1 = count; returns bytes read")
+     . "TRAP function 3: Read from Handle; TRAP 0,Fread,Handle; buffer, size; returns 0, n−size at end of file, or −1−size on error")
     ("Fgets"
-     . "TRAP function 5: Read a line (null-terminated) from fd; $255 = fd, $0 = buf ptr, $1 = max bytes")
+     . "TRAP function 4: Read a line from Handle; TRAP 0,Fgets,Handle; buffer, size; returns characters stored, or −1")
     ("Fgetws"
-     . "TRAP function 6: Read a wide string from fd; $255 = fd, $0 = buf ptr, $1 = max wydes")
+     . "TRAP function 5: Read a wide string from Handle; TRAP 0,Fgetws,Handle; buffer, size; returns wydes stored, or −1")
     ("Fwrite"
-     . "TRAP function 7: Write bytes to fd; $255 = fd, $0 = buf ptr, $1 = count; returns bytes written")
+     . "TRAP function 6: Write to Handle; TRAP 0,Fwrite,Handle; buffer, size; returns 0, or n−size after writing n")
     ("Fputs"
-     . "TRAP function 8: Write null-terminated string to fd; $255 = fd, $0 = string ptr; bytes ≥ 0x80 emitted raw")
-    ("Fputc"
-     . "TRAP function 9: Write one byte to fd; $255 = fd, $0 = byte; high byte of $0 emitted raw")
+     . "TRAP function 7: Write a null-terminated string to Handle; TRAP 0,Fputs,Handle; $255 = string address; returns bytes written, or −1")
     ("Fputws"
-     . "TRAP function 10: Write null-terminated wide string to fd; $255 = fd, $0 = string ptr")
+     . "TRAP function 8: Write a null-terminated wide string to Handle; TRAP 0,Fputws,Handle; $255 = string address; returns wydes written, or −1")
     ("Fseek"
-     . "TRAP function 11: Seek within fd; $255 = fd, $0 = offset, $1 = whence")
+     . "TRAP function 9: Seek within Handle; TRAP 0,Fseek,Handle; $255 = offset; returns 0, or −1")
     ("Ftell"
-     . "TRAP function 12: Get current position in fd; $255 = fd; returns position in $255")
+     . "TRAP function 10: Get the current position in Handle; TRAP 0,Ftell,Handle; returns position in $255, or −1")
+    ("Fputc"
+     . "TRAP function #80: Write one byte to Handle; TRAP 0,Fputc,Handle; $255's low byte; returns 0, or −1")
     ("Time"
-     . "TRAP function 13: Current time; returns microseconds since Unix epoch in $255")
+     . "TRAP function #81: Report the current time; TRAP 0,Time,Handle; Handle selects seconds (0), milliseconds (1) or microseconds (2); returns the time in $255")
+    ("Debug"
+     . "TRAP function #82: Backs the debug \"text\" directive; TRAP 0,Debug,K, K the directive's 0-based index")
     ("ROUND_CURRENT" . "rounding-mode override 0: use rA's mode")
     ("ROUND_OFF" . "rounding-mode override 1: toward zero")
     ("ROUND_UP" . "rounding-mode override 2: toward +infinity")
