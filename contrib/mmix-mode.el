@@ -17,8 +17,8 @@
 ;;   - Mnemonics and directives are case-insensitive; predefined symbols
 ;;     (`rJ', `StdOut', `Fputs', `ROUND_NEAR', ...) are case-sensitive.
 ;;   - The explicit immediate spellings (ADDI, SETI, GETAB, ...), the
-;;     extension HALT, `.BYTE'-style directives, QUAD, INCLUDE and the
-;;     `debug "text"' preprocessor line are all keywords.
+;;     extension HALT, INCLUDE and the `debug "text"' preprocessor line
+;;     are all keywords.
 ;;
 ;; A name the buffer defines is highlighted where it is used, in the face
 ;; of its definition: a label as a function name, an IS or GREG name as a
@@ -91,8 +91,7 @@
   "Every instruction mnemonic checksmix assembles, in upper case.")
 
 (defconst mmix-directives
-  '("BYTE" ".BYTE" "WYDE" ".WYDE" "TETRA" ".TETRA" "OCTA" ".OCTA"
-    "QUAD" ".QUAD" "LOC" "GREG" "IS" "PREFIX" "INCLUDE" ".INCLUDE")
+  '("BYTE" "WYDE" "TETRA" "OCTA" "LOC" "GREG" "IS" "PREFIX" "INCLUDE")
   "Every assembler directive checksmix accepts, in upper case.")
 
 (defconst mmix-debug-directive "debug"
@@ -206,11 +205,11 @@ Keywords are case-insensitive and upper case, except `debug'."
   "Instructions that form a whole statement with no operands.")
 
 (defconst mmix--single-operand-keywords
-  '("JMP" "JMPB" "RESUME" "SYNC" "LOC" "GREG" "PREFIX" "BYTE" ".BYTE"
-    "WYDE" ".WYDE" "TETRA" ".TETRA" "OCTA" ".OCTA" "QUAD" ".QUAD")
+  '("JMP" "JMPB" "RESUME" "SYNC" "LOC" "GREG" "PREFIX" "BYTE"
+    "WYDE" "TETRA" "OCTA")
   "Keywords whose statement is complete with a single operand.")
 
-(defconst mmix--rest-of-line-directives '("INCLUDE" ".INCLUDE")
+(defconst mmix--rest-of-line-directives '("INCLUDE")
   "Directives whose operand is the rest of the line, whatever it spells.")
 
 (defconst mmix--value-directives '("IS" "GREG")
@@ -221,7 +220,7 @@ Keywords are case-insensitive and upper case, except `debug'."
 before one is a syntax error.")
 
 (defconst mmix--word-regexp
-  (rx (? (any ".:")) (+ (any alnum "_")) (? ":"))
+  (rx (? ":") (+ (any alnum "_")) (? ":"))
   "A word that may stand in a statement's label or operation field.")
 
 (defconst mmix--label-regexp
@@ -292,7 +291,7 @@ checksmix reads a line as a bare statement before it reads it as a
 label followed by one, and the conditions below follow that order."
   (let ((key (mmix--keyword-key first)))
     (cond
-     ;; `.BYTE', `2ADDU': not label-shaped.
+     ;; `2ADDU': not label-shaped.
      ((not (string-match-p mmix--label-regexp first)) t)
      ((member key mmix--rest-of-line-directives) (or second rest))
      ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
@@ -607,15 +606,15 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Define a numeric or register alias constant")
     (("PREFIX") "PREFIX str"
      "Qualify subsequent unqualified names as str<name>; names beginning with : opt out")
-    (("BYTE" ".BYTE") "BYTE expr,..."
+    (("BYTE") "BYTE expr,..."
      "Emit one byte per operand")
-    (("WYDE" ".WYDE") "WYDE expr,..."
+    (("WYDE") "WYDE expr,..."
      "Emit one 16-bit wyde per operand")
-    (("TETRA" ".TETRA") "TETRA expr,..."
+    (("TETRA") "TETRA expr,..."
      "Emit one 32-bit tetra per operand")
-    (("OCTA" ".OCTA" "QUAD" ".QUAD") "OCTA expr,..."
+    (("OCTA") "OCTA expr,..."
      "Emit one 64-bit octa per operand")
-    (("INCLUDE" ".INCLUDE") "INCLUDE file"
+    (("INCLUDE") "INCLUDE file"
      "Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error")
     (("SET") "SET $X, $Y / SET $X, imm"
      "MMIXAL alias — emits ORI $X, $Y, 0 for a register, SETL $X, imm for a wyde-wide immediate")

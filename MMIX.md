@@ -57,8 +57,8 @@ unaligned access a load through that label rounds back down past the datum.
 
 ### INCLUDE
 
-`INCLUDE file` (also `.INCLUDE`, case-insensitive) is a **checksmix extension**,
-not part of MMIXAL. It is a preprocessor stage, not a grammar rule: the
+`INCLUDE file` (case-insensitive) is a **checksmix extension**, not part of
+MMIXAL. It is a preprocessor stage, not a grammar rule: the
 named file is inserted as its own translation unit(s), so errors inside it
 report *its own* filename and line numbers rather than the includer's. The path
 resolves relative to the including file's own directory (like C's
@@ -74,8 +74,8 @@ INCLUDE lib.mms      % pulls lib.mms in as if inserted here
 Two known limitations:
 
 - **Own line, no label.** `INCLUDE` must occupy its own line; a line whose
-  first token is not `INCLUDE`/`.INCLUDE` is left untouched, so a label cannot
-  be attached to an `INCLUDE` line.
+  first token is not `INCLUDE` is left untouched, so a label cannot be
+  attached to an `INCLUDE` line.
 - **`source_text` first-match-on-filename.** Splitting a host file at an
   `INCLUDE` produces multiple units that share the same filename. The
   debug-info API `source_text(file, line)` resolves a unit by the first match

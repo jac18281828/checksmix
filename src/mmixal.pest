@@ -45,11 +45,11 @@ label_def = { global_id ~ ":"? }
 // String literal for a data directive's value list
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
-// Data directives (with or without leading dot) - must be complete words
-directive_byte = @{ (^"BYTE" | ^".BYTE") ~ word_end }
-directive_wyde = @{ (^"WYDE" | ^".WYDE") ~ word_end }
-directive_tetra = @{ (^"TETRA" | ^".TETRA") ~ word_end }
-directive_octa = @{ (^"OCTA" | ^".OCTA" | ^"QUAD" | ^".QUAD") ~ word_end }
+// Data directives - must be complete words
+directive_byte = @{ ^"BYTE" ~ word_end }
+directive_wyde = @{ ^"WYDE" ~ word_end }
+directive_tetra = @{ ^"TETRA" ~ word_end }
+directive_octa = @{ ^"OCTA" ~ word_end }
 
 // Control directives - must be complete words, not prefixes
 directive_loc = @{ ^"LOC" ~ word_end }

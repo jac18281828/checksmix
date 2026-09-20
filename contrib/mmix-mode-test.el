@@ -60,7 +60,7 @@ INCLUDE is a preprocessor stage outside the grammar."
    (equal (mmix-test--matches "\\^\"\\([.A-Z0-9]+\\)\""
                               (mmix-test--file-string "src/mmixal.pest") 1)
           (sort (seq-difference (append mmix-instructions mmix-directives)
-                                '("INCLUDE" ".INCLUDE"))
+                                '("INCLUDE"))
                 #'string<))))
 
 (ert-deftest mmix-predefined-symbols-match-the-assembler ()
@@ -91,13 +91,11 @@ INCLUDE is a preprocessor stage outside the grammar."
     (should (member '("ADD $X, $Y, Z" . "Add signed immediate") help))))
 
 (ert-deftest mmix-help-reads-spelled-mnemonics-and-aliases ()
-  "2ADDU, 16ADDUI, .BYTE and QUAD resolve to their rows."
+  "2ADDU, 16ADDUI and byte resolve to their rows."
   (should (string-prefix-p "2ADDU" (caar (mmix-instruction-help "2ADDU"))))
   (should (equal (mmix-instruction-help "16ADDUI")
                  '(("16ADDU $X, $Y, Z" . "$X = 16*$Y + Z unsigned"))))
-  (should (string-prefix-p "BYTE" (caar (mmix-instruction-help ".byte"))))
-  (should (equal (mmix-instruction-help "QUAD")
-                 (mmix-instruction-help "OCTA"))))
+  (should (string-prefix-p "BYTE" (caar (mmix-instruction-help "byte")))))
 
 (ert-deftest mmix-help-ignores-non-keywords ()
   "Only a keyword has help; debug is case-sensitive."
@@ -206,21 +204,21 @@ reads `Set HALT' as the label Set on a HALT."
     (should-not (mmix-test--face-at "rj"))))
 
 (ert-deftest mmix-directives-and-definitions ()
-  "Directives, dotted and QUAD spellings, INCLUDE and debug are directives.
+  "Directives, case-insensitively, INCLUDE and debug are directives.
 A name bound by IS or GREG is a variable, not a label."
   (mmix-test--with-buffer
       (concat "Five\tIS\t5\n"
               "Sp\tGREG\t@\n"
-              "\t.BYTE\t1\n"
-              "\tquad\t2\n"
+              "\tbyte\t1\n"
+              "\tocta\t2\n"
               "\tINCLUDE\tlib.mms\n"
               "Main\tdebug \"hi\"\n"
               "\t2ADDU\t$1,$2,$3\n")
     (should (eq (mmix-test--face-at "Five") 'font-lock-variable-name-face))
     (should (eq (mmix-test--face-at "IS") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "Sp") 'font-lock-variable-name-face))
-    (should (eq (mmix-test--face-at ".BYTE") 'font-lock-preprocessor-face))
-    (should (eq (mmix-test--face-at "quad") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "byte") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "octa") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "INCLUDE") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "debug") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "Main") 'font-lock-function-name-face))

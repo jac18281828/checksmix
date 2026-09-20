@@ -3940,8 +3940,8 @@ impl MMixAssembler {
     }
 
     /// If `line`, after stripping a trailing `;`/`%` comment and trimming
-    /// whitespace, is an `INCLUDE`/`.INCLUDE` directive (case-insensitive),
-    /// returns its operand (unquoted if wrapped in matching double quotes).
+    /// whitespace, is an `INCLUDE` directive (case-insensitive), returns its
+    /// operand (unquoted if wrapped in matching double quotes).
     fn parse_include_operand(line: &str) -> Option<String> {
         let without_comment = match line.find([';', '%']) {
             Some(idx) => &line[..idx],
@@ -3950,10 +3950,7 @@ impl MMixAssembler {
         let trimmed = without_comment.trim();
         let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
         let keyword = parts.next()?;
-        if !keyword
-            .trim_start_matches('.')
-            .eq_ignore_ascii_case("include")
-        {
+        if !keyword.eq_ignore_ascii_case("include") {
             return None;
         }
         let operand = parts.next().unwrap_or("").trim();
@@ -7019,11 +7016,11 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn resolve_includes_recognizes_comment_case_and_leading_dot() {
+    fn resolve_includes_recognizes_comment_case() {
         let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
 
         let lower_with_comment = MMixAssembler::resolve_includes(
-            ".include lib.mms  % pull it in\n",
+            "include lib.mms  % pull it in\n",
             "root.mms",
             std::path::Path::new(""),
             &reader,

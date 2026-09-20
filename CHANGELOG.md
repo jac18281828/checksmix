@@ -1,6 +1,7 @@
 0.3.12 (2026-09-19)
 
 * `contrib/mmix-mode.el`'s predefined-symbol help matches the assembler again: the 0.3.11 TRAP numbering, `Fopen`'s five mode constants (`TextRead`/`TextWrite`/`BinaryRead`/`BinaryWrite`/`BinaryReadWrite`) and `Debug` are documented, and `Trip` is gone. `mmix-predefined-symbols-match-the-assembler`, meant to catch this drift, instead searched for a call site `preprocess_debug(source)` C8 had already rewritten and failed on a nil bound before it compared anything
+* **Breaking: `.BYTE`, `.WYDE`, `.TETRA`, `.OCTA`, `QUAD`, `.QUAD` and `.INCLUDE` no longer assemble.** MMIXAL never defined any of the seven; spell the canonical directive instead — `.BYTE` becomes `BYTE`, `.WYDE` becomes `WYDE`, `.TETRA` becomes `TETRA`, `.OCTA`/`QUAD`/`.QUAD` become `OCTA`, and `.INCLUDE` becomes `INCLUDE`. The 0.3.8 `contrib/mmix-mode.el` entry's dotted directives and `QUAD` are superseded
 
 0.3.11 (2026-09-19)
 
