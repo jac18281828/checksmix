@@ -4,12 +4,10 @@
 WHITESPACE = _{ " " | "\t" | "\r" }
 COMMENT = _{ (";" | "%") ~ (!"\n" ~ ANY)* }
 
-// Symbols/identifiers for labels and symbolic names
-symbol = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-
-// A keyword ends where a symbol could not continue: the complement of
-// symbol's continuation set. Every mnemonic and directive rule closes with it,
-// which keeps the two definitions in step.
+// A keyword ends where an identifier could not continue: the complement of
+// an identifier's continuation set (ASCII_ALPHANUMERIC or '_'). Every
+// mnemonic and directive rule closes with it, which keeps the two
+// definitions in step.
 word_end = _{ !(ASCII_ALPHANUMERIC | "_") }
 
 // Identifier that may carry a leading ':' marking a global (linkage-visible)
@@ -24,16 +22,33 @@ hex_literal = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
 oct_literal = @{ "0" ~ ASCII_OCT_DIGIT+ }
 dec_literal = @{ ASCII_DIGIT+ }
 char_literal = @{ "'" ~ ( "\\" ~ ( "n" | "r" | "t" | "0" | "\\" | "'" ) | (!"'" ~ ANY)) ~ "'" }
-number_literal = { at_symbol | hex_literal | oct_literal | dec_literal | char_literal }
-signed_number_literal = { "-" ~ (hex_literal | oct_literal | dec_literal) }
+constant = { hex_literal | oct_literal | dec_literal | char_literal }
 
-// Expression value: can be a numeric literal or a symbol (label/constant).
-// Uses global_id so a leading ':' is preserved when referencing a global.
-expr_value = { signed_number_literal | number_literal | global_id }
+// MMIXAL expressions: two left-associative precedence levels over unary
+// operators, parentheses and `@`. `expr` is compound-atomic end to end,
+// groups included: no implicit WHITESPACE/COMMENT ever splices into it,
+// which is what keeps `%` an operator here and a comment opener everywhere
+// else, and compound- (not plain) atomicity is what keeps every level's
+// inner pairs available to the evaluator. A bare expression therefore holds
+// no whitespace of its own and ends at the first character that fails to
+// extend it. A parenthesized group is the one place whitespace is allowed;
+// `group_ws` is its own explicit space rule, never pest's implicit one, so
+// entering a group never reopens a comment.
+unary_op = { "+" | "-" | "~" | "$" | "&" }
+strong_op = { "//" | "*" | "/" | "%" | "<<" | ">>" | "&" }
+weak_op = { "+" | "-" | "|" | "^" }
 
-// Registers: $0-$255 or symbolic names from IS directive  
-register_num = @{ "$" ~ ASCII_DIGIT+ }
-register = { register_num | symbol }
+expr = ${ term ~ (weak_op ~ term)* }
+term = { primary ~ (strong_op ~ primary)* }
+primary = { unary_op ~ primary | group | at_symbol | constant | global_id }
+
+group_ws = _{ " " | "\t" }
+group = { "(" ~ group_ws* ~ group_expr ~ group_ws* ~ ")" }
+group_expr = { group_term ~ (group_ws* ~ weak_op ~ group_ws* ~ group_term)* }
+group_term = { group_primary ~ (group_ws* ~ strong_op ~ group_ws* ~ group_primary)* }
+group_primary = {
+    unary_op ~ group_ws* ~ group_primary | group | at_symbol | constant | global_id
+}
 
 // Identifiers (kept for backward compatibility in some contexts)
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -62,8 +77,10 @@ directive_prefix = @{ ^"PREFIX" ~ word_end }
 // namespace.
 prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
-// A data directive takes a list of strings and/or expressions.
-data_value = { string_literal | expr_value }
+// A data directive takes a list of strings and/or expressions. A string is
+// not an expression operand: MMIXAL defines it as shorthand for a list of
+// character constants, not as a value arithmetic can touch.
+data_value = { string_literal | expr }
 data_values = { data_value ~ ("," ~ data_value)* }
 
 data_directive = {
@@ -73,10 +90,10 @@ data_directive = {
     directive_octa ~ data_values
 }
 
-greg_directive = { directive_greg ~ expr_value }
+greg_directive = { directive_greg ~ expr }
 
-loc_directive = { directive_loc ~ expr_value }
-is_directive = { global_id ~ directive_is ~ (register | expr_value) }
+loc_directive = { directive_loc ~ expr }
+is_directive = { global_id ~ directive_is ~ expr }
 prefix_directive = { directive_prefix ~ prefix_arg }
 
 // Group all directives under a single rule
@@ -394,19 +411,23 @@ mnemonic_halt = @{ ^"HALT" ~ word_end }
 // Instruction operands
 comma = _{ "," }
 
-operand_reg_reg_reg = { register ~ comma ~ register ~ comma ~ register }
-operand_reg_reg_imm = { register ~ comma ~ register ~ comma ~ expr_value }
+// Every operand is one expression; whether a site demands a register or a
+// pure value, and whether Z auto-selects between them, is the evaluator's
+// call, not the grammar's -- each of these keeps its own name only so the
+// parser can tell which site it is looking at.
+operand_reg_reg_reg = { expr ~ comma ~ expr ~ comma ~ expr }
+operand_reg_reg_imm = { expr ~ comma ~ expr ~ comma ~ expr }
 // Auto-immediate operand shape for base mnemonics (ADD, AND, SR, ...).
 // Z is either a register reference or an expression value; the parser
 // chooses the RRR or RRI MMixInstruction variant after resolving Z.
-operand_reg_reg_z = { register ~ comma ~ register ~ comma ~ (register | expr_value) }
-operand_reg_reg = { register ~ comma ~ register }
+operand_reg_reg_z = { expr ~ comma ~ expr ~ comma ~ expr }
+operand_reg_reg = { expr ~ comma ~ expr }
 // Auto-immediate operand shape for SET: the source is either a register
 // reference or an expression value, and the parser chooses SETRR or SETL.
-operand_reg_z = { register ~ comma ~ (register | expr_value) }
-operand_reg_imm = { register ~ comma ~ expr_value }
-operand_reg = { register }
-operand_imm = { expr_value }
+operand_reg_z = { expr ~ comma ~ expr }
+operand_reg_imm = { expr ~ comma ~ expr }
+operand_reg = { expr }
+operand_imm = { expr }
 
 // Instructions with different operand patterns
 inst_set = { mnemonic_set ~ operand_reg_z }
@@ -480,12 +501,12 @@ inst_arith_rri = {
 // NEG is special: Y is an immediate byte, and Z auto-selects RRR/RRI.
 inst_neg_auto = {
     (mnemonic_negu | mnemonic_neg) ~
-    register ~ comma ~ expr_value ~ comma ~ (register | expr_value)
+    expr ~ comma ~ expr ~ comma ~ expr
 }
 
 inst_neg_rri = {
     (mnemonic_negui | mnemonic_negi) ~
-    register ~ comma ~ expr_value ~ comma ~ expr_value
+    expr ~ comma ~ expr ~ comma ~ expr
 }
 
 // Floating point instructions (3 operands) - ordered longest first.
@@ -507,7 +528,7 @@ inst_float_rrr = {
 // otherwise swallow the register-looking Y symbol and strand the comma.
 inst_float_round_rrz = {
     (mnemonic_fixu | mnemonic_fix | mnemonic_fsqrt | mnemonic_fint) ~
-    register ~ comma ~ expr_value ~ comma ~ register
+    expr ~ comma ~ expr ~ comma ~ expr
 }
 
 inst_float_round_rr = {
@@ -521,7 +542,7 @@ inst_float_round_rr = {
 inst_flot_round = {
     (mnemonic_sflotu | mnemonic_sflot |
      mnemonic_flotu | mnemonic_flot) ~
-    register ~ comma ~ expr_value ~ comma ~ (register | expr_value)
+    expr ~ comma ~ expr ~ comma ~ expr
 }
 
 inst_flot_auto = {
@@ -535,7 +556,7 @@ inst_flot_auto = {
 inst_float_round_rri = {
     (mnemonic_sflotui | mnemonic_sfloti |
      mnemonic_flotui | mnemonic_floti) ~
-    register ~ comma ~ expr_value ~ comma ~ expr_value
+    expr ~ comma ~ expr ~ comma ~ expr
 }
 
 inst_float_rri = {
@@ -630,7 +651,7 @@ inst_pbranch = {
 inst_jmp = { (mnemonic_jmpb | mnemonic_jmp) ~ operand_imm }
 
 // TRAP instruction: TRAP X, Y, Z (where X, Y, Z can be numbers or identifiers)
-inst_trap = { mnemonic_trap ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
+inst_trap = { mnemonic_trap ~ expr ~ comma ~ expr ~ comma ~ expr }
 
 // GETA instructions: GETA $X, addr
 inst_geta = { mnemonic_geta ~ operand_reg_imm }
@@ -641,17 +662,17 @@ inst_pushj = { mnemonic_pushj ~ operand_reg_imm }
 inst_pushjb = { mnemonic_pushjb ~ operand_reg_imm }
 inst_go_auto = { (mnemonic_pushgo | mnemonic_go) ~ operand_reg_reg_z }
 inst_pushgo_rri = { mnemonic_pushgoi ~ operand_reg_reg_imm }
-inst_pop = { mnemonic_pop ~ expr_value ~ comma ~ expr_value }
+inst_pop = { mnemonic_pop ~ expr ~ comma ~ expr }
 inst_go_rri = { mnemonic_goi ~ operand_reg_reg_imm }
 
 // Special register access
-inst_get = { mnemonic_get ~ register ~ comma ~ expr_value }
-inst_put_auto = { mnemonic_put ~ expr_value ~ comma ~ (register | expr_value) }
-inst_puti = { mnemonic_puti ~ expr_value ~ comma ~ expr_value }
+inst_get = { mnemonic_get ~ expr ~ comma ~ expr }
+inst_put_auto = { mnemonic_put ~ expr ~ comma ~ expr }
+inst_puti = { mnemonic_puti ~ expr ~ comma ~ expr }
 
 // Context management
-inst_save = { mnemonic_save ~ register ~ comma ~ expr_value }
-inst_unsave = { mnemonic_unsave ~ expr_value ~ comma ~ register }
+inst_save = { mnemonic_save ~ expr ~ comma ~ expr }
+inst_unsave = { mnemonic_unsave ~ expr ~ comma ~ expr }
 
 // Prefetch and cache control
 inst_cache_auto = {
@@ -676,17 +697,17 @@ inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_reg_reg_imm }
 inst_cswap_rri = { mnemonic_cswapi ~ operand_reg_reg_imm }
 
 // STCO's X is an immediate byte, never a register; only Z auto-selects.
-inst_stco_auto = { mnemonic_stco ~ expr_value ~ comma ~ register ~ comma ~ (register | expr_value) }
-inst_stco_rri = { mnemonic_stcoi ~ expr_value ~ comma ~ register ~ comma ~ expr_value }
+inst_stco_auto = { mnemonic_stco ~ expr ~ comma ~ expr ~ comma ~ expr }
+inst_stco_rri = { mnemonic_stcoi ~ expr ~ comma ~ expr ~ comma ~ expr }
 
-// System instructions  
+// System instructions
 inst_resume = { mnemonic_resume ~ operand_imm }
-inst_trip = { mnemonic_trip ~ expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
-inst_swym = { mnemonic_swym ~ (expr_value ~ comma ~ expr_value ~ comma ~ expr_value)? }
+inst_trip = { mnemonic_trip ~ expr ~ comma ~ expr ~ comma ~ expr }
+inst_swym = { mnemonic_swym ~ (expr ~ comma ~ expr ~ comma ~ expr)? }
 inst_sync = { mnemonic_sync ~ operand_imm }
 
 // Operand patterns
-operand_num_num_num = { expr_value ~ comma ~ expr_value ~ comma ~ expr_value }
+operand_num_num_num = { expr ~ comma ~ expr ~ comma ~ expr }
 
 // Simple instructions
 inst_halt = { mnemonic_halt }

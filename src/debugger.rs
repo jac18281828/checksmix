@@ -1087,8 +1087,11 @@ Main\tdebug\t\"hi\"
         );
     }
 
-    /// A breakpoint on a label bound to a bare `LOC` (no instruction or data
-    /// emitted there) lists with no resolvable source line.
+    /// A breakpoint on a label bound to a `LOC` line names the location the
+    /// counter held before `LOC` moves it -- `Gap` is `#104`, right after
+    /// `Main`'s one instruction, not the `#300` `LOC` jumps to -- and that
+    /// address has no instruction or data emitted there, so it lists with no
+    /// resolvable source line.
     #[test]
     fn breakpoints_listing_shows_no_source_line_for_an_unmapped_address() {
         let source = "\
@@ -1100,7 +1103,7 @@ Gap     LOC     #300
         dbg.execute(Command::Break("Gap".to_string()));
         assert_eq!(
             dbg.execute(Command::Breakpoints),
-            vec!["0x300  (no source line)".to_string()]
+            vec!["0x104  (no source line)".to_string()]
         );
     }
 

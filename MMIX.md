@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal — `SET $1,010` loads 8 here, 10 in MMIXAL), or character literals; labels and `IS` constants resolve wherever expressions are accepted.
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), octal (`0`-prefixed — a checksmix extension; MMIXAL reads a leading `0` as decimal — `SET $1,010` loads 8 here, 10 in MMIXAL), or character literals; every operand is an MMIXAL expression (see "Expressions" below).
 
 ## Memory access
 
@@ -27,7 +27,7 @@ first instruction's when there is no `Main` (MMIXAL reference).
 
 | Directive | Syntax | Effect |
 | --- | --- | --- |
-| `LOC` | `LOC expr` | Set the assembly location counter to *expr* |
+| `LOC` | `LOC expr` | Set the assembly location counter to *expr*; a label on the same line names the location *before* the move |
 | `GREG` | `[label] GREG expr` | Allocate a global register initialized to *expr*; optional label becomes a register alias |
 | `IS` | `Name IS expr` | Define a numeric or register alias constant |
 | `PREFIX` | `PREFIX str` | Qualify subsequent unqualified names as `str<name>`; names beginning with `:` opt out |
@@ -53,7 +53,73 @@ wide datum rounds up from wherever `LOC` left it. Rounding happens when an item
 is assembled, never when a label is defined, so a label alone on its own line
 keeps the unrounded counter. A bare label followed by `OCTA` can therefore name
 an address up to seven bytes below the octabyte, and since MMIX has no
-unaligned access a load through that label rounds back down past the datum.
+unaligned access a load through that label rounds back down past the datum. A
+label on a `LOC` line itself takes the location the counter held *before* the
+move: `X LOC @+500` names `X` as the first of the 500 bytes `LOC` skips, and
+assembly continues at `X+500`.
+
+### Expressions
+
+Every operand — a register, an immediate, `LOC`'s target, a data item — is an
+MMIXAL expression: constants, symbols, `@`, unary operators, and two
+left-associative precedence levels of binary operators.
+
+| Level | Operators |
+| --- | --- |
+| Strong (binds tighter) | `*` `/` `//` `%` `<<` `>>` `&` |
+| Weak | `+` `-` `\|` `^` |
+
+`a-b-c` is `(a-b)-c`; `2+3*4` is `14`, since `*` binds tighter than `+`.
+Parentheses are the only grouping — MMIXAL has no brackets — and nest freely:
+`(2+3)*4` is `20`. Unary operators are `+` (identity), `-` (negate, mod
+2⁶⁴), `~` (complement), `$` (cast a pure value to a register number) and `&`
+(a symbol's serial number, always rejected — checksmix's object file carries
+no symbol table to index).
+
+A bare expression — one with no enclosing parentheses — holds no whitespace:
+it is one unbroken run of characters ending at the first space, tab, comma,
+comment character or newline. Write a negative literal closed up:
+`SET $1,-5`, never `SET $1,- 5`. A parenthesized group is the one place an
+expression may hold whitespace, a checksmix extension over MMIXAL's own
+closed-up syntax and a pure superset of it: `SET $1,(2 + 3)` assembles.
+
+`%` is the remainder operator wherever an expression is being parsed, and a
+comment character everywhere else — the same rule MMIXAL itself uses.
+`5%3` is `2`, the whole thing one unbroken expression; `5 % 3` is `5`, the
+space ending the expression before `% 3` opens a comment; `(5 % 3)` is `2`,
+whitespace being ordinary inside a group; `(2 + 3) % sum` is `5`, the group
+having already closed before `%` opens the comment (so `sum` need not even be
+defined).
+
+Arithmetic is on unsigned octabytes: `+` `-` `*` wrap mod 2⁶⁴; `x/y` is
+⌊x/y⌋ and illegal at `y=0`; `x//y` is ⌊2⁶⁴·x/y⌋ and illegal at `x≥y`; `x%y` is
+the remainder of that same division; `x<<y` is `(x·2ʸ) mod 2⁶⁴` and `x>>y` is
+⌊x/2ʸ⌋, both `0` for `y≥64`; `&` `|` `^` are bitwise.
+
+A symbol's value is pure — a label, an `IS` constant, a predefined constant —
+or a register — `IS $n`, a `GREG` label. Unary `$` casts a pure value to a
+register. Register arithmetic: register+pure, pure+register and
+register−pure give a register; register−register gives a pure value; any
+other binary operator with a register operand is an error, as is every unary
+operator but `+`. With `x IS $1` and `y IS $10`, `x+3` and `3+x` are `$4`,
+and `y-x` is the pure value `9`. A register value may run past 255 inside an
+expression, but the final value a register site consumes must fit `0..=255`,
+same as a bare `$256` today.
+
+`@` is the current location: for an instruction, its tetra-aligned address;
+for a data directive, the aligned address of the directive's first unit — the
+same address for every item in its list, since the whole list is evaluated
+before any of it assembles.
+
+A forward reference resolves like any label: in most operands it may name a
+symbol defined anywhere in the program, and operators apply to it exactly as
+to a resolved value — `JMP Later+4` and `OCTA Later-8` both assemble. Applying
+an operator to a forward reference at all is a **checksmix extension**: MMIXAL
+assembles in one pass and forbids it outright, but every program it accepts
+still assembles identically here. `LOC`, `IS`, `GREG` and the two-operand
+`LDA`'s size estimate are the exception: they resolve only a symbol already
+defined above, an assembler restriction this widens to cover expressions
+rather than lifts.
 
 ### INCLUDE
 

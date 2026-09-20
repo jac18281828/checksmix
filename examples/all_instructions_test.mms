@@ -3865,8 +3865,9 @@ Test279c
 % POP. POP then reads x=1 back from that memory, retracting by only 2
 % octas instead of 6 -- proof it reads the hole from M8[rO-8] at POP
 % time, not any count PUSHJ cached. The rewrite itself still disturbs
-% $3, $4 below the new, smaller hole; harmless here since this is the
-% corpus's last test and nothing after it reads them.
+% $3, $4 below the new, smaller hole; harmless here since Test 281 --
+% the corpus's actual last test -- never reads $3 or $4, and writes
+% every register it touches before reading it.
 % ========================================
 Test280 ADDU    TestNum,TestNum,1
         GET     $40,rO
@@ -3875,7 +3876,7 @@ Test280 ADDU    TestNum,TestNum,1
         GET     Result,rO
         ADDU    Expect,$40,32
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test281
         JMP     TestFail
 Test280Callee
         GET     $41,rO
@@ -3883,6 +3884,58 @@ Test280Callee
         SET     $42,1
         STOU    $42,$41,0
         POP     1,1               % yz=1 skips the unreachable JMP TestFail
+
+% ========================================
+% Test 281: MMIXAL expressions in operands -- strong-over-weak precedence,
+% a parenthesized group, a shift operator, a register-arithmetic operand,
+% and data-list items read back through a base register
+% ========================================
+% Every register this test touches (Expect, Result, $10, Temp) is written
+% here before it is ever read.
+% ========================================
+Test281 ADDU    TestNum,TestNum,1
+        SET     Result,2+3*4      % strong `*` binds tighter than weak `+`
+        SET     Expect,14
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281b
+        JMP     TestFail
+Test281b
+        SET     Result,(2+3)*4    % a parenthesized group overrides precedence
+        SET     Expect,20
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281c
+        JMP     TestFail
+Test281c
+        SET     Result,#FF00>>8   % shift operator
+        SET     Expect,#FF
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281d
+        JMP     TestFail
+Test281d
+        SET     Expect,42
+        SET     Expect+1,42       % Expect+1 names $2, which is Result
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281e
+        JMP     TestFail
+Test281e
+        GETA    $10,ExprData      % base register for the data-list readback
+        LDOU    Result,$10,0
+        SET     Expect,101
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281f
+        JMP     TestFail
+Test281f
+        LDOU    Result,$10,8
+        SET     Expect,49
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test281g
+        JMP     TestFail
+Test281g
+        LDOU    Result,$10,16
+        SET     Expect,256
+        CMP     Temp,Result,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
 
 % ========================================
 % Intentional coverage exceptions
@@ -3927,6 +3980,11 @@ TestFail        SETI $255,FailMsg
         OCTA    0
 LocalData
         OCTA    #DEADBEEFCAFEBABE
+
+% Data for Test 281's expression readback: each item is an MMIXAL
+% expression, evaluated at assemble time.
+        OCTA    0
+ExprData        OCTA    100+1,7*7,1<<8
 
 % Data for uncached load/store tests
         OCTA    0

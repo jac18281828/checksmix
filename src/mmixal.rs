@@ -895,6 +895,17 @@ enum ZForm {
     Imm(u8),
 }
 
+/// What an MMIXAL expression evaluates to: a pure 64-bit value, or a register
+/// number. `Register` carries the full 64-bit value unary `$` produced, or
+/// register arithmetic derived from one -- range-checking against 0..=255
+/// happens where a register value is finally consumed, not here, since an
+/// intermediate register-typed value may exceed 255 mid-expression.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExprValue {
+    Pure(u64),
+    Register(u64),
+}
+
 /// A PC-relative displacement in the instruction encoding: the forward opcode
 /// carries `field` directly, the backward opcode carries `2^bits - magnitude`.
 #[derive(Debug, Clone, Copy)]
@@ -1287,13 +1298,31 @@ impl MMixAssembler {
     /// Format Pest parse errors in a user-friendly way. Pest reports a line
     /// in the preprocessed text, which is also the line the user wrote it
     /// on (`preprocess_debug` never changes a source's line count).
-    fn format_parse_error(error: &pest::error::Error<Rule>, filename: &str) -> String {
+    /// `source` is the preprocessed text the failed parse walked: an
+    /// unterminated group reports as pest expecting more operator content
+    /// (`weak_op`/`strong_op`/`group_ws`), never a missing `)`, so naming it
+    /// takes a look at the source line rather than at pest's own positives.
+    fn format_parse_error(
+        error: &pest::error::Error<Rule>,
+        filename: &str,
+        source: &str,
+    ) -> String {
         use pest::error::LineColLocation;
 
         let (line, col) = match error.line_col {
             LineColLocation::Pos((l, c)) => (l, c),
             LineColLocation::Span((l, c), _) => (l, c),
         };
+
+        if let pest::error::ErrorVariant::ParsingError { positives, .. } = &error.variant
+            && Self::expects_more_group_content(positives)
+            && Self::line_has_unclosed_paren(source, line)
+        {
+            return format!(
+                "{}:{}:{}: syntax error: unterminated group",
+                filename, line, col
+            );
+        }
 
         // Create a user-friendly error message based on what was expected
         let expected_msg = match &error.variant {
@@ -1309,8 +1338,8 @@ impl MMixAssembler {
                             Rule::directive => "directive".to_string(),
                             Rule::directive_is => "IS directive (symbol definition)".to_string(),
                             Rule::directive_loc => "LOC directive".to_string(),
-                            Rule::register => "register (e.g., $0, $1, $255)".to_string(),
-                            Rule::expr_value => "number or expression".to_string(),
+                            Rule::expr => "number or expression".to_string(),
+                            Rule::global_id => "label or symbol name".to_string(),
                             Rule::identifier => "label or symbol name".to_string(),
                             _ => format!("{:?}", r),
                         })
@@ -1330,6 +1359,30 @@ impl MMixAssembler {
             "{}:{}:{}: syntax error: expected {}",
             filename, line, col, expected_msg
         )
+    }
+
+    /// True when pest's positives suggest it was still trying to extend an
+    /// expression -- the shape an unterminated group's failure takes.
+    fn expects_more_group_content(positives: &[Rule]) -> bool {
+        positives
+            .iter()
+            .any(|r| matches!(r, Rule::weak_op | Rule::strong_op | Rule::group_ws))
+    }
+
+    /// True when `line` (1-based, in `source`) has more `(` than `)`.
+    fn line_has_unclosed_paren(source: &str, line: usize) -> bool {
+        let Some(text) = source.lines().nth(line - 1) else {
+            return false;
+        };
+        let mut depth: i32 = 0;
+        for ch in text.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        depth > 0
     }
 
     #[instrument(skip(self))]
@@ -1376,7 +1429,7 @@ impl MMixAssembler {
             self.current_filename = unit.filename.clone();
             self.current_unit_index = index;
             let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
-                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename, &unit.preprocessed))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1408,7 +1461,7 @@ impl MMixAssembler {
             self.current_filename = unit.filename.clone();
             self.current_unit_index = index;
             let pairs = MMixalParser::parse(Rule::program, &unit.preprocessed)
-                .map_err(|e| Self::format_parse_error(&e, &unit.filename))?;
+                .map_err(|e| Self::format_parse_error(&e, &unit.filename, &unit.preprocessed))?;
             for pair in pairs {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
@@ -1465,10 +1518,13 @@ impl MMixAssembler {
                             self.current_addr += size;
                         }
                         Rule::loc_directive => {
-                            self.parse_loc_directive(directive_pair)?;
+                            // A label on a LOC line names the location the
+                            // counter held before LOC moves it, per the
+                            // MMIXAL reference's `X LOC @+500`.
                             if let Some((raw, line)) = pending_label.take() {
                                 self.define_label(&raw, self.current_addr, line)?;
                             }
+                            self.parse_loc_directive(directive_pair)?;
                         }
                         Rule::greg_directive => {
                             // GREG allocates a global register; an attached
@@ -1565,6 +1621,12 @@ impl MMixAssembler {
                             }
                         }
                         Rule::loc_directive => {
+                            // Mirrors first pass: the label names the
+                            // location before LOC moves the counter.
+                            if let Some(raw) = label_name.take() {
+                                let qualified = self.qualify_name(&raw);
+                                self.labels.insert(qualified, self.current_addr);
+                            }
                             self.parse_loc_directive(directive_pair)?;
                         }
                         Rule::greg_directive => {
@@ -1838,7 +1900,7 @@ impl MMixAssembler {
     }
 
     /// Resolve `SET`'s source operand into the instruction it selects: a
-    /// register reference copies, anything else sets the low wyde. `SET`
+    /// register value copies, a pure value sets the low wyde. `SET`
     /// is one tetra, so the immediate form carries 16 bits.
     fn lower_set_source(
         &self,
@@ -1847,40 +1909,29 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
 
-        let value_pair = if pair.as_rule() == Rule::register {
-            let inner = pair
-                .clone()
-                .into_inner()
-                .next()
-                .expect("register rule has at least one child");
-            if inner.as_rule() == Rule::register_num {
-                return Ok(MMixInstruction::SETRR(dest, self.parse_register(pair)?));
-            }
-            let qualified = self.qualify_name(inner.as_str());
-            if let Some(SymbolType::Register(r)) = self.symbols.get(&qualified).copied() {
-                return Ok(MMixInstruction::SETRR(dest, r));
-            }
-            inner
-        } else {
-            pair
-        };
-
-        // A negative literal wraps into the field it names, as the 8-bit
-        // immediates do; SETI is the sign-extended 64-bit form.
-        let negative = value_pair
-            .clone()
-            .into_inner()
-            .next()
-            .is_some_and(|inner| inner.as_rule() == Rule::signed_number_literal);
-        let value = self.parse_number(value_pair)?;
-
-        if !negative && value > 0xFFFF {
-            return Err(format!(
-                "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; use SETI for a wider constant",
-                self.current_filename, line, col, value
-            ));
+        // The negative-literal wrap predates general expressions: unary `-`
+        // on a single hex/octal/decimal literal still wraps into the low
+        // wyde rather than taking the 0..=#FFFF check below.
+        if Self::is_negated_literal(&pair) {
+            let value = self.parse_number(pair)?;
+            return Ok(MMixInstruction::SETL(dest, value as u16));
         }
-        Ok(MMixInstruction::SETL(dest, value as u16))
+
+        match self.eval_expr(pair)? {
+            ExprValue::Register(r) => {
+                let reg = self.require_register_in_range(r, line, col)?;
+                Ok(MMixInstruction::SETRR(dest, reg))
+            }
+            ExprValue::Pure(value) => {
+                if value > 0xFFFF {
+                    return Err(format!(
+                        "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; use SETI for a wider constant",
+                        self.current_filename, line, col, value
+                    ));
+                }
+                Ok(MMixInstruction::SETL(dest, value as u16))
+            }
+        }
     }
 
     fn parse_inst_seti(
@@ -3515,17 +3566,13 @@ impl MMixAssembler {
         let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
+        let (vline, vcol) = value_pair.line_col();
 
-        let symbol_type = match value_pair.as_rule() {
-            Rule::register => {
-                let reg = self.parse_register(value_pair)?;
-                SymbolType::Register(reg)
+        let symbol_type = match self.eval_expr(value_pair)? {
+            ExprValue::Register(r) => {
+                SymbolType::Register(self.require_register_in_range(r, vline, vcol)?)
             }
-            Rule::expr_value => {
-                let value = self.parse_number(value_pair)?;
-                SymbolType::Constant(value)
-            }
-            _ => return Err("IS directive requires register or expr_value".to_string()),
+            ExprValue::Pure(value) => SymbolType::Constant(value),
         };
 
         if checking {
@@ -3545,60 +3592,21 @@ impl MMixAssembler {
     }
 
     /// Resolve the Z operand of a base mnemonic (auto-immediate path) into
-    /// either a register reference or an 8-bit immediate. The grammar allows Z
-    /// to be a `register` (which itself may be `$N` or a bare symbol that
-    /// could be a register alias *or* a constant) or an `expr_value` (literal
-    /// or symbol). Bare symbols are resolved against the symbol and label
-    /// tables; numeric values are range-checked against `0..=255`.
+    /// either a register reference or an 8-bit immediate: a register-valued
+    /// expression selects the register form, a pure value is range-checked
+    /// against `0..=255` for the immediate form.
     fn lower_z_operand(
         &self,
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<ZForm, String> {
         let (line, col) = pair.line_col();
-        match pair.as_rule() {
-            Rule::register => {
-                let inner = pair
-                    .clone()
-                    .into_inner()
-                    .next()
-                    .expect("register rule has at least one child");
-                match inner.as_rule() {
-                    Rule::register_num => {
-                        let n = self.parse_register(pair)?;
-                        Ok(ZForm::Reg(n))
-                    }
-                    Rule::symbol => {
-                        let raw = inner.as_str();
-                        let qualified = self.qualify_name(raw);
-                        if let Some(&sym) = self.symbols.get(&qualified) {
-                            match sym {
-                                SymbolType::Register(r) => Ok(ZForm::Reg(r)),
-                                SymbolType::Constant(v) => self.imm_in_range(v, mnem, line, col),
-                            }
-                        } else if let Some(&addr) = self.labels.get(&qualified) {
-                            self.imm_in_range(addr, mnem, line, col)
-                        } else {
-                            Err(format!(
-                                "{}:{}:{}: Undefined symbol '{}' in third operand of {}",
-                                self.current_filename, line, col, qualified, mnem
-                            ))
-                        }
-                    }
-                    other => Err(format!(
-                        "{}:{}:{}: Unexpected register inner rule {:?} for {}",
-                        self.current_filename, line, col, other, mnem
-                    )),
-                }
+        match self.eval_expr(pair)? {
+            ExprValue::Register(r) => {
+                let reg = self.require_register_in_range(r, line, col)?;
+                Ok(ZForm::Reg(reg))
             }
-            Rule::expr_value => {
-                let v = self.parse_number(pair)?;
-                self.imm_in_range(v, mnem, line, col)
-            }
-            other => Err(format!(
-                "{}:{}:{}: Unexpected Z operand rule {:?} for {}",
-                self.current_filename, line, col, other, mnem
-            )),
+            ExprValue::Pure(v) => self.imm_in_range(v, mnem, line, col),
         }
     }
 
@@ -3619,73 +3627,103 @@ impl MMixAssembler {
         self.imm_byte(v, mnem, line, col).map(ZForm::Imm)
     }
 
-    fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
-        let (line, col) = pair.line_col();
-
-        // If the pair is a `register` rule, it might have an inner rule (register_num or symbol)
-        let text = if pair.as_rule() == Rule::register {
-            // Check if it has children (symbol case)
-            if let Some(inner) = pair.clone().into_inner().next() {
-                inner.as_str()
-            } else {
-                pair.as_str()
+    /// Evaluate `pair` (an `expr`, or one of the rules it nests) under the
+    /// register/pure-value rules in `MMIX.md`'s Expressions section: `+ - *`
+    /// wrap mod 2^64, `/` `//` `%` `<<` `>>` follow the reference's
+    /// definitions, `@` is the current location, and a symbol carries
+    /// whichever kind its `SymbolType` records. Register arithmetic combines
+    /// a register with a pure value into a register (register-pure
+    /// subtraction included); register-register subtraction gives a pure
+    /// value; every other operator applied to a register is an error, as is
+    /// every non-`+` unary operator.
+    fn eval_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
+        match pair.as_rule() {
+            // Both wrap exactly one `expr`; some call sites hand these
+            // container pairs straight to the evaluator unwrapped.
+            Rule::operand_imm | Rule::operand_reg => self.eval_expr(
+                pair.into_inner()
+                    .next()
+                    .expect("operand wraps exactly one expr"),
+            ),
+            Rule::expr | Rule::group_expr => {
+                let mut parts = pair.into_inner();
+                let mut acc = self.eval_expr(parts.next().expect("expr has a term"))?;
+                while let Some(op) = parts.next() {
+                    let (line, col) = op.line_col();
+                    let rhs = self.eval_expr(parts.next().expect("weak operator needs a term"))?;
+                    acc = self.apply_weak(op.as_str(), acc, rhs, line, col)?;
+                }
+                Ok(acc)
             }
-        } else {
-            pair.as_str()
-        };
-
-        // Check if it's a symbolic name from IS directive
-        if !text.starts_with('$') {
-            let qualified = self.qualify_name(text);
-            if let Some(&symbol_type) = self.symbols.get(&qualified) {
-                match symbol_type {
-                    SymbolType::Register(reg) => return Ok(reg),
-                    SymbolType::Constant(value) => {
-                        return Err(format!(
-                            "{}:{}:{}: Symbol '{}' is a numeric constant ({}), cannot use as register",
-                            self.current_filename, line, col, qualified, value
-                        ));
-                    }
+            Rule::term | Rule::group_term => {
+                let mut parts = pair.into_inner();
+                let mut acc = self.eval_expr(parts.next().expect("term has a primary"))?;
+                while let Some(op) = parts.next() {
+                    let (line, col) = op.line_col();
+                    let rhs =
+                        self.eval_expr(parts.next().expect("strong operator needs a primary"))?;
+                    acc = self.apply_strong(op.as_str(), acc, rhs, line, col)?;
+                }
+                Ok(acc)
+            }
+            Rule::primary | Rule::group_primary => {
+                let (line, col) = pair.line_col();
+                let mut parts = pair.into_inner();
+                let first = parts.next().expect("primary has a child");
+                if first.as_rule() == Rule::unary_op {
+                    let operand =
+                        self.eval_expr(parts.next().expect("unary operator needs an operand"))?;
+                    self.apply_unary(first.as_str(), operand, line, col)
+                } else {
+                    self.eval_expr(first)
                 }
             }
-            return Err(format!(
-                "{}:{}:{}: Undefined symbol '{}' (expected register like $0 or register alias)",
-                self.current_filename, line, col, qualified
-            ));
+            Rule::group => self.eval_expr(
+                pair.into_inner()
+                    .next()
+                    .expect("group has an inner expression"),
+            ),
+            Rule::at_symbol => Ok(ExprValue::Pure(self.current_addr)),
+            Rule::constant => self.eval_literal(
+                pair.into_inner()
+                    .next()
+                    .expect("constant has exactly one literal"),
+            ),
+            Rule::global_id => {
+                let (line, col) = pair.line_col();
+                let text = pair.as_str();
+                let qualified = self.qualify_name(text);
+                if let Some(&symbol_type) = self.symbols.get(&qualified) {
+                    Ok(match symbol_type {
+                        SymbolType::Constant(value) => ExprValue::Pure(value),
+                        SymbolType::Register(reg) => ExprValue::Register(reg as u64),
+                    })
+                } else if let Some(&label_addr) = self.labels.get(&qualified) {
+                    Ok(ExprValue::Pure(label_addr))
+                } else {
+                    Err(format!(
+                        "{}:{}:{}: Undefined symbol: {}",
+                        self.current_filename, line, col, qualified
+                    ))
+                }
+            }
+            other => {
+                let (line, col) = pair.line_col();
+                Err(format!(
+                    "Line {}:{}: Expected expression, got: {:?}",
+                    line, col, other
+                ))
+            }
         }
-
-        text[1..]
-            .parse::<u8>()
-            .map_err(|e| format!("Line {}:{}: Invalid register number: {}", line, col, e))
     }
 
-    fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
-        let rule = pair.as_rule();
+    /// Evaluate a leaf numeric literal: hex, octal, decimal or char.
+    fn eval_literal(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
         let (line, col) = pair.line_col();
-
-        // Handle container rules that have children
-        if rule == Rule::expr_value || rule == Rule::number_literal || rule == Rule::operand_imm {
-            let inner = pair.into_inner().next().unwrap();
-            return self.parse_number(inner);
-        }
-
-        // For atomic rules, use the text directly
         let text = pair.as_str();
 
-        match rule {
-            Rule::at_symbol => {
-                // @ represents the current location
-                Ok(self.current_addr)
-            }
-            Rule::signed_number_literal => {
-                // Unary minus applied to a numeric literal
-                let mut inner = pair.into_inner();
-                let unsigned = self.parse_number(inner.next().unwrap())?;
-                let signed = -(unsigned as i128);
-                Ok(signed as u64)
-            }
+        let value = match pair.as_rule() {
             Rule::char_literal => {
-                // Single-byte character literal with minimal escapes
                 let inner = &text[1..text.len() - 1];
                 let ch = if let Some(rest) = inner.strip_prefix('\\') {
                     match rest {
@@ -3718,10 +3756,9 @@ impl MMixAssembler {
                         line, col, ch
                     ));
                 }
-                Ok(ch as u8 as u64)
+                ch as u8 as u64
             }
             Rule::hex_literal => {
-                // Support both # and 0x/0X prefixes
                 let hex_str = if let Some(stripped) = text.strip_prefix('#') {
                     stripped
                 } else if let Some(stripped) =
@@ -3732,35 +3769,227 @@ impl MMixAssembler {
                     text
                 };
                 u64::from_str_radix(hex_str, 16)
-                    .map_err(|e| format!("Line {}:{}: Invalid hex number: {}", line, col, e))
+                    .map_err(|e| format!("Line {}:{}: Invalid hex number: {}", line, col, e))?
             }
             Rule::oct_literal => u64::from_str_radix(&text[1..], 8)
-                .map_err(|e| format!("Line {}:{}: Invalid octal number: {}", line, col, e)),
+                .map_err(|e| format!("Line {}:{}: Invalid octal number: {}", line, col, e))?,
             Rule::dec_literal => text
                 .parse::<u64>()
-                .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e)),
-            Rule::symbol | Rule::identifier | Rule::global_id => {
-                let qualified = self.qualify_name(text);
-                if let Some(&symbol_type) = self.symbols.get(&qualified) {
-                    match symbol_type {
-                        SymbolType::Constant(value) => Ok(value),
-                        SymbolType::Register(reg) => Err(format!(
-                            "{}:{}:{}: Symbol '{}' is a register alias (${}), cannot use as immediate value",
-                            self.current_filename, line, col, qualified, reg
-                        )),
-                    }
-                } else if let Some(&label_addr) = self.labels.get(&qualified) {
-                    Ok(label_addr)
+                .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e))?,
+            other => {
+                return Err(format!(
+                    "Line {}:{}: Expected a literal, got: {:?}",
+                    line, col, other
+                ));
+            }
+        };
+        Ok(ExprValue::Pure(value))
+    }
+
+    /// Unary operators: `+` is the identity, including on a register; `-`
+    /// and `~` apply only to a pure value; `$` casts a pure value to a
+    /// register; `&` (a symbol's serial number) is always rejected, since
+    /// checksmix's object file carries no symbol table to index.
+    fn apply_unary(
+        &self,
+        op: &str,
+        value: ExprValue,
+        line: usize,
+        col: usize,
+    ) -> Result<ExprValue, String> {
+        if op == "&" {
+            return Err(format!(
+                "{}:{}:{}: unary & (a symbol's serial number) is unsupported",
+                self.current_filename, line, col
+            ));
+        }
+        match (op, value) {
+            ("+", v) => Ok(v),
+            ("-", ExprValue::Pure(v)) => Ok(ExprValue::Pure(0u64.wrapping_sub(v))),
+            ("~", ExprValue::Pure(v)) => Ok(ExprValue::Pure(!v)),
+            ("$", ExprValue::Pure(v)) => Ok(ExprValue::Register(v)),
+            (op, ExprValue::Register(_)) => Err(format!(
+                "{}:{}:{}: unary {} cannot apply to a register",
+                self.current_filename, line, col, op
+            )),
+            _ => unreachable!("grammar admits only + - ~ $ & as unary_op"),
+        }
+    }
+
+    /// Weak (lowest-precedence) binary operators: `+` `-` `|` `^`.
+    /// Register arithmetic: register+pure, pure+register and register-pure
+    /// give a register; register-register gives a pure value; `|` and `^`
+    /// never take a register operand.
+    fn apply_weak(
+        &self,
+        op: &str,
+        lhs: ExprValue,
+        rhs: ExprValue,
+        line: usize,
+        col: usize,
+    ) -> Result<ExprValue, String> {
+        use ExprValue::{Pure, Register};
+        match (op, lhs, rhs) {
+            ("+", Pure(a), Pure(b)) => Ok(Pure(a.wrapping_add(b))),
+            ("-", Pure(a), Pure(b)) => Ok(Pure(a.wrapping_sub(b))),
+            ("|", Pure(a), Pure(b)) => Ok(Pure(a | b)),
+            ("^", Pure(a), Pure(b)) => Ok(Pure(a ^ b)),
+            ("+", Register(a), Pure(b)) | ("+", Pure(b), Register(a)) => {
+                Ok(Register(a.wrapping_add(b)))
+            }
+            ("-", Register(a), Pure(b)) => Ok(Register(a.wrapping_sub(b))),
+            ("-", Register(a), Register(b)) => Ok(Pure(a.wrapping_sub(b))),
+            _ => Err(format!(
+                "{}:{}:{}: {} cannot apply to a register operand",
+                self.current_filename, line, col, op
+            )),
+        }
+    }
+
+    /// Strong (highest-precedence) binary operators: `*` `/` `//` `%` `<<`
+    /// `>>` `&`. None takes a register operand. `x/y` is illegal at `y=0`;
+    /// `x//y` is illegal at `x>=y` (which subsumes `y=0`, since every `x` is
+    /// `>=0`); `x%y` shares `x/y`'s zero-divisor rule, computing the
+    /// remainder of the same division. A shift of 64 or more gives `0`.
+    fn apply_strong(
+        &self,
+        op: &str,
+        lhs: ExprValue,
+        rhs: ExprValue,
+        line: usize,
+        col: usize,
+    ) -> Result<ExprValue, String> {
+        let (a, b) = match (lhs, rhs) {
+            (ExprValue::Pure(a), ExprValue::Pure(b)) => (a, b),
+            _ => {
+                return Err(format!(
+                    "{}:{}:{}: {} cannot apply to a register operand",
+                    self.current_filename, line, col, op
+                ));
+            }
+        };
+        let value = match op {
+            "*" => a.wrapping_mul(b),
+            "/" => {
+                if b == 0 {
+                    return Err(format!(
+                        "{}:{}:{}: division by zero in {}/{}",
+                        self.current_filename, line, col, a, b
+                    ));
+                }
+                a / b
+            }
+            "%" => {
+                if b == 0 {
+                    return Err(format!(
+                        "{}:{}:{}: division by zero in {}%{}",
+                        self.current_filename, line, col, a, b
+                    ));
+                }
+                a % b
+            }
+            "//" => {
+                if a >= b {
+                    return Err(format!(
+                        "{}:{}:{}: illegal fraction {}//{} (the dividend must be less than the divisor)",
+                        self.current_filename, line, col, a, b
+                    ));
+                }
+                (((a as u128) << 64) / (b as u128)) as u64
+            }
+            "<<" => {
+                if b >= 64 {
+                    0
                 } else {
-                    Err(format!(
-                        "{}:{}:{}: Undefined symbol: {}",
-                        self.current_filename, line, col, qualified
-                    ))
+                    a << b
                 }
             }
-            _ => Err(format!(
-                "Line {}:{}: Expected number, got: {:?}",
-                line, col, rule
+            ">>" => {
+                if b >= 64 {
+                    0
+                } else {
+                    a >> b
+                }
+            }
+            "&" => a & b,
+            _ => unreachable!("grammar admits only * / // % << >> & as strong_op"),
+        };
+        Ok(ExprValue::Pure(value))
+    }
+
+    /// True when `pair` (an `expr`) is exactly a unary `-` applied to one
+    /// hexadecimal, octal or decimal literal -- the shape
+    /// `signed_number_literal` matched before the grammar gained general
+    /// expressions. `SET`'s low-wyde wrap survives for this shape alone.
+    fn is_negated_literal(pair: &pest::iterators::Pair<Rule>) -> bool {
+        let mut terms = pair.clone().into_inner();
+        let Some(term) = terms.next() else {
+            return false;
+        };
+        if terms.next().is_some() {
+            return false; // a weak operator followed
+        }
+        let mut primaries = term.into_inner();
+        let Some(primary) = primaries.next() else {
+            return false;
+        };
+        if primaries.next().is_some() {
+            return false; // a strong operator followed
+        }
+        let mut children = primary.into_inner();
+        let Some(first) = children.next() else {
+            return false;
+        };
+        if first.as_rule() != Rule::unary_op || first.as_str() != "-" {
+            return false;
+        }
+        let Some(operand) = children.next() else {
+            return false;
+        };
+        let Some(operand_first) = operand.into_inner().next() else {
+            return false;
+        };
+        if operand_first.as_rule() != Rule::constant {
+            return false;
+        }
+        matches!(
+            operand_first.into_inner().next().map(|p| p.as_rule()),
+            Some(Rule::hex_literal | Rule::oct_literal | Rule::dec_literal)
+        )
+    }
+
+    /// Range-check a register value carried inside an expression (up to
+    /// 64 bits, per unary `$`) down to the 0..=255 a register field holds.
+    fn require_register_in_range(&self, r: u64, line: usize, col: usize) -> Result<u8, String> {
+        u8::try_from(r).map_err(|_| {
+            format!(
+                "{}:{}:{}: register ${} is out of range 0..255",
+                self.current_filename, line, col, r
+            )
+        })
+    }
+
+    /// Evaluate `pair` (an `expr`) and demand a pure value.
+    fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
+        let (line, col) = pair.line_col();
+        match self.eval_expr(pair)? {
+            ExprValue::Pure(v) => Ok(v),
+            ExprValue::Register(r) => Err(format!(
+                "{}:{}:{}: register ${} cannot be used where a pure value is required",
+                self.current_filename, line, col, r
+            )),
+        }
+    }
+
+    /// Evaluate `pair` (an `expr`) and demand a register, range-checked
+    /// 0..=255.
+    fn parse_register(&self, pair: pest::iterators::Pair<Rule>) -> Result<u8, String> {
+        let (line, col) = pair.line_col();
+        match self.eval_expr(pair)? {
+            ExprValue::Register(r) => self.require_register_in_range(r, line, col),
+            ExprValue::Pure(v) => Err(format!(
+                "{}:{}:{}: pure value {} cannot be used where a register is required",
+                self.current_filename, line, col, v
             )),
         }
     }
@@ -5803,19 +6032,17 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_flot_rejects_register_in_y_slot() {
-        // Y in FLOT's grammar is `expr_value`-only, not `register`; a
-        // register-Y spelling must now fail to parse, not silently
-        // reinterpret $2's register number as a rounding-mode value.
-        // `is_err()` alone survives a re-widened grammar that admits the
-        // register but still leaves a trailing token elsewhere, so pin the
-        // exact rejection: the 3-operand form
-        // fails to match at Y (a register isn't `expr_value`), and the
-        // 2-operand form then consumes only `$1,$2`, stranding `,$3`.
+        // Y is a rounding-mode value, never a register: every operand is an
+        // `expr` now, so `$2` parses fine there, and the evaluator is what
+        // rejects it -- a register where FLOT's Y demands a pure value.
         let mut asm = MMixAssembler::new("FLOT $1,$2,$3", "<test>");
         let err = asm
             .parse()
-            .expect_err("a register in FLOT's Y slot must no longer parse");
-        assert_eq!(err, "<test>:1:11: syntax error: expected EOI");
+            .expect_err("a register in FLOT's Y slot must still be rejected");
+        assert_eq!(
+            err,
+            "<test>:1:9: register $2 cannot be used where a pure value is required"
+        );
     }
 
     #[test]
@@ -6727,9 +6954,9 @@ Main\tdebug\t\"hi\"
         let mut asm = MMixAssembler::new(source, "<test>");
         let err = asm
             .parse()
-            .expect_err("FLOT $1,$2,$3 must still fail to parse");
+            .expect_err("FLOT $1,$2,$3 must still be rejected");
         assert_eq!(
-            err, "<test>:4:12: syntax error: expected EOI",
+            err, "<test>:4:10: register $2 cannot be used where a pure value is required",
             "must report original line 4, not the preprocessed line the \
              debug expansion's landing pad shifts it to"
         );
@@ -7038,5 +7265,433 @@ Main    SETI    $1,7
         assert_eq!(quoted.len(), 1);
         assert_eq!(lower_with_comment[0].1, quoted[0].1);
         assert!(quoted[0].1.contains("OCTA 1"));
+    }
+
+    // ---- Expressions (C9.1) -------------------------------------------
+
+    fn assemble_one(source: &str) -> MMixInstruction {
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
+        asm.instructions[0].1.clone()
+    }
+
+    fn assemble_err(source: &str) -> String {
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse()
+            .expect_err(&format!("{source:?} must be rejected"))
+    }
+
+    #[test]
+    fn test_expr_left_associative_weak_chain() {
+        // a-b-c is (a-b)-c, not a-(b-c).
+        assert_eq!(assemble_one("OCTA 10-3-2"), MMixInstruction::OCTA(5));
+    }
+
+    #[test]
+    fn test_expr_strong_binds_tighter_than_weak() {
+        assert_eq!(assemble_one("OCTA 2+3*4"), MMixInstruction::OCTA(14));
+    }
+
+    #[test]
+    fn test_expr_reference_shift_and_add_chain() {
+        // The MMIXAL reference's o<<24+x<<16+y<<8+z, left-associated:
+        // (o<<24)+(x<<16)+(y<<8)+z.
+        let mut asm = MMixAssembler::new(
+            "o IS 1\nx IS 2\ny IS 3\nz IS 4\nOCTA o<<24+x<<16+y<<8+z",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions[0].1,
+            MMixInstruction::OCTA((1 << 24) + (2 << 16) + (3 << 8) + 4)
+        );
+    }
+
+    #[test]
+    fn test_expr_wraps_subtraction_below_zero() {
+        assert_eq!(assemble_one("OCTA 0-1"), MMixInstruction::OCTA(u64::MAX));
+    }
+
+    #[test]
+    fn test_expr_wraps_addition_above_max() {
+        assert_eq!(
+            assemble_one("OCTA #FFFFFFFFFFFFFFFF+1"),
+            MMixInstruction::OCTA(0)
+        );
+    }
+
+    #[test]
+    fn test_expr_floor_fraction_operator() {
+        // 1//2 is floor(2^64 * 1/2) = 2^63.
+        assert_eq!(assemble_one("OCTA 1//2"), MMixInstruction::OCTA(1u64 << 63));
+    }
+
+    #[test]
+    fn test_expr_shift_by_64_or_more_is_zero() {
+        assert_eq!(assemble_one("OCTA 1<<64"), MMixInstruction::OCTA(0));
+        assert_eq!(assemble_one("OCTA 1>>64"), MMixInstruction::OCTA(0));
+    }
+
+    #[test]
+    fn test_expr_register_plus_pure_selects_register_form() {
+        // x IS $1, y IS $2: ADD x,y,y+1 is ADD $1,$2,$3 (register form).
+        let mut asm = MMixAssembler::new("x IS $1\ny IS $2\nADD x,y,y+1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADD(1, 2, 3));
+    }
+
+    #[test]
+    fn test_expr_register_minus_register_selects_immediate_form() {
+        // ADD $1,$2,y-x is the immediate form, since register-register
+        // subtraction is a pure value.
+        let mut asm = MMixAssembler::new("x IS $1\ny IS $2\nADD $1,$2,y-x", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 1));
+    }
+
+    #[test]
+    fn test_expr_is_records_a_register_from_register_arithmetic() {
+        // x IS $1+1 records a register, not a pure constant.
+        let mut asm = MMixAssembler::new("x IS $1+1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.symbols.get("x"), Some(&SymbolType::Register(2)));
+    }
+
+    #[test]
+    fn test_expr_set_register_arithmetic_copies() {
+        // SET $1,$2+1 copies register $3 (the register NAMED $2+1),
+        // never an arithmetic add on $2's runtime value.
+        assert_eq!(assemble_one("SET $1,$2+1"), MMixInstruction::SETRR(1, 3));
+    }
+
+    #[test]
+    fn test_expr_register_plus_register_is_error() {
+        assemble_err("x IS $1\ny IS $2\nADD $1,$2,x+y");
+    }
+
+    #[test]
+    fn test_expr_pure_minus_register_is_error() {
+        assemble_err("x IS $1\nOCTA 3-x");
+    }
+
+    #[test]
+    fn test_expr_strong_operator_on_register_is_error() {
+        assemble_err("x IS $1\nOCTA x*2");
+    }
+
+    #[test]
+    fn test_expr_unary_minus_on_register_is_error() {
+        assemble_err("x IS $1\nSET $2,-x");
+    }
+
+    #[test]
+    fn test_expr_unary_tilde_on_register_is_error() {
+        assemble_err("x IS $1\nSET $2,~x");
+    }
+
+    #[test]
+    fn test_expr_unary_dollar_on_register_is_error() {
+        assemble_err("x IS $1\nSET $2,$x");
+    }
+
+    #[test]
+    fn test_expr_register_in_pure_site_is_error() {
+        assemble_err("x IS $1\nLOC x");
+    }
+
+    #[test]
+    fn test_expr_pure_value_in_register_site_is_error() {
+        assemble_err("ADD 3,$1,$2");
+    }
+
+    #[test]
+    fn test_expr_final_register_above_255_is_error() {
+        assemble_err("SET $1,$260");
+    }
+
+    #[test]
+    fn test_expr_division_by_zero_is_error() {
+        assemble_err("OCTA 5/0");
+    }
+
+    #[test]
+    fn test_expr_percent_by_zero_is_error() {
+        // `%` shares `/`'s zero-divisor check: it computes the remainder of
+        // the same division, which is illegal at y=0.
+        assemble_err("OCTA 5%0");
+    }
+
+    #[test]
+    fn test_expr_illegal_fraction_is_error() {
+        assemble_err("OCTA 2//1");
+    }
+
+    #[test]
+    fn test_expr_unary_ampersand_is_unsupported() {
+        assemble_err("Foo IS 1\nOCTA &Foo");
+    }
+
+    #[test]
+    fn test_expr_dangling_operator_is_syntax_error() {
+        assemble_err("SETL $1,5+");
+    }
+
+    #[test]
+    fn test_percent_inside_bare_expression_is_remainder() {
+        assert_eq!(assemble_one("SET $1,5%3"), MMixInstruction::SETL(1, 2));
+    }
+
+    #[test]
+    fn test_percent_after_space_opens_a_comment() {
+        assert_eq!(assemble_one("SET $1,5 % 3"), MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_percent_before_space_still_opens_a_comment() {
+        assert_eq!(assemble_one("SET $1,5% 3"), MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_percent_inside_a_group_is_remainder() {
+        assert_eq!(assemble_one("SET $1,(5 % 3)"), MMixInstruction::SETL(1, 2));
+    }
+
+    #[test]
+    fn test_percent_after_a_closed_group_opens_a_comment() {
+        // `sum` is undefined; if this parsed as an operator the undefined
+        // symbol would fail, so success proves the comment.
+        assert_eq!(
+            assemble_one("SET $1,(2 + 3) % sum"),
+            MMixInstruction::SETL(1, 5)
+        );
+    }
+
+    #[test]
+    fn test_semicolon_still_opens_a_comment_after_an_expression() {
+        assert_eq!(assemble_one("SET $1,5;text"), MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_whitespace_after_a_weak_operator_is_a_syntax_error() {
+        assemble_err("SETL $1,2 + 3");
+    }
+
+    #[test]
+    fn test_whitespace_after_unary_minus_is_a_syntax_error() {
+        assemble_err("SET $1,- 5");
+    }
+
+    #[test]
+    fn test_bare_expression_closed_up_assembles() {
+        assert_eq!(assemble_one("SETL $1,2+3"), MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_parenthesized_group_may_hold_whitespace() {
+        assert_eq!(assemble_one("SETL $1,(2 + 3)"), MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_nested_groups_evaluate_innermost_first() {
+        assert_eq!(
+            assemble_one("SETL $1,((2 + 3) * 4)"),
+            MMixInstruction::SETL(1, 20)
+        );
+    }
+
+    #[test]
+    fn test_group_and_bare_operators_left_associate() {
+        // Strong binds tighter than weak, and both are left-associative:
+        // 2+(3*4)+5 is (2+(3*4))+5 = 2+12+5 = 19.
+        assert_eq!(
+            assemble_one("SETL $1,2+(3 * 4)+5"),
+            MMixInstruction::SETL(1, 19)
+        );
+    }
+
+    #[test]
+    fn test_unclosed_group_reports_unterminated_group() {
+        let err = assemble_err("SETL $1,(2 + 3");
+        assert!(
+            err.contains("unterminated group"),
+            "expected an unterminated-group diagnostic, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_comma_inside_an_open_group_is_an_error() {
+        assemble_err("SETL $1,(1 , 2)");
+    }
+
+    #[test]
+    fn test_newline_inside_an_open_group_is_an_error() {
+        assemble_err("SETL $1,(1\n2)");
+    }
+
+    #[test]
+    fn test_set_negative_literal_wrap_covers_octal_and_hex() {
+        assert_eq!(assemble_one("SET $1,-1"), MMixInstruction::SETL(1, 0xFFFF));
+        assert_eq!(assemble_one("SET $1,-5"), MMixInstruction::SETL(1, 0xFFFB));
+        assert_eq!(
+            assemble_one("SET $1,-#10"),
+            MMixInstruction::SETL(1, 0xFFF0)
+        );
+    }
+
+    #[test]
+    fn test_at_in_an_instruction_is_the_aligned_address_after_byte() {
+        let mut asm = MMixAssembler::new("BYTE 1\nSET $1,@", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(1, 4));
+    }
+
+    #[test]
+    fn test_at_at_in_a_data_directive_both_hold_the_aligned_address() {
+        let mut asm = MMixAssembler::new("BYTE 1,1,1\nOCTA @,@", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[3].1, MMixInstruction::OCTA(8));
+        assert_eq!(asm.instructions[4].1, MMixInstruction::OCTA(8));
+    }
+
+    #[test]
+    fn test_forward_reference_with_operator_resolves() {
+        let mut asm = MMixAssembler::new(
+            "JMP Later+4\nOCTA Later-8\nLater IS 100\nJMP Later",
+            "<test>",
+        );
+        asm.parse()
+            .unwrap_or_else(|e| panic!("forward reference with operator must resolve: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::OCTA(92));
+    }
+
+    #[test]
+    fn test_loc_forward_reference_fails_like_today() {
+        assemble_err("LOC Later+4\nLater IS 100");
+    }
+
+    #[test]
+    fn test_is_forward_reference_fails_like_today() {
+        assemble_err("Foo IS Later+1\nLater IS 100");
+    }
+
+    #[test]
+    fn test_greg_forward_reference_fails_like_today() {
+        assemble_err("GREG Later+1\nLater IS 100");
+    }
+
+    #[test]
+    fn test_loc_label_takes_the_location_before_loc() {
+        // After LOC #100 and one instruction, the counter is #104; `Gap`
+        // must name #104, not the #300 the LOC on its own line jumps to.
+        let mut asm = MMixAssembler::new("LOC #100\nMain TRAP 0,Halt,0\nGap LOC #300", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Gap"), Some(&0x104));
+    }
+
+    #[test]
+    fn test_loc_label_order_holds_within_pass_one() {
+        // GREG's init value is computed once, in pass 1, and never
+        // recomputed in pass 2 (which only checks the symbol is present),
+        // so this is the one place a pass-1-only ordering bug survives to
+        // the final state: `GREG Gap` must read `Gap`'s pre-move address.
+        let mut asm = MMixAssembler::new("LOC #100\nGap LOC #300\nGREG Gap", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.greg_inits.last().map(|(_, v)| *v), Some(0x100));
+    }
+
+    #[test]
+    fn test_loc_at_plus_offset_names_the_prior_location() {
+        // X LOC @+500 gives X the location before LOC, and leaves the
+        // counter at X+500.
+        let mut asm = MMixAssembler::new("LOC #100\nX LOC @+500\nBYTE 1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("X"), Some(&0x100));
+        assert_eq!(asm.instructions[0].0, 0x100 + 500);
+    }
+
+    #[test]
+    fn test_wyde_data_list_mixes_expression_items_and_a_string() {
+        // The pass-agreement pattern of test_byte_escape_pass1_pass2_agree:
+        // a forward OCTA reads pass 1's size for the list, so pass 2 must
+        // compute the same expression values or Next's address disagrees.
+        let mut asm = MMixAssembler::new(
+            "Base IS 2\nOCTA Next\nList WYDE Base+8,\"ab\",Base*10\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("List"), Some(&8));
+        let list: Vec<_> = asm.instructions[1..5]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (8, MMixInstruction::WYDE(10)),
+                (10, MMixInstruction::WYDE(b'a' as u16)),
+                (12, MMixInstruction::WYDE(b'b' as u16)),
+                (14, MMixInstruction::WYDE(20)),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&16));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(16));
+    }
+
+    #[test]
+    fn test_tetra_data_list_mixes_expression_items_and_a_string() {
+        let mut asm = MMixAssembler::new(
+            "Base IS 2\nOCTA Next\nList TETRA Base+8,\"ab\",Base*10\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        let list: Vec<_> = asm.instructions[1..5]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (8, MMixInstruction::TETRA(10)),
+                (12, MMixInstruction::TETRA(b'a' as u32)),
+                (16, MMixInstruction::TETRA(b'b' as u32)),
+                (20, MMixInstruction::TETRA(20)),
+            ]
+        );
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(24));
+    }
+
+    #[test]
+    fn test_octa_data_list_mixes_expression_items_and_a_string() {
+        let mut asm = MMixAssembler::new(
+            "Base IS 2\nOCTA Next\nList OCTA Base+8,\"ab\",Base*10\nNext BYTE 99",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        let list: Vec<_> = asm.instructions[1..5]
+            .iter()
+            .map(|(addr, inst)| (*addr, inst.clone()))
+            .collect();
+        assert_eq!(
+            list,
+            vec![
+                (8, MMixInstruction::OCTA(10)),
+                (16, MMixInstruction::OCTA(b'a' as u64)),
+                (24, MMixInstruction::OCTA(b'b' as u64)),
+                (32, MMixInstruction::OCTA(20)),
+            ]
+        );
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(40));
+    }
+
+    #[test]
+    fn test_expr_weak_bitwise_or_and_xor() {
+        assert_eq!(assemble_one("OCTA 0xF0|0x0F"), MMixInstruction::OCTA(0xFF));
+        assert_eq!(assemble_one("OCTA 0xFF^0x0F"), MMixInstruction::OCTA(0xF0));
+    }
+
+    #[test]
+    fn test_expr_strong_bitwise_and() {
+        assert_eq!(assemble_one("OCTA 0xFF&0x0F"), MMixInstruction::OCTA(0x0F));
     }
 }
