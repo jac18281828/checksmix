@@ -8355,4 +8355,379 @@ Main    SETI    $1,7
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
         assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(b'('));
     }
+
+    // ---- Comment and ignored-trailing-text map (C9.2) ------------------
+    //
+    // Two independent rules produce this map: `blank_whole_line_comments`
+    // decides, from column 1 alone, whether a line is a label candidate at
+    // all (rule 1); `check_remainder`, walking a statement's trailing text,
+    // decides whether that text ends the statement's meaning or is silently
+    // dropped (rule 2, shared with the grammar's `;` separator). A cell
+    // below is named for the rule it isolates.
+
+    // -- Column 1: every marker discards the line (rule 1) ---------------
+    //
+    // Each payload abuts its operand (`2abc`), which is a syntax error if
+    // parsed at all, so a passing assertion proves the line was discarded,
+    // never merely tolerated.
+
+    #[test]
+    fn test_percent_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("%SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_hash_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("#SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_bang_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("!SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_dot_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new(".SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_at_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("@SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_semicolon_in_column_one_discards_the_line_as_a_label_rule_not_a_comment_rule() {
+        // `;` opens no comment syntax of its own; it is discarded here only
+        // because it is not a letter, digit, `:` or `_` -- the same reason
+        // `#` and `*` are discarded on this row.
+        let mut asm = MMixAssembler::new(";SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_asterisk_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("*SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_slash_in_column_one_discards_the_line() {
+        let mut asm = MMixAssembler::new("/SETL $1,2abc", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_a_letter_colon_or_underscore_in_column_one_still_opens_a_label() {
+        // The pairing that makes column 1 a label rule rather than a
+        // comment rule: the set that opens a statement here is exactly the
+        // set the blanking predicate keeps.
+        let mut asm = MMixAssembler::new("Main HALT\n:Foo HALT\n_Bar HALT", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.labels.get("Main"), Some(&0));
+        assert_eq!(asm.labels.get(":Foo"), Some(&4));
+        assert_eq!(asm.labels.get("_Bar"), Some(&8));
+    }
+
+    // -- Indented alone: a marker line between two real instructions -----
+    //
+    // Indentation puts the line past rule 1's reach; what happens to it is
+    // rule 2 alone. `#`, `!`, `.` and `@` carry a `; SETL $2,2` tail and
+    // assert the second statement still assembles -- without the tail these
+    // assertions would stay green even if the marker became a true comment
+    // character, which is the silent change this map exists to catch.
+
+    #[test]
+    fn test_percent_indented_alone_is_a_comment_the_tailed_statement_is_lost() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    % note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 1);
+    }
+
+    #[test]
+    fn test_hash_indented_alone_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    # note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_bang_indented_alone_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    ! note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_dot_indented_alone_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    . note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_at_indented_alone_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    @ note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_semicolon_indented_alone_opens_an_empty_statement_then_an_unknown_operation() {
+        // The indented `;` opens an empty first statement (rule 2), not a
+        // comment; the prose after it is then read as its own statement, a
+        // bare word read as a label with text trailing it.
+        let err = assemble_err("SETL $1,1\n    ; note text\nSETL $3,3");
+        assert!(
+            err.contains("unknown operation: note text"),
+            "expected the prose after the indented `;` to be an unknown \
+             operation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_asterisk_indented_alone_is_rejected_as_a_dropped_operator() {
+        assert_parse_error_contains(
+            "SETL $1,1\n    * note text\nSETL $3,3",
+            "an operand holds no blanks",
+        );
+    }
+
+    #[test]
+    fn test_slash_indented_alone_is_rejected_as_a_dropped_operator() {
+        assert_parse_error_contains(
+            "SETL $1,1\n    / note text\nSETL $3,3",
+            "an operand holds no blanks",
+        );
+    }
+
+    #[test]
+    fn test_no_marker_indented_alone_is_an_unknown_operation() {
+        // No marker at all: the indented prose's first word reads as a
+        // label, and the second word is trailing text a label statement
+        // cannot carry.
+        assert_parse_error_contains(
+            "SETL $1,1\n    note text\nSETL $3,3",
+            "unknown operation: note text",
+        );
+    }
+
+    // -- Trailing: the same run after a complete statement ---------------
+    //
+    // The trailing `;` cell (four outcomes, all silent or misleading) is
+    // pinned separately below; it is not one of these.
+
+    #[test]
+    fn test_percent_wins_over_a_later_semicolon_dropping_the_second_statement() {
+        // Also step 9's first pin: `%` beats a later `;` because it is a
+        // pest implicit comment, consumed before the `;`-loop ever runs.
+        let mut asm = MMixAssembler::new("SETL $1,1 % note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 1);
+    }
+
+    #[test]
+    fn test_hash_trailing_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1 # note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_bang_trailing_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1 ! note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_dot_trailing_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1 . note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_at_trailing_is_ignored_the_tailed_statement_still_assembles() {
+        let mut asm = MMixAssembler::new("SETL $1,1 @ note; SETL $2,2", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_asterisk_trailing_is_rejected_as_a_dropped_operator() {
+        assert_parse_error_contains("SETL $1,1 * note", "an operand holds no blanks");
+    }
+
+    #[test]
+    fn test_slash_trailing_is_rejected_as_a_dropped_operator() {
+        assert_parse_error_contains("SETL $1,1 / note", "an operand holds no blanks");
+    }
+
+    // -- The three trailing-text exceptions -------------------------------
+
+    #[test]
+    fn test_abutting_trailing_text_errors_with_no_separating_blank() {
+        assert_parse_error_contains("SETL $1,2abc", "no separating blank");
+    }
+
+    #[test]
+    fn test_operator_led_trailing_text_errors_for_every_operator_char() {
+        for c in [',', '+', '-', '*', '/', '~', '&', '|', '^', '<', '>', '$'] {
+            assert_parse_error_contains(&format!("SETL $1,2 {c} 3"), "an operand holds no blanks");
+        }
+    }
+
+    #[test]
+    fn test_digit_led_trailing_text_errors_as_a_dropped_separator() {
+        assert_parse_error_contains("HALT 2 apples", "an operand holds no blanks");
+    }
+
+    #[test]
+    fn test_trailing_free_text_opening_with_a_letter_is_ignored() {
+        assert_eq!(
+            assemble_one("ADD $1,$2,$3 sum of the parts"),
+            MMixInstruction::ADD(1, 2, 3)
+        );
+    }
+
+    #[test]
+    fn test_trailing_free_text_opening_with_underscore_or_colon_is_ignored_too() {
+        assert_eq!(
+            assemble_one("ADD $1,$2,$3 _underscore"),
+            MMixInstruction::ADD(1, 2, 3)
+        );
+        assert_eq!(
+            assemble_one("ADD $1,$2,$3 :colon"),
+            MMixInstruction::ADD(1, 2, 3)
+        );
+    }
+
+    // -- The trailing `;`: four outcomes, three silent or misleading -----
+
+    #[test]
+    fn test_trailing_semicolon_comment_silently_defines_a_label() {
+        let mut asm = MMixAssembler::new("SET $1,0 ; counter\nSET $2,counter", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.labels.get("counter"), Some(&4));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 4));
+
+        // Control: behind a real comment, `counter` is never defined.
+        assert_parse_error_contains(
+            "SET $1,0 % counter\nSET $2,counter",
+            "Undefined symbol: counter",
+        );
+    }
+
+    #[test]
+    fn test_trailing_semicolon_comment_silently_defines_an_is_constant() {
+        let mut asm = MMixAssembler::new("SET $1,0 ; offset is 8\nSET $2,offset", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 8));
+
+        // Control: behind a real comment, `offset` is never defined.
+        assert_parse_error_contains(
+            "SET $1,0 % offset is 8\nSET $2,offset",
+            "Undefined symbol: offset",
+        );
+    }
+
+    #[test]
+    fn test_trailing_semicolon_prose_that_reads_as_a_bad_expression_is_an_error() {
+        assert_parse_error_contains("SET $1,0 ; this is invalid", "Undefined symbol: invalid");
+    }
+
+    #[test]
+    fn test_trailing_semicolon_prose_that_reads_as_an_unknown_operation_is_an_error() {
+        assert_parse_error_contains(
+            "SET $1,0 ; set the counter",
+            "unknown operation: set the counter",
+        );
+    }
+
+    // -- The shield: `#` carries no comment meaning of its own -----------
+
+    #[test]
+    fn test_hash_shield_ignores_arbitrary_trailing_prose() {
+        assert_eq!(
+            assemble_one("SET $1,0 # anything at all here"),
+            MMixInstruction::SETL(1, 0)
+        );
+    }
+
+    #[test]
+    fn test_hash_shield_ignores_digit_led_prose_that_would_otherwise_error() {
+        assert_eq!(
+            assemble_one("SET $1,0 # 2 apples"),
+            MMixInstruction::SETL(1, 0)
+        );
+        // Without the shield, a digit-led run is the deliberate exception:
+        // an error, not a warning.
+        assert_parse_error_contains("SET $1,0 2 apples", "an operand holds no blanks");
+    }
+
+    // -- The three remaining pins -----------------------------------------
+
+    #[test]
+    fn test_percent_inside_a_literal_is_ordinary_text_not_a_comment() {
+        let mut asm = MMixAssembler::new(r#"BYTE "50%""#, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(
+            asm.instructions
+                .iter()
+                .map(|(_, i)| i.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                MMixInstruction::BYTE(b'5'),
+                MMixInstruction::BYTE(b'0'),
+                MMixInstruction::BYTE(b'%'),
+            ]
+        );
+
+        // The same literal survives intact in the unknown-operation
+        // diagnostic rather than truncating at the `%`.
+        assert_parse_error_contains(r#"ADDx "50%",b"#, r#"unknown operation: ADDx "50%",b"#);
+    }
+
+    #[test]
+    fn test_at_is_a_valid_operand_but_bang_and_dot_have_no_grammar_token() {
+        assert_eq!(assemble_one("SET $1,@"), MMixInstruction::SETL(1, 0));
+        assert_parse_error_contains("SET $1,!", "unknown operation: SET $1,!");
+        assert_parse_error_contains("SET $1,.", "unknown operation: SET $1,.");
+    }
 }
