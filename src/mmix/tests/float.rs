@@ -8,7 +8,9 @@ fn test_float_to_fix_overflow_trips_when_enabled() {
     load_tetra(&mut mmix, 0x30, 0xFD000000); // W's vector loaded
     mmix.set_special(SpecialReg::RA, RA_W << 8); // enable W only
     mmix.set_pc(0x100);
-    mmix.set_register(2, f64::INFINITY.to_bits());
+    // A finite overflow, not +∞: FIX copies an infinite operand through
+    // with I alone and never raises W for it.
+    mmix.set_register(2, 1e20_f64.to_bits());
     mmix.write_tetra(0x100, 0x05010002); // FIX $1,0,$2
 
     assert!(mmix.execute_instruction());
@@ -354,14 +356,15 @@ fn test_fix_negative() {
 }
 
 #[test]
-fn test_fix_nan_sets_w_and_i() {
+fn test_fix_nan_raises_i_alone() {
     let mut mmix = MMix::new();
     mmix.set_register(3, f64::NAN.to_bits());
     mmix.write_tetra(0, 0x05010003);
     assert!(mmix.execute_instruction());
     let ra = mmix.get_special(SpecialReg::RA);
-    assert!((ra & RA_W) != 0);
-    assert!((ra & RA_I) != 0);
+    assert_eq!(ra & RA_W, 0);
+    assert_ne!(ra & RA_I, 0);
+    assert_eq!(mmix.get_register(1), f64::NAN.to_bits());
 }
 
 #[test]
@@ -408,13 +411,14 @@ fn test_floti() {
 }
 
 #[test]
-fn test_floti_negative() {
+fn test_floti_immediate_is_unsigned() {
     let mut mmix = MMix::new();
-    // FLOTI $1, $0, -1 - Convert immediate signed -1 to float (Y=$0, Z=0xFF=-1 as signed byte)
-    mmix.write_tetra(0, 0x090100FF); // FLOTI $1,$0,255 (X=01, Y=00, Z=FF which is -1 signed)
+    // FLOTI $1,$0,255 - Z is an unsigned byte, like every immediate
+    // operand, so 0xFF converts to 255.0, not -1.0.
+    mmix.write_tetra(0, 0x090100FF);
     assert!(mmix.execute_instruction());
     let result = f64::from_bits(mmix.get_register(1));
-    assert!((result - (-1.0)).abs() < 1e-10);
+    assert!((result - 255.0).abs() < 1e-10);
 }
 
 #[test]
@@ -1715,4 +1719,673 @@ fn test_overflow_round_down_negative_keeps_neg_inf() {
     assert!(mmix.execute_instruction());
     let r = f64::from_bits(mmix.get_register(1));
     assert!(r.is_infinite() && r.is_sign_negative());
+}
+
+// ==================== C11.1 contract table (fascicle-2026-09-21) ====================
+//
+// One test per row of the C11.1 prompt's contract table. Each cites the
+// row it pins; "guard" rows already passed before this unit and pin
+// behaviour the fix must keep.
+
+// ---- IMM-2: immediate FLOT/SFLOT read Z as an unsigned byte ----
+
+#[test]
+fn test_floti_immediate_200() {
+    let mut mmix = MMix::new();
+    mmix.write_tetra(0, 0x090100C8); // FLOTI $1,0,200
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x4069000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_sfloti_immediate_200() {
+    let mut mmix = MMix::new();
+    mmix.write_tetra(0, 0x0D0100C8); // SFLOTI $1,0,200
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x4069000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_floti_round_up_255() {
+    let mut mmix = MMix::new();
+    mmix.write_tetra(0, 0x090102FF); // FLOTI $1,ROUND_UP,255
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x406F_E000_0000_0000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- FIX-1: FIX wraps mod 2^64 and raises W outside the signed range ----
+
+#[test]
+fn test_fix_1e20_wraps_and_raises_w() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 1e20_f64.to_bits());
+    mmix.write_tetra(0, 0x05010003); // FIX $1,0,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x6BC7_5E2D_6310_0000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_W);
+}
+
+#[test]
+fn test_fix_two_to_the_64_wraps_to_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 2f64.powi(64).to_bits());
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_W);
+}
+
+#[test]
+fn test_fix_1e300_wraps_to_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 1e300_f64.to_bits());
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_W);
+}
+
+// ---- FIX-2: the signed range's own boundary ----
+
+#[test]
+fn test_fix_two_to_the_63_is_out_of_range() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 2f64.powi(63).to_bits());
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x8000000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_W);
+}
+
+#[test]
+fn test_fix_negative_two_to_the_63_is_in_range() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, (-(2f64.powi(63))).to_bits());
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x8000000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- FIX-3: an infinite or NaN operand copies through with I alone ----
+
+#[test]
+fn test_fix_infinity_copies_through_with_i_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, f64::INFINITY.to_bits());
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fix_quiet_nan_copies_through_with_i_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x7FF8000000000005);
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000005);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fixu_quiet_nan_copies_through_with_i_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x7FF8000000000005);
+    mmix.write_tetra(0, 0x07010003); // FIXU $1,0,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000005);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fix_signaling_nan_copies_through_unquieted() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x7FF0000000000001); // sNaN#1
+    mmix.write_tetra(0, 0x05010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF0000000000001);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+// ---- NAN-1: FADD/FMUL/FDIV/FSUB's standard-conventions NaN pick ----
+
+#[test]
+fn test_fadd_two_quiet_nans_picks_z() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF8000000000005); // qNaN#5, $Y
+    mmix.set_register(3, 0x7FF8000000000007); // qNaN#7, $Z
+    mmix.write_tetra(0, 0x04010203); // FADD $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000007);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fadd_signaling_y_picks_z_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF0000000000001); // sNaN#1
+    mmix.set_register(3, 0x7FF8000000000007); // qNaN#7
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000007);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fadd_signaling_z_quiets_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF8000000000005);
+    mmix.set_register(3, 0x7FF0000000000002); // sNaN#2
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000002);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fadd_both_signaling_picks_z_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF0000000000001);
+    mmix.set_register(3, 0x7FF0000000000002);
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000002);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fadd_signaling_y_nonnan_z_picks_y() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF0000000000001);
+    mmix.set_register(3, 1.0f64.to_bits());
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000001);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fmul_two_quiet_nans_picks_z() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF8000000000005);
+    mmix.set_register(3, 0x7FF8000000000007);
+    mmix.write_tetra(0, 0x10010203); // FMUL $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000007);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fdiv_signaling_y_picks_z_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF0000000000001);
+    mmix.set_register(3, 0x7FF8000000000007);
+    mmix.write_tetra(0, 0x14010203); // FDIV $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000007);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fsub_negative_nan_z_stays_unnegated() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 0xFFF8000000000005);
+    mmix.write_tetra(0, 0x06010203); // FSUB $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000005);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- NAN-2: FREM's standard-conventions NaN pick ----
+
+#[test]
+fn test_frem_quiet_nan_y_picks_y() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x7FF8000000000005);
+    mmix.set_register(3, 1.0f64.to_bits());
+    mmix.write_tetra(0, 0x16010203); // FREM $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000005);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_frem_signaling_z_quiets_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 0x7FF0000000000002);
+    mmix.write_tetra(0, 0x16010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000002);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+// ---- NAN-3: the invalid operations and their signs ----
+
+#[test]
+fn test_fadd_opposite_infinities_is_invalid_signed_by_z() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, f64::INFINITY.to_bits());
+    mmix.set_register(3, f64::NEG_INFINITY.to_bits());
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fadd_opposite_infinities_reversed_is_invalid_signed_by_z() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, f64::NEG_INFINITY.to_bits());
+    mmix.set_register(3, f64::INFINITY.to_bits());
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fsub_same_sign_infinities_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, f64::INFINITY.to_bits());
+    mmix.set_register(3, f64::INFINITY.to_bits());
+    mmix.write_tetra(0, 0x06010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fmul_zero_times_infinity_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, (-0.0f64).to_bits());
+    mmix.set_register(3, f64::INFINITY.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fdiv_zero_over_zero_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, (-0.0f64).to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_frem_infinite_y_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, f64::NEG_INFINITY.to_bits());
+    mmix.set_register(3, 1.0f64.to_bits());
+    mmix.write_tetra(0, 0x16010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_frem_zero_z_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x16010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_fsqrt_of_negative_is_invalid() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, (-1.0f64).to_bits());
+    mmix.write_tetra(0, 0x15010003); // FSQRT $1,0,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0xFFF8000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+// ---- NAN-4: FINT's NaN passthrough ----
+
+#[test]
+fn test_fint_quiet_nan_passes_through() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x7FF8000000000005);
+    mmix.write_tetra(0, 0x17010003); // FINT $1,0,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000005);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fint_signaling_nan_quiets_and_raises_i() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x7FF0000000000001);
+    mmix.write_tetra(0, 0x17010003);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF8000000000001);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+// ---- NAN-5: LDSF widens a short float's bits exactly ----
+
+#[test]
+fn test_ldsf_signaling_nan_widens_bit_for_bit() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(100, 0x7F800001);
+    mmix.write_tetra(0, 0x90010203); // LDSF $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF0000020000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_ldsf_quiet_nan_widens_bit_for_bit() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(100, 0x7FC00005);
+    mmix.write_tetra(0, 0x90010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x7FF80000A0000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- NAN-6 and the owner-added STSF row: signaling and subnormal narrowing ----
+
+#[test]
+fn test_stsf_signaling_nan_quiets_on_store() {
+    let mut mmix = MMix::new();
+    mmix.set_register(1, 0x7FF0000000000001); // sNaN#1
+    mmix.set_register(2, 100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0, 0xB0010203); // STSF $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.read_tetra(100), 0x7FC00000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_stsf_signaling_nan_truncates_and_quiets() {
+    let mut mmix = MMix::new();
+    mmix.set_register(1, 0x7FF0000020000000);
+    mmix.set_register(2, 100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0, 0xB0010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.read_tetra(100), 0x7FC00001);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
+}
+
+#[test]
+fn test_stsf_exact_short_subnormal_raises_nothing() {
+    let mut mmix = MMix::new();
+    mmix.set_register(1, 0x37D0000000000000); // 2^-130
+    mmix.set_register(2, 100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0, 0xB0010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.read_tetra(100), 0x00080000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- FLAG-1: an exact subnormal result raises nothing ----
+
+#[test]
+fn test_fadd_smallest_subnormals_sum_exactly() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1);
+    mmix.set_register(3, 1);
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 2);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fsub_at_the_subnormal_boundary_is_exact() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x0010000000000000);
+    mmix.set_register(3, 1);
+    mmix.write_tetra(0, 0x06010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x000FFFFFFFFFFFFF);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fmul_exact_subnormal_product_raises_nothing() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 2f64.powi(-1000).to_bits());
+    mmix.set_register(3, 2f64.powi(-30).to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x0000100000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fmul_boundary_normal_times_half_is_exact_subnormal() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x0010000000000000);
+    mmix.set_register(3, 0.5f64.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x0008000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+#[test]
+fn test_fmul_exact_subnormal_still_trips_when_u_enabled() {
+    let mut mmix = MMix::new();
+    load_tetra(&mut mmix, 0x60, 0xFD000000); // U's vector loaded
+    mmix.set_special(SpecialReg::RA, RA_U << 8); // enable U only
+    mmix.set_pc(0x100);
+    mmix.set_register(2, 0x0010000000000000);
+    mmix.set_register(3, 0.5f64.to_bits());
+    mmix.write_tetra(0x100, 0x10010203); // FMUL $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x60);
+}
+
+// ---- FLAG-2: an inexact underflow raises U and X together ----
+
+#[test]
+fn test_fmul_inexact_underflow_raises_u_and_x() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x0008000000000000);
+    mmix.set_register(3, 0.1f64.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x0000CCCCCCCCCCCD);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_U | RA_X);
+}
+
+#[test]
+fn test_fmul_underflow_to_zero_raises_u_and_x() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x0010000000000000);
+    mmix.set_register(3, 0x0010000000000000);
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_U | RA_X);
+}
+
+#[test]
+fn test_fmul_smallest_subnormal_times_half_underflows_to_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1);
+    mmix.set_register(3, 0.5f64.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_U | RA_X);
+}
+
+#[test]
+fn test_fmul_subnormal_times_half_rounds_and_underflows() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 3);
+    mmix.set_register(3, 0.5f64.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 2);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_U | RA_X);
+}
+
+#[test]
+fn test_fdiv_boundary_normal_over_one_point_five_underflows() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 0x0010000000000000);
+    mmix.set_register(3, 1.5f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x000AAAAAAAAAAAAB);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_U | RA_X);
+}
+
+// ---- the exact error's sign, decided even where a hardware FMA underflows ----
+
+#[test]
+fn test_fmul_round_up_pushes_a_tiny_product_up_from_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, 0x20000); // ROUND_UP, no trips
+    mmix.set_register(2, 1);
+    mmix.set_register(3, 0.5f64.to_bits());
+    mmix.write_tetra(0, 0x10010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 1);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0x20005);
+}
+
+#[test]
+fn test_fsqrt_of_a_subnormal_rounds_to_a_normal_result() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 2);
+    mmix.write_tetra(0, 0x15010003); // FSQRT $1,0,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x1E66A09E667F3BCD);
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_X);
+}
+
+// ---- FLAG-3: ±∞/±0 raises nothing ----
+
+#[test]
+fn test_fdiv_infinity_over_zero_raises_nothing() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, f64::INFINITY.to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
+}
+
+// ---- FLAG-4: a finite nonzero dividend over zero raises Z alone ----
+
+#[test]
+fn test_fdiv_by_zero_raises_z_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_Z);
+}
+
+#[test]
+fn test_fdiv_negative_by_zero_raises_z_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, (-1.0f64).to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::NEG_INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_Z);
+}
+
+#[test]
+fn test_fdiv_subnormal_by_zero_raises_z_alone() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1);
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), RA_Z);
+}
+
+#[test]
+fn test_fdiv_by_zero_is_exact_in_round_off_too() {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, 0x10000); // ROUND_OFF, no trips
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x14010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), f64::INFINITY.to_bits());
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0x10002);
+}
+
+// ---- FLAG-5: ROUND_DOWN's exact-zero sign ----
+
+#[test]
+fn test_fadd_round_down_mixed_zero_is_negative() {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, 0x30000); // ROUND_DOWN
+    mmix.set_register(2, 0.0f64.to_bits());
+    mmix.set_register(3, (-0.0f64).to_bits());
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x8000000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0x30000);
+}
+
+#[test]
+fn test_fsub_round_down_cancellation_is_negative() {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, 0x30000);
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 1.0f64.to_bits());
+    mmix.write_tetra(0, 0x06010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0x8000000000000000);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0x30000);
+}
+
+#[test]
+fn test_fadd_round_down_both_positive_zero_stays_positive() {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, 0x30000);
+    mmix.set_register(2, 0.0f64.to_bits());
+    mmix.set_register(3, 0.0f64.to_bits());
+    mmix.write_tetra(0, 0x04010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0x30000);
+}
+
+#[test]
+fn test_fsub_cancellation_is_positive_by_default() {
+    let mut mmix = MMix::new();
+    mmix.set_register(2, 1.0f64.to_bits());
+    mmix.set_register(3, 1.0f64.to_bits());
+    mmix.write_tetra(0, 0x06010203);
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0);
+    assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }

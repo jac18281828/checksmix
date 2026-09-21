@@ -100,22 +100,109 @@ impl MMix {
         }
     }
 
-    /// Compute rA event flags for a binary IEEE 754 operation. The X flag is
-    /// reported by callers that supply an exact residual (`finalize_fp_binop`).
-    /// No U: the only caller is `FREM`, and the IEEE remainder is exact by
-    /// definition, so it can neither round nor underflow.
+    /// `NaN(1/2)`, MMIX's invalid-operation result: fraction exactly `1/2`,
+    /// signed as given.
     #[inline]
-    pub(super) fn fp_arith_flags(a: f64, b: f64, result: f64) -> u64 {
-        let mut flags = 0u64;
+    pub(super) fn nan_half(negative: bool) -> f64 {
+        let bits = 0x7FF8_0000_0000_0000u64 | if negative { 1u64 << 63 } else { 0 };
+        f64::from_bits(bits)
+    }
+
+    /// MMIX's "standard conventions" NaN pick for a binary operation: `$Z`
+    /// (`b`) when `$Z` is a NaN, `$Y` (`a`) otherwise. Quieted. `None` when
+    /// neither operand is a NaN.
+    #[inline]
+    pub(super) fn select_nan(a: f64, b: f64) -> Option<f64> {
+        if b.is_nan() {
+            Some(Self::quiet_nan(b))
+        } else if a.is_nan() {
+            Some(Self::quiet_nan(a))
+        } else {
+            None
+        }
+    }
+
+    /// I for a NaN-operand result: raised when either operand signals.
+    #[inline]
+    pub(super) fn nan_i_flag(a: f64, b: f64) -> u64 {
         if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
-            flags |= RA_I;
+            RA_I
+        } else {
+            0
         }
-        if !a.is_nan() && !b.is_nan() && result.is_nan() {
-            flags |= RA_I;
-        } else if a.is_finite() && b.is_finite() && result.is_infinite() {
-            flags |= RA_O;
+    }
+
+    /// `FADD`'s NaN result and its one invalid case, ∞ + (−∞): `NaN(1/2)`
+    /// signed as `$Z`'s. `None` when host arithmetic may proceed.
+    pub(super) fn fadd_special(a: f64, b: f64) -> Option<(f64, u64)> {
+        if let Some(nan) = Self::select_nan(a, b) {
+            return Some((nan, Self::nan_i_flag(a, b)));
         }
-        flags
+        if a.is_infinite() && b.is_infinite() && a.is_sign_negative() != b.is_sign_negative() {
+            return Some((Self::nan_half(b.is_sign_negative()), RA_I));
+        }
+        None
+    }
+
+    /// `FMUL`'s NaN result and its invalid case, `0 × ∞`: `NaN(1/2)` signed
+    /// by the operands' sign product.
+    pub(super) fn fmul_special(a: f64, b: f64) -> Option<(f64, u64)> {
+        if let Some(nan) = Self::select_nan(a, b) {
+            return Some((nan, Self::nan_i_flag(a, b)));
+        }
+        if (a == 0.0 && b.is_infinite()) || (a.is_infinite() && b == 0.0) {
+            let negative = a.is_sign_negative() != b.is_sign_negative();
+            return Some((Self::nan_half(negative), RA_I));
+        }
+        None
+    }
+
+    /// `FDIV`'s NaN result and its invalid cases, `0/0` and `∞/∞`:
+    /// `NaN(1/2)` signed by the operands' sign product.
+    pub(super) fn fdiv_special(a: f64, b: f64) -> Option<(f64, u64)> {
+        if let Some(nan) = Self::select_nan(a, b) {
+            return Some((nan, Self::nan_i_flag(a, b)));
+        }
+        if (a == 0.0 && b == 0.0) || (a.is_infinite() && b.is_infinite()) {
+            let negative = a.is_sign_negative() != b.is_sign_negative();
+            return Some((Self::nan_half(negative), RA_I));
+        }
+        None
+    }
+
+    /// `FREM`'s NaN result and its invalid cases, an infinite `$Y` or a
+    /// zero `$Z`: `NaN(1/2)` signed as `$Y`'s.
+    pub(super) fn frem_special(a: f64, b: f64) -> Option<(f64, u64)> {
+        if let Some(nan) = Self::select_nan(a, b) {
+            return Some((nan, Self::nan_i_flag(a, b)));
+        }
+        if a.is_infinite() || b == 0.0 {
+            return Some((Self::nan_half(a.is_sign_negative()), RA_I));
+        }
+        None
+    }
+
+    /// `FSQRT`'s NaN passthrough and its invalid case, a negative operand:
+    /// `NaN(1/2)`, always negative.
+    pub(super) fn fsqrt_special(a: f64) -> Option<(f64, u64)> {
+        if a.is_nan() {
+            let flags = if Self::is_signaling_nan(a) { RA_I } else { 0 };
+            return Some((Self::quiet_nan(a), flags));
+        }
+        if a < 0.0 {
+            return Some((Self::nan_half(true), RA_I));
+        }
+        None
+    }
+
+    /// `FINT`'s NaN passthrough: quieted, I only for a signaling operand.
+    /// `FINT` has no invalid case of its own.
+    pub(super) fn fint_special(a: f64) -> Option<(f64, u64)> {
+        if a.is_nan() {
+            let flags = if Self::is_signaling_nan(a) { RA_I } else { 0 };
+            return Some((Self::quiet_nan(a), flags));
+        }
+        None
     }
 
     /// Veltkamp-Knuth 2Sum: returns `(s, err)` such that `s + err == a + b`
@@ -181,14 +268,59 @@ impl MMix {
         }
     }
 
-    /// Finalize a binary FP op given the round-to-nearest-even result `r_near`
-    /// and an exact residual `err` (`sign(err) == sign(true - r_near)`, `err==0`
-    /// means exact). Returns `(adjusted_result, flags)`. Centralizes sNaN
-    /// quieting, overflow clamping per rA mode, X / I / O / U detection.
+    /// Signed zero for an exact `FADD`/`FSUB` result under ROUND_DOWN:
+    /// `-0`, except `(+0) + (+0) = +0`. Callers apply this only in
+    /// ROUND_DOWN — every other mode already gets the right sign from the
+    /// host's round-to-nearest zero, which agrees with MMIX's rule
+    /// everywhere but ROUND_DOWN.
+    #[inline]
+    fn round_down_zero(a: f64, b: f64) -> f64 {
+        let both_positive_zero =
+            a == 0.0 && a.is_sign_positive() && b == 0.0 && b.is_sign_positive();
+        if both_positive_zero { 0.0 } else { -0.0 }
+    }
+
+    /// Shared body of `FADD` and `FSUB`: `FSUB` calls this with `b` already
+    /// negated (unless `b` is a NaN — MMIX negates `$Z` only when it is
+    /// not), so this is always literally `$Y + b`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fadd_compute(
+        &mut self,
+        op_byte: u8,
+        x: u8,
+        y: u8,
+        z: u8,
+        y_val: u64,
+        z_val: u64,
+        a: f64,
+        b: f64,
+    ) -> bool {
+        if let Some((result, flags)) = Self::fadd_special(a, b) {
+            self.set_register(x, Self::f64_to_u64(result));
+            return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
+        }
+        let r_near = a + b;
+        let (_, err) = Self::two_sum(a, b);
+        // `two_sum` is exact for finite operands, so a zero sum with a
+        // zero residual is exact cancellation, not an underflow.
+        let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0, true);
+        self.set_register(x, Self::f64_to_u64(r));
+        self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+    }
+
+    /// Finalize a binary FP op given the round-to-nearest-even result
+    /// `r_near` and an exact residual `err` (`sign(err) == sign(true -
+    /// r_near)`, `err == 0` means exact). Returns `(adjusted_result,
+    /// flags)`: overflow clamping per rA mode, X / O / U detection.
+    /// Callers filter NaN operands and invalid operations first — `a`,
+    /// `b` and `r_near` are never NaN here.
     ///
     /// `true_result_is_zero` resolves a zero delivered result: U means the
     /// result was too small to represent, so a true result of exactly zero is
     /// never an underflow. Only the caller knows which its zero was.
+    ///
+    /// `additive` selects `FADD`/`FSUB`'s ROUND_DOWN zero-sign rule; `FMUL`
+    /// and `FDIV` pass `false` and keep the ordinary sign-of-product zero.
     pub(super) fn finalize_fp_binop(
         &self,
         a: f64,
@@ -196,30 +328,28 @@ impl MMix {
         r_near: f64,
         err: f64,
         true_result_is_zero: bool,
+        additive: bool,
     ) -> (f64, u64) {
         let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
         let operands_finite = a.is_finite() && b.is_finite();
         let mut flags = 0u64;
-        if Self::is_signaling_nan(a) || Self::is_signaling_nan(b) {
-            flags |= RA_I;
-        }
-        let result = if r_near.is_nan() {
-            if !a.is_nan() && !b.is_nan() {
-                flags |= RA_I;
-            }
-            Self::quiet_nan(r_near)
-        } else if r_near.is_infinite() && operands_finite {
+        let result = if r_near.is_infinite() && operands_finite {
             flags |= RA_O | RA_X;
             Self::clamp_overflow_for_mode(r_near, mode)
         } else if r_near.is_finite() {
-            // A non-finite operand yields an exact result — ±0, ±inf or NaN —
+            // A non-finite operand yields an exact result — ±0 or ±inf —
             // and its residual is meaningless: `(-0.0).mul_add(inf, 1.0)` is
             // NaN. Neither X nor directed rounding applies there.
             let err = if operands_finite { err } else { 0.0 };
             if err != 0.0 {
                 flags |= RA_X;
             }
-            Self::apply_directed_rounding(r_near, err, mode)
+            let rounded = Self::apply_directed_rounding(r_near, err, mode);
+            if additive && rounded == 0.0 && mode & 0x3 == 3 {
+                Self::round_down_zero(a, b)
+            } else {
+                rounded
+            }
         } else {
             r_near
         };
@@ -228,27 +358,24 @@ impl MMix {
             && b != 0.0
             && (result.is_subnormal() || (result == 0.0 && !true_result_is_zero))
         {
-            flags |= RA_U;
+            let trip_enabled = (self.get_special(SpecialReg::RA) >> 8) & RA_U != 0;
+            if trip_enabled || err != 0.0 {
+                flags |= RA_U;
+            }
         }
         (result, flags)
     }
 
-    /// Finalize a unary FP op (FSQRT). Same shape as `finalize_fp_binop`.
+    /// Finalize a unary FP op (`FSQRT`). Same shape as `finalize_fp_binop`.
+    /// The caller filters a NaN or negative operand first, so `a` and
+    /// `r_near` are never NaN here.
     ///
     /// No U: the only caller is `FSQRT`, and the square root of a nonzero
     /// finite operand is neither zero nor subnormal — the root of the smallest
     /// subnormal is about `2^-537`.
     pub(super) fn finalize_fp_unop(&self, a: f64, r_near: f64, err: f64, mode: u64) -> (f64, u64) {
         let mut flags = 0u64;
-        if Self::is_signaling_nan(a) {
-            flags |= RA_I;
-        }
-        let result = if r_near.is_nan() {
-            if !a.is_nan() {
-                flags |= RA_I;
-            }
-            Self::quiet_nan(r_near)
-        } else if r_near.is_infinite() && a.is_finite() {
+        let result = if r_near.is_infinite() && a.is_finite() {
             flags |= RA_O | RA_X;
             Self::clamp_overflow_for_mode(r_near, mode)
         } else if r_near.is_finite() {
@@ -321,6 +448,17 @@ impl MMix {
             3 => value.floor(),
             _ => unreachable!(),
         }
+    }
+
+    /// `FIX`'s signed-range check: `true` when the rounded integer falls
+    /// below `-2^63` or above `2^63 - 1`. Compares against `2^63` itself
+    /// (exact in `f64`) rather than `i64::MAX as f64`, which rounds up to
+    /// `2^63` and would silently exempt exactly `2^63` from the overflow
+    /// it belongs to.
+    #[inline]
+    pub(super) fn out_of_signed_i64_range(rounded: f64) -> bool {
+        const LIMIT: f64 = 9_223_372_036_854_775_808.0; // 2^63
+        rounded < -LIMIT || rounded >= LIMIT
     }
 
     /// Reduce an integral finite `f64` to the low 64 bits of its exact value,
@@ -415,6 +553,9 @@ impl MMix {
     /// Convert f64 → f32 under the given rounding mode, reporting flags.
     /// Returns `(narrowed_as_f64, flags)`. `STSF`/`STSFI` always pass rA's
     /// own mode; `SFLOT`'s family passes its resolved `Y` override.
+    ///
+    /// `value` is never NaN: `SFLOT`'s family converts from an integer, and
+    /// `STSF` quiets and truncates a NaN's bits itself, bypassing this.
     #[inline]
     pub(super) fn f64_to_f32_rounded(&self, value: f64, mode: u64) -> (f64, u64) {
         let near = value as f32; // hardware default: round-to-nearest-even
@@ -449,18 +590,224 @@ impl MMix {
         };
         let result = narrowed as f64;
         let mut flags = 0u64;
-        if !value.is_nan() && narrowed.is_nan() {
-            flags |= RA_I;
-        }
         if value.is_finite() && narrowed.is_infinite() {
             flags |= RA_O;
         }
-        if !value.is_nan() && value != 0.0 && (narrowed == 0.0 || narrowed.is_subnormal()) {
-            flags |= RA_U;
+        let inexact = value.is_finite() && result != value;
+        if value != 0.0 && (narrowed == 0.0 || narrowed.is_subnormal()) {
+            let trip_enabled = (self.get_special(SpecialReg::RA) >> 8) & RA_U != 0;
+            if trip_enabled || inexact {
+                flags |= RA_U;
+            }
         }
-        if !value.is_nan() && !value.is_infinite() && result != value {
+        if inexact {
             flags |= RA_X;
         }
         (result, flags)
+    }
+
+    /// `STSF`/`STSFI`'s narrowing: a NaN quiets and truncates its own bits
+    /// (I on a signaling operand, per MMIX's short-float rule), and every
+    /// other value narrows through `f64_to_f32_rounded` under rA's mode.
+    pub(super) fn narrow_for_store(&self, value: f64) -> (u32, u64) {
+        if value.is_nan() {
+            let flags = if Self::is_signaling_nan(value) {
+                RA_I
+            } else {
+                0
+            };
+            return (Self::narrow_short_float_nan_or_inf(value.to_bits()), flags);
+        }
+        let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
+        let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
+        ((narrowed as f32).to_bits(), flags)
+    }
+
+    /// Widen a short float's bits to `f64`, exactly: any finite or
+    /// infinite value converts losslessly, and a NaN's payload survives
+    /// bit for bit — including a signaling NaN's signaling bit — which
+    /// Rust's `as` cast does not promise.
+    #[inline]
+    pub(super) fn widen_short_float(bits: u32) -> u64 {
+        let sign = (bits as u64 & 0x8000_0000) << 32;
+        let exp = (bits >> 23) & 0xFF;
+        let frac = (bits & 0x007F_FFFF) as u64;
+        if exp == 0xFF {
+            sign | (0x7FFu64 << 52) | (frac << 29)
+        } else if exp == 0 {
+            if frac == 0 {
+                sign
+            } else {
+                // Subnormal short float: f64's much wider exponent range
+                // holds it as a normal double, so normalize the fraction.
+                let p = 31 - (frac as u32).leading_zeros();
+                let mantissa = frac & !(1u64 << p);
+                let new_frac = mantissa << (52 - p);
+                let new_exp = (p as i64 - 149 + 1023) as u64;
+                sign | (new_exp << 52) | new_frac
+            }
+        } else {
+            let new_exp = exp as u64 + 896; // rebias: (exp - 127) + 1023
+            sign | (new_exp << 52) | (frac << 29)
+        }
+    }
+
+    /// Narrow an `f64`'s bits to a short float, for a NaN or infinity
+    /// only: truncates the fraction to its top 23 bits and, for a
+    /// signaling NaN, forces the quiet bit — MMIX's `STSF` rule — rather
+    /// than trusting Rust's `as f32` cast with the payload.
+    #[inline]
+    pub(super) fn narrow_short_float_nan_or_inf(bits: u64) -> u32 {
+        let sign = ((bits >> 32) & 0x8000_0000) as u32;
+        let frac52 = bits & 0x000F_FFFF_FFFF_FFFF;
+        let mut frac23 = (frac52 >> 29) as u32;
+        if frac52 != 0 && frac52 & (1u64 << 51) == 0 {
+            frac23 |= 1 << 22; // quiet a signaling NaN
+        }
+        sign | (0xFFu32 << 23) | frac23
+    }
+
+    /// A finite `f64`'s exact value as `(negative, mantissa, exponent)`:
+    /// magnitude is `mantissa × 2^exponent`, mantissa fits 53 bits, and
+    /// `mantissa == 0` is a signed zero.
+    #[inline]
+    fn dyadic(v: f64) -> (bool, u64, i32) {
+        let bits = v.to_bits();
+        let negative = bits >> 63 == 1;
+        let biased_exp = ((bits >> 52) & 0x7FF) as i32;
+        let frac = bits & 0x000F_FFFF_FFFF_FFFF;
+        if biased_exp == 0 {
+            (negative, frac, -1074)
+        } else {
+            (negative, frac | (1u64 << 52), biased_exp - 1075)
+        }
+    }
+
+    /// Left-shift `m` by `shift`, saturating to `u128::MAX` if a set bit
+    /// would be pushed past bit 127. `dyadic_sub_sign`'s comparison only
+    /// needs to know that side dominates, never by how much.
+    #[inline]
+    fn shl_saturating(m: u128, shift: u32) -> u128 {
+        if m == 0 {
+            0
+        } else if shift >= 128 || m.leading_zeros() < shift {
+            u128::MAX
+        } else {
+            m << shift
+        }
+    }
+
+    /// Sign of `p − q` for two dyadic magnitudes, `(negative, mantissa,
+    /// exponent)` each, compared exactly by aligning to a common exponent
+    /// and comparing integers. `0` when equal; never rounds.
+    fn dyadic_sub_sign(neg_p: bool, mp: u128, ep: i32, neg_q: bool, mq: u128, eq: i32) -> i32 {
+        if mp == 0 && mq == 0 {
+            return 0;
+        }
+        if mq == 0 {
+            return if neg_p { -1 } else { 1 };
+        }
+        if mp == 0 {
+            return if neg_q { 1 } else { -1 };
+        }
+        let common = ep.min(eq);
+        let big_p = Self::shl_saturating(mp, (ep - common) as u32);
+        let big_q = Self::shl_saturating(mq, (eq - common) as u32);
+        let sign_p = if neg_p { -1 } else { 1 };
+        let sign_q = if neg_q { -1 } else { 1 };
+        if sign_p == sign_q {
+            sign_p
+                * match big_p.cmp(&big_q) {
+                    std::cmp::Ordering::Greater => 1,
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                }
+        } else {
+            sign_p
+        }
+    }
+
+    /// Sign of the exact `a×b − r_near` as `-1.0`, `0.0` or `1.0` — callers
+    /// use only its sign and zero-ness. `r_near` must already be `a*b`
+    /// correctly rounded. A *nonzero* FMA result is trustworthy: correct
+    /// rounding to nearest cannot cross zero, so its sign matches the true
+    /// residual's. Only a *zero* FMA result is ambiguous — it may be
+    /// exact, or it may be the FMA's own rounding underflowing a
+    /// genuinely nonzero residual and losing its sign along with its
+    /// magnitude — so that case alone falls back to an exact integer
+    /// comparison of the operands' bits.
+    pub(super) fn fmul_error_sign(a: f64, b: f64, r_near: f64) -> f64 {
+        let fma = a.mul_add(b, -r_near);
+        if fma != 0.0 {
+            return fma;
+        }
+        let (neg_a, ma, ea) = Self::dyadic(a);
+        let (neg_b, mb, eb) = Self::dyadic(b);
+        let (neg_r, mr, er) = Self::dyadic(r_near);
+        let sign = Self::dyadic_sub_sign(
+            neg_a != neg_b,
+            ma as u128 * mb as u128,
+            ea + eb,
+            neg_r,
+            mr as u128,
+            er,
+        );
+        sign as f64
+    }
+
+    /// Sign of the exact `a/b − r_near`, same shape as `fmul_error_sign`.
+    /// Its exact fallback reduces to comparing `a` against the
+    /// exactly-representable `r_near × b`, avoiding ever computing the
+    /// (generally irrational) exact quotient: `sign(a/b − r) = sign(a −
+    /// r·b) × sign(b)`.
+    pub(super) fn fdiv_error_sign(a: f64, b: f64, r_near: f64) -> f64 {
+        let residual = (-r_near).mul_add(b, a);
+        let fma = if b.is_sign_negative() {
+            -residual
+        } else {
+            residual
+        };
+        if fma != 0.0 {
+            return fma;
+        }
+        let (neg_a, ma, ea) = Self::dyadic(a);
+        let (neg_r, mr, er) = Self::dyadic(r_near);
+        let (neg_b, mb, eb) = Self::dyadic(b);
+        let sign = Self::dyadic_sub_sign(
+            neg_a,
+            ma as u128,
+            ea,
+            neg_r != neg_b,
+            mr as u128 * mb as u128,
+            er + eb,
+        );
+        if b.is_sign_negative() {
+            -(sign as f64)
+        } else {
+            sign as f64
+        }
+    }
+
+    /// Sign of the exact `sqrt(a) − r_near`, same shape as
+    /// `fmul_error_sign`. Its exact fallback reduces to comparing `a`
+    /// against the exactly-representable `r_near²`, avoiding the
+    /// (generally irrational) exact root: `sign(sqrt(a) − r) = sign(a −
+    /// r²)` for `a, r ≥ 0`.
+    pub(super) fn fsqrt_error_sign(a: f64, r_near: f64) -> f64 {
+        let fma = (-r_near).mul_add(r_near, a);
+        if fma != 0.0 {
+            return fma;
+        }
+        let (_, ma, ea) = Self::dyadic(a);
+        let (_, mr, er) = Self::dyadic(r_near);
+        let sign = Self::dyadic_sub_sign(
+            false,
+            ma as u128,
+            ea,
+            false,
+            mr as u128 * mr as u128,
+            er + er,
+        );
+        sign as f64
     }
 }

@@ -303,6 +303,26 @@ Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, 
 
 **Known gap:** none for the twelve mnemonics above — `Y` overrides `rA`'s mode per-instruction; `Y = 0` or the implicit two-operand form falls back to `rA`.
 
+**NaN results.** `FADD`, `FSUB`, `FMUL`, `FDIV`, `FREM`, `FSQRT`, and `FINT`
+build every NaN result themselves rather than take whatever the host CPU's
+arithmetic produces, so a result is identical on every target. A signaling
+NaN operand raises I; every NaN operand is quieted (its fraction's top bit
+set) before it can appear in a result. For a binary operation the result is
+`$Z` if `$Z` is a NaN, otherwise `$Y`; `FSUB` negates `$Z` only when `$Z` is
+not a NaN, since it computes `$Y + (−$Z)`. `FIX` and `FIXU` instead copy an
+infinite or NaN operand through unchanged, raising I alone.
+
+Each invalid operation (a NaN operand aside) yields `NaN(1/2)`
+(`#7FF8000000000000`, or with the sign bit set) and raises I: `FADD`'s
+∞ + (−∞) is signed as `$Z`'s; `FSUB`'s ∞ − ∞ as the negated `$Z`'s; `FMUL`'s
+`0 × ∞` and `FDIV`'s `0/0` and `∞/∞` by the operands' sign product; `FREM`
+with an infinite `$Y` or a zero `$Z` as `$Y`'s; `FSQRT` of a negative
+operand (∞ included) always negative.
+
+**Signed zero.** An exactly-zero `FADD`/`FSUB` result is `+0` in every
+rounding mode but ROUND_DOWN, except `(−0) + (−0) = −0`. In ROUND_DOWN it is
+`−0`, except `(+0) + (+0) = +0`.
+
 ### rA event flags
 
 An arithmetic exception whose enable bit (below) is clear ORs its event flag
@@ -314,15 +334,24 @@ rather than spellings a program must supply itself.
 | Flag | rA bit | Kind | Raised when |
 | --- | --- | --- | --- |
 | X | `0x01` | floating | Result is inexact (rounded) |
-| Z | `0x02` | floating | Floating division by zero |
+| Z | `0x02` | floating | A finite nonzero dividend divided by zero (`FDIV`); alone, never with O or X |
 | U | `0x04` | floating | Underflow |
 | O | `0x08` | floating | Overflow |
-| I | `0x10` | floating | Invalid operation (NaN operand, 0/0, ∞−∞, etc.) |
-| W | `0x20` | floating | Float-to-integer conversion overflows |
+| I | `0x10` | floating | A signaling NaN operand; a quiet one does not raise it. Also an invalid operation (0/0, ∞−∞, etc.), or `FIX`/`FIXU` of an infinite or NaN operand |
+| W | `0x20` | floating | `FIX`'s rounded result falls below `−2^63` or above `2^63 − 1`; `FIXU` never raises it |
 | V | `0x40` | integer | Integer overflow — `ADD`, `SUB`, `MUL`, `NEG`, `DIV` of `#8000000000000000` by −1, `SL`, and the signed stores `STB`/`STW`/`STT` |
 | D | `0x80` | integer | Divide check — signed division by zero |
 
-There is no denormalized-operand event: a subnormal operand raises nothing, and an underflow to a subnormal result raises `U`. `FREM` and `FSQRT` raise `U` in no case — the IEEE remainder is exact by definition, and the square root of a nonzero finite operand is neither zero nor subnormal. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which includes a zero divisor — is part of its definition rather than an error.
+There is no denormalized-operand event: a subnormal operand raises nothing.
+A rounded result below the normal range raises `U` only when the exact
+result is not itself an exact subnormal, or when `U`'s enable bit is set (an
+enabled `U` always trips on any subnormal or zero result, exact or not); an
+underflow with the bit clear always raises `U` and `X` together. `FREM` and
+`FSQRT` raise `U` in no case — the IEEE remainder is exact by definition,
+and the square root of a nonzero finite operand is neither zero nor
+subnormal. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which
+includes a zero divisor — is part of its definition rather than an error.
+`±∞` divided by `±0` raises nothing: the result is an exact infinity.
 
 Read/clear `rA` with `GET $X,rA` / `PUT rA,$X`.
 

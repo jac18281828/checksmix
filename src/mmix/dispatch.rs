@@ -1,8 +1,6 @@
 //! Instruction dispatch: `execute_instruction`, the opcode `match`, and the small branch/conditional-set helpers it shares with no one else.
 
-use super::{
-    MMix, PopFrame, RA_D, RA_I, RA_ROUND_SHIFT, RA_V, RA_W, RA_X, RA_Z, SpecialReg, TrapCode,
-};
+use super::{MMix, PopFrame, RA_D, RA_I, RA_V, RA_W, RA_X, RA_Z, SpecialReg, TrapCode};
 use tracing::{debug, instrument};
 
 impl MMix {
@@ -195,17 +193,13 @@ impl MMix {
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(y_val);
                 let b = Self::u64_to_f64(z_val);
-                let r_near = a + b;
-                let (_, err) = Self::two_sum(a, b);
-                // `two_sum` is exact for finite operands, so a zero sum with a
-                // zero residual is exact cancellation, not an underflow.
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0);
-                self.set_register(x, Self::f64_to_u64(r));
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.fadd_compute(op_byte, x, y, z, y_val, z_val, a, b)
             }
             Opcode::FIX => {
-                // FIX $X, Y, $Z - Convert floating to fixed (signed). Raises X
-                // on inexact and W when the value is out of i64 range or NaN/Inf.
+                // FIX $X, Y, $Z - Convert floating to fixed (signed). Raises
+                // X on inexact and W when the rounded value falls outside
+                // the signed 64-bit range; an infinite or NaN operand
+                // copies through unchanged with I alone.
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIX", y),
@@ -214,23 +208,20 @@ impl MMix {
                 let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let f = Self::u64_to_f64(z_val);
-                let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
-                    flags |= RA_W;
-                    if f.is_nan() {
-                        flags |= RA_I;
-                    }
-                    0u64
-                } else if rounded > i64::MAX as f64 || rounded < i64::MIN as f64 {
-                    flags |= RA_W;
-                    rounded as i64 as u64
+                    flags |= RA_I;
+                    z_val
                 } else {
-                    rounded as i64 as u64
+                    let rounded = Self::round_with_mode(f, mode);
+                    if rounded != f {
+                        flags |= RA_X;
+                    }
+                    if Self::out_of_signed_i64_range(rounded) {
+                        flags |= RA_W;
+                    }
+                    Self::wrap_to_u64(rounded)
                 };
-                if rounded != f && f.is_finite() {
-                    flags |= RA_X;
-                }
                 self.set_register(x, value);
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -238,15 +229,17 @@ impl MMix {
                 let y_val = self.get_register(y);
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(y_val);
-                let b = Self::u64_to_f64(z_val);
-                let r_near = a - b;
-                let (_, err) = Self::two_sum(a, -b);
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0);
-                self.set_register(x, Self::f64_to_u64(r));
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                let z_raw = Self::u64_to_f64(z_val);
+                // FSUB is FADD of -$Z; a NaN $Z passes through unnegated so
+                // its own sign selects the result, per MMIX's standard
+                // conventions.
+                let b = if z_raw.is_nan() { z_raw } else { -z_raw };
+                self.fadd_compute(op_byte, x, y, z, y_val, z_val, a, b)
             }
             Opcode::FIXU => {
-                // FIXU $X, Y, $Z - Convert floating to fixed unsigned
+                // FIXU $X, Y, $Z - Convert floating to fixed unsigned. Never
+                // raises W; an infinite or NaN operand copies through
+                // unchanged with I alone.
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("FIXU", y),
@@ -255,20 +248,17 @@ impl MMix {
                 let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let f = Self::u64_to_f64(z_val);
-                let rounded = Self::round_with_mode(f, mode);
                 let mut flags = 0u64;
                 let value = if !f.is_finite() {
-                    flags |= RA_W;
-                    if f.is_nan() {
-                        flags |= RA_I;
-                    }
-                    0u64
+                    flags |= RA_I;
+                    z_val
                 } else {
+                    let rounded = Self::round_with_mode(f, mode);
+                    if rounded != f {
+                        flags |= RA_X;
+                    }
                     Self::wrap_to_u64(rounded)
                 };
-                if rounded != f && f.is_finite() {
-                    flags |= RA_X;
-                }
                 self.set_register(x, value);
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -277,8 +267,9 @@ impl MMix {
                 i2f_conv_rr!(self, op_byte, x, y, z, true, "FLOT")
             }
             Opcode::FLOTI => {
-                // FLOTI $X, Y, Z - Convert fixed to floating immediate (signed)
-                i2f_conv_ri!(self, op_byte, x, y, z, true, "FLOTI")
+                // FLOTI $X, Y, Z - Convert fixed to floating immediate. Z is
+                // an unsigned byte, like every immediate operand.
+                i2f_conv_ri!(self, op_byte, x, y, z, "FLOTI")
             }
             Opcode::FLOTU => {
                 // FLOTU $X, Y, $Z - Convert fixed unsigned to floating
@@ -286,7 +277,7 @@ impl MMix {
             }
             Opcode::FLOTUI => {
                 // FLOTUI $X, Y, Z - Convert fixed unsigned to floating immediate
-                i2f_conv_ri!(self, op_byte, x, y, z, false, "FLOTUI")
+                i2f_conv_ri!(self, op_byte, x, y, z, "FLOTUI")
             }
             Opcode::SFLOT => {
                 // SFLOT $X, Y, $Z - Convert signed integer to f32 (in f64 register)
@@ -304,6 +295,8 @@ impl MMix {
                 self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SFLOTI => {
+                // SFLOTI $X, Y, Z - Z is an unsigned byte, like every
+                // immediate operand.
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTI", y),
@@ -312,9 +305,8 @@ impl MMix {
                 // neither a register.
                 let y_val = y as u64;
                 let z_val = z as u64;
-                let v = (z as i8) as i64;
-                let flags = Self::int_to_f64_inexact(v.unsigned_abs());
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
+                let flags = Self::int_to_f64_inexact(z_val);
+                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z_val as f64, mode);
                 self.set_register(x, Self::f64_to_u64(narrowed));
                 self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -350,14 +342,15 @@ impl MMix {
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(y_val);
                 let b = Self::u64_to_f64(z_val);
+                if let Some((result, flags)) = Self::fmul_special(a, b) {
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
+                }
                 let r_near = a * b;
-                // FMA gives the exact residual: a*b - r_near.
-                let err = a.mul_add(b, -r_near);
-                // A product of nonzero finite operands is never mathematically
-                // zero, and the residual cannot witness that: for operands near
-                // MIN_POSITIVE the exact product lies below the subnormal range,
-                // so the FMA rounds the residual to zero on a real underflow.
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false);
+                let err = Self::fmul_error_sign(a, b, r_near);
+                // A product of nonzero finite operands is never
+                // mathematically zero.
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, false);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -430,25 +423,33 @@ impl MMix {
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(y_val);
                 let b = Self::u64_to_f64(z_val);
-                let div_by_zero = if b == 0.0 && !a.is_nan() && a != 0.0 {
-                    RA_Z
-                } else {
-                    0
-                };
+                if let Some((result, flags)) = Self::fdiv_special(a, b) {
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
+                }
+                if b == 0.0 && a.is_finite() && a != 0.0 {
+                    // A finite nonzero dividend over zero is an exact
+                    // infinity in every rounding mode: Z alone, no overflow
+                    // clamp.
+                    let result = a / b;
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(RA_Z, op_byte, x, y, z, y_val, z_val);
+                }
                 let r_near = a / b;
-                // residual = a - r_near*b is exact via FMA.
-                // sign(true - r_near) = sign(residual) * sign(b).
-                let residual = (-r_near).mul_add(b, a);
-                let err = if b.is_sign_negative() {
-                    -residual
+                let operands_finite = a.is_finite() && b.is_finite();
+                let err = if operands_finite {
+                    Self::fdiv_error_sign(a, b, r_near)
                 } else {
-                    residual
+                    // An infinite operand's quotient (0, or an infinity
+                    // from a finite-over-infinite or infinite-over-finite
+                    // division) is exact; there is no residual to report.
+                    0.0
                 };
                 // A quotient of nonzero finite operands is never mathematically
                 // zero, so a zero result from such operands underflowed.
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, false);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.raise_exceptions(div_by_zero | flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FSQRT => {
                 let mode = match self.resolved_round_mode(y) {
@@ -459,11 +460,12 @@ impl MMix {
                 let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(z_val);
+                if let Some((result, flags)) = Self::fsqrt_special(a) {
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
+                }
                 let r_near = a.sqrt();
-                // residual = a - r_near^2, exact via FMA.
-                // sign(true - r_near) = sign(residual) when r_near >= 0 (always
-                // true here since sqrt returns ≥0 or NaN).
-                let err = (-r_near).mul_add(r_near, a);
+                let err = Self::fsqrt_error_sign(a, r_near);
                 let (r, flags) = self.finalize_fp_unop(a, r_near, err, mode);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
@@ -474,10 +476,13 @@ impl MMix {
                 let z_val = self.get_register(z);
                 let a = Self::u64_to_f64(y_val);
                 let b = Self::u64_to_f64(z_val);
+                if let Some((result, flags)) = Self::frem_special(a, b) {
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
+                }
                 let r = Self::ieee_remainder(a, b);
-                let flags = Self::fp_arith_flags(a, b, r);
                 self.set_register(x, Self::f64_to_u64(r));
-                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
+                self.raise_exceptions(0, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FINT => {
                 // FINT $X, Y, $Z — Integerize under Y's rounding-mode
@@ -490,17 +495,12 @@ impl MMix {
                 let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let v = Self::u64_to_f64(z_val);
-                let r = if v.is_finite() {
-                    Self::round_with_mode(v, mode)
-                } else {
-                    v
-                };
-                let mut flags = 0u64;
-                if v.is_nan() {
-                    flags |= RA_I;
-                } else if v.is_finite() && r != v {
-                    flags |= RA_X;
+                if let Some((result, flags)) = Self::fint_special(v) {
+                    self.set_register(x, Self::f64_to_u64(result));
+                    return self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val);
                 }
+                let r = Self::round_with_mode(v, mode);
+                let flags = if v.is_finite() && r != v { RA_X } else { 0 };
                 self.set_register(x, Self::f64_to_u64(r));
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -652,9 +652,7 @@ impl MMix {
                 // LDSF $X, $Y, $Z - Load short float (32-bit float to 64-bit)
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let tetra = self.read_tetra(addr);
-                let short_float = f32::from_bits(tetra);
-                let value = short_float as f64;
-                self.set_register(x, Self::f64_to_u64(value));
+                self.set_register(x, Self::widen_short_float(tetra));
                 self.advance_pc();
                 true
             }
@@ -662,9 +660,7 @@ impl MMix {
                 // LDSFI $X, $Y, Z - Load short float immediate (32-bit float to 64-bit)
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let tetra = self.read_tetra(addr);
-                let short_float = f32::from_bits(tetra);
-                let value = short_float as f64;
-                self.set_register(x, Self::f64_to_u64(value));
+                self.set_register(x, Self::widen_short_float(tetra));
                 self.advance_pc();
                 true
             }
@@ -1081,9 +1077,8 @@ impl MMix {
                 // the merged octabyte after the store, per §1 rule 3.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
                 let value = Self::u64_to_f64(self.get_register(x));
-                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
-                let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
-                self.write_tetra(addr, (narrowed as f32).to_bits());
+                let (bits, flags) = self.narrow_for_store(value);
+                self.write_tetra(addr, bits);
                 let merged = self.merged_store_octa(addr);
                 self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }
@@ -1092,9 +1087,8 @@ impl MMix {
                 // after the store, per §1 rule 3.
                 let addr = self.get_register(y).wrapping_add(z as u64);
                 let value = Self::u64_to_f64(self.get_register(x));
-                let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
-                let (narrowed, flags) = self.f64_to_f32_rounded(value, mode);
-                self.write_tetra(addr, (narrowed as f32).to_bits());
+                let (bits, flags) = self.narrow_for_store(value);
+                self.write_tetra(addr, bits);
                 let merged = self.merged_store_octa(addr);
                 self.raise_exceptions(flags, op_byte, x, y, z, addr, merged)
             }

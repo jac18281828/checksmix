@@ -107,11 +107,13 @@ macro_rules! i2f_conv_rr {
     }};
 }
 
-/// Macro for int-to-float conversions (immediate). Every 8-bit operand
+/// Macro for int-to-float conversions (immediate). `Z` is an unsigned
+/// byte, 0-255, like any immediate operand — `FLOTI` and `FLOTUI` agree on
+/// it, so there is no signed/unsigned choice to make here. Every such value
 /// converts exactly, so the rounding mode can never change the result — `Y`
 /// is still checked, since `Y > 4` halts regardless.
 macro_rules! i2f_conv_ri {
-    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr, $signed:expr, $mnem:expr) => {{
+    ($cpu:expr, $op:expr, $x:expr, $y:expr, $z:expr, $mnem:expr) => {{
         let mode = match $cpu.resolved_round_mode($y) {
             Ok(m) => m,
             Err(()) => return $cpu.illegal_round_mode($mnem, $y),
@@ -120,13 +122,7 @@ macro_rules! i2f_conv_ri {
         // register.
         let y_val = $y as u64;
         let z_val = $z as u64;
-        // Z is 8-bit immediate value to convert
-        let v = if $signed {
-            ($z as i8) as i64
-        } else {
-            $z as i64
-        };
-        let (result, flags) = $cpu.int_to_f64_rounded(v < 0, v.unsigned_abs(), mode);
+        let (result, flags) = $cpu.int_to_f64_rounded(false, z_val, mode);
         $cpu.set_register($x, MMix::f64_to_u64(result));
         return $cpu.raise_exceptions(flags, $op, $x, $y, $z, y_val, z_val);
     }};

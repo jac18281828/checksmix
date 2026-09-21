@@ -947,9 +947,10 @@ fn test_subnormal_operand_raises_no_divide_check() {
 }
 
 #[test]
-fn test_subnormal_result_raises_underflow() {
+fn test_exact_subnormal_result_raises_no_underflow() {
     let mut mmix = MMix::new();
-    // MIN_POSITIVE / 2.0 underflows to a subnormal; U reports it.
+    // MIN_POSITIVE / 2.0 is an exact subnormal: halving a power of two
+    // loses nothing, so U must not fire.
     mmix.set_register(2, f64::MIN_POSITIVE.to_bits());
     mmix.set_register(3, 2.0f64.to_bits());
     mmix.write_tetra(0, 0x14010203); // FDIV
@@ -957,7 +958,7 @@ fn test_subnormal_result_raises_underflow() {
     let ra = mmix.get_special(SpecialReg::RA);
     let r = f64::from_bits(mmix.get_register(1));
     assert!(r.is_subnormal(), "expected subnormal result, got {}", r);
-    assert!((ra & RA_U) != 0, "U should be set on underflow");
+    assert_eq!(ra & RA_U, 0, "an exact subnormal result raises no U");
 }
 
 #[test]
