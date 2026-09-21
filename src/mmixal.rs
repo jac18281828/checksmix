@@ -2386,7 +2386,9 @@ impl MMixAssembler {
                                     ));
                                 }
                             }
-                            pending_local.take();
+                            if let Some(digit) = pending_local.take() {
+                                self.record_local_label(digit, SymbolType::Constant(0), false);
+                            }
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair, false)?;
@@ -9000,7 +9002,7 @@ Main    SETI    $1,7
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
         assert_eq!(asm.labels.get("Main"), Some(&0));
         // `:Foo` names the same root symbol as `Foo`, keyed without the
-        // colon (§1's root-prefix rule).
+        // colon.
         assert_eq!(asm.labels.get("Foo"), Some(&4));
         assert_eq!(asm.labels.get("_Bar"), Some(&8));
     }
@@ -9269,9 +9271,6 @@ Main    SETI    $1,7
 
     #[test]
     fn test_bare_trailing_hash_assembles_like_no_remark_at_all() {
-        // The tripwire above pins `# anything at all here`, never the bare
-        // `#` alone; this is the C9.3 unit's own proof that it stays
-        // ignored.
         assert_eq!(assemble_one("SET $1,0 #"), assemble_one("SET $1,0"));
     }
 
@@ -9375,7 +9374,7 @@ Main    SETI    $1,7
         );
     }
 
-    // ---- Local symbols (C9.3) ------------------------------------------
+    // ---- Local symbols ------------------------------------------------
 
     #[test]
     fn test_local_labels_forward_and_backward_meet_in_the_middle() {
@@ -9389,6 +9388,18 @@ Main    SETI    $1,7
         assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(1));
         assert_eq!(asm.instructions[1].0, 0x4);
         assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(0xFFFFFF));
+    }
+
+    #[test]
+    fn test_local_label_on_a_greg_line_keeps_both_passes_in_step() {
+        let parse = |src: &str| {
+            let mut asm = MMixAssembler::new(src, "<test>");
+            asm.parse().unwrap();
+            asm.instructions
+        };
+        let local = parse("2H      GREG 0\nMain    SET $1,2B\n        SET $2,2F\n2H      HALT\n");
+        let named = parse("R       GREG 0\nMain    SET $1,R\n        SET $2,L\nL       HALT\n");
+        assert_eq!(local, named);
     }
 
     #[test]
@@ -9539,7 +9550,7 @@ Main    SETI    $1,7
         assert_parse_error_contains("G1 GREG 2F\nMain HALT\n", "Undefined symbol: 2F");
     }
 
-    // ---- Qualified references (C9.3) -----------------------------------
+    // ---- Qualified references -----------------------------------------
 
     #[test]
     fn test_qualified_reference_reads_a_prefix_definition_from_outside() {
@@ -9620,7 +9631,7 @@ Main    SETI    $1,7
         assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
     }
 
-    // ---- LOCAL (C9.3) ---------------------------------------------------
+    // ---- LOCAL ---------------------------------------------------------
 
     #[test]
     fn test_local_directive_with_a_global_register_assembles() {
@@ -9657,7 +9668,7 @@ Main    SETI    $1,7
         assert_parse_error_contains("Foo LOCAL $10\nMain HALT\n", "takes no label");
     }
 
-    // ---- BSPEC / ESPEC (C9.3) -------------------------------------------
+    // ---- BSPEC / ESPEC -------------------------------------------------
 
     #[test]
     fn test_espec_label_address_matches_the_block_deleted() {
@@ -9745,7 +9756,7 @@ Main    SETI    $1,7
         );
     }
 
-    // ---- The predefined symbols (C9.3) -----------------------------------
+    // ---- The predefined symbols -----------------------------------------
 
     #[test]
     fn test_seventeen_predefined_symbols_resolve_to_the_reference_table() {
@@ -9785,12 +9796,11 @@ Main    SETI    $1,7
 
     #[test]
     fn test_text_segment_is_still_undefined() {
-        // Pins the reference's own predefined-symbol table, which has no
-        // `Text_Segment` -- not a guard on this unit's own code.
+        // The reference's predefined-symbol table has no `Text_Segment`.
         assert_parse_error_contains("OCTA Text_Segment", "Undefined symbol");
     }
 
-    // ---- The root prefix (C9.3) ------------------------------------------
+    // ---- The root prefix ------------------------------------------------
 
     #[test]
     fn test_root_prefix_row_prefix_pk_then_reset() {
@@ -9837,7 +9847,7 @@ Main    SETI    $1,7
         assert!(!asm.labels.contains_key(":Lib"));
     }
 
-    // ---- Predefined names: a program's own definition wins (C9.3) --------
+    // ---- Predefined names: a program's own definition wins --------------
 
     #[test]
     fn test_label_named_predefined_wins_for_a_later_reference() {
@@ -9893,7 +9903,7 @@ Main    SETI    $1,7
         );
     }
 
-    // ---- Equal redefinition (C9.3) ----------------------------------------
+    // ---- Equal redefinition ----------------------------------------------
 
     #[test]
     fn test_equal_redefinition_is_then_label_same_value_assembles() {

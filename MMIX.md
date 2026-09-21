@@ -250,12 +250,12 @@ A symbol may carry interior colons: an operand may name a qualified symbol
 directly, `Foo:Bar`, and the active `PREFIX` still applies to it unless it
 begins with `:`. A symbol never ends with a colon, so the legacy `Label:`
 spelling still defines `Label` — but a blank must follow the colon, since
-`Label:SET` now reads as one qualified name rather than a label and a
+`Label:SET` reads as one qualified name rather than a label and a
 mnemonic.
 
 ```
         PREFIX  P_
-P_Foo   TRAP    0,Halt,0    % stored as "P_Foo"
+Foo     TRAP    0,Halt,0    % stored as "P_Foo"
 :Bar    TRAP    0,Halt,0    % stored as "Bar" (root, PREFIX not applied)
         PREFIX  Lib:
 Sub     TRAP    0,Halt,0    % stored as "Lib:Sub"
