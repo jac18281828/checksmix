@@ -82,6 +82,9 @@ the first blank.
 | `WYDE` | `WYDE expr,...` | Emit one 16-bit wyde per operand |
 | `TETRA` | `TETRA expr,...` | Emit one 32-bit tetra per operand |
 | `OCTA` | `OCTA expr,...` | Emit one 64-bit octa per operand |
+| `LOCAL` | `LOCAL expr` | Declare register *expr* local; checked against the global threshold at the close of assembly |
+| `BSPEC` | `BSPEC expr` | Open special mode |
+| `ESPEC` | `ESPEC` | Close special mode |
 | `INCLUDE` | `INCLUDE file` | Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error |
 
 A string operand assembles one unit per character. The directive aligns
@@ -104,6 +107,15 @@ unaligned access a load through that label rounds back down past the datum. A
 label on a `LOC` line itself takes the location the counter held *before* the
 move: `X LOC @+500` names `X` as the first of the 500 bytes `LOC` skips, and
 assembly continues at `X+500`.
+
+`BSPEC expr` opens special mode; `ESPEC` closes it. Inside, only `IS`,
+`PREFIX`, `GREG`, `LOCAL` and the four data directives are legal — an
+instruction or any other directive between them is an error, and `BSPEC`
+does not nest. `IS`, `PREFIX`, `GREG` and `LOCAL` keep their full effect
+there; the location counter does not move, and a `BYTE`/`WYDE`/`TETRA`/`OCTA`
+list inside emits nothing to the object file at all — no MMIX loader would
+have loaded it anyway. A label after `ESPEC` has exactly the address it would
+have if the whole block were deleted.
 
 ### Expressions
 
@@ -155,6 +167,10 @@ and `y-x` is the pure value `9`. A register value may run past 255 inside an
 expression, but the final value a register site consumes must fit `0..=255`,
 same as a bare `$256` today.
 
+A program may redefine a predefined symbol with a label, `IS` or `GREG`
+before any use of it, and its definition then holds at every reference; a
+symbol may be defined again only with the same value.
+
 `@` is the current location: for an instruction, its tetra-aligned address;
 for a data directive, the aligned address of the directive's first unit — the
 same address for every item in its list, since the whole list is evaluated
@@ -169,6 +185,27 @@ still assembles identically here. `LOC`, `IS`, `GREG` and the two-operand
 `LDA`'s size estimate are the exception: they resolve only a symbol already
 defined above, an assembler restriction this widens to cover expressions
 rather than lifts.
+
+### Local symbols
+
+A decimal digit followed by `H` defines a local label; the same digit
+followed by `B` or `F` references it backward or forward in an operand. `H`
+is legal only in the label field, `B`/`F` only in an operand, and all three
+are upper case only. Ten counters run independently, one per digit.
+
+`dB` is the address of the last `dH` of that digit at or before the
+referencing statement, or `0` when none has appeared yet — never an error.
+`dF` is the address of the first `dH` of that digit after the referencing
+statement, and an error when none follows. Resolution follows source order,
+not address, so a `LOC` that moves the counter backward does not change what
+a later `dB`/`dF` sees. `dH` is redefinable: a second `2H` is not a
+redefinition error, which is what makes `9H IS 9B+1` a running counter.
+
+```
+2H      JMP     2F      % forward: to the second 2H below
+        JMP     TestFail
+2H      JMP     2B      % backward: to the first 2H above
+```
 
 ### INCLUDE
 
@@ -203,12 +240,27 @@ Two known limitations:
 
 ### Global symbols and PREFIX
 
-A label or operand that begins with `:` is a **global** (linkage-visible) symbol; its name is stored verbatim regardless of the current `PREFIX`. Unqualified names are prefixed by the active `PREFIX` string. `PREFIX :` resets to the global namespace.
+The active prefix starts at `:`, the root namespace; `PREFIX :` returns to
+it. `x` and `:x` name the same symbol there, and `MMixAssembler::labels`/
+`symbols` key a root name without its colon. A label or operand that begins
+with `:` opts out of the active `PREFIX`; unqualified names are prefixed by
+the active `PREFIX` string instead.
+
+A symbol may carry interior colons: an operand may name a qualified symbol
+directly, `Foo:Bar`, and the active `PREFIX` still applies to it unless it
+begins with `:`. A symbol never ends with a colon, so the legacy `Label:`
+spelling still defines `Label` — but a blank must follow the colon, since
+`Label:SET` now reads as one qualified name rather than a label and a
+mnemonic.
 
 ```
         PREFIX  P_
 P_Foo   TRAP    0,Halt,0    % stored as "P_Foo"
-:Bar    TRAP    0,Halt,0    % stored as ":Bar" (global, no prefix applied)
+:Bar    TRAP    0,Halt,0    % stored as "Bar" (root, PREFIX not applied)
+        PREFIX  Lib:
+Sub     TRAP    0,Halt,0    % stored as "Lib:Sub"
+        PREFIX  :
+        SET     $1,Lib:Sub  % a qualified reference names a symbol directly
 ```
 
 ### Multi-source assembly
@@ -224,7 +276,9 @@ mmixasm         main.mms lib.mms -o prog.mmo
 
 ## Floating-point arithmetic
 
-All floating-point instructions use IEEE 754 double precision. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top: `PUT rA,$X` above `#3FFFF` is an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic. `PUTI` cannot reach the field — its operand is `Z` alone, eight bits — so selecting a mode needs the register form of `PUT`:
+All floating-point instructions use IEEE 754 double precision. Positive
+infinity is the predefined constant `Inf`, rather than a bit pattern the
+reader must spell out. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top: `PUT rA,$X` above `#3FFFF` is an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic. `PUTI` cannot reach the field — its operand is `Z` alone, eight bits — so selecting a mode needs the register form of `PUT`:
 
 | rA bits 17–16 | Mode | Meaning |
 | --- | --- | --- |
@@ -254,8 +308,8 @@ Instructions that honor rounding mode: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, 
 An arithmetic exception whose enable bit (below) is clear ORs its event flag
 into `rA`; event flags are never cleared automatically. One whose enable bit
 is set trips to its handler instead, and its event flag stays clear — see
-"User trips". The bit values match MMIXAL's predefined symbols `D_BIT` …
-`X_BIT`.
+"User trips". The bit values are the predefined symbols `D_BIT` … `X_BIT`,
+rather than spellings a program must supply itself.
 
 | Flag | rA bit | Kind | Raised when |
 | --- | --- | --- | --- |
@@ -284,8 +338,9 @@ register and use the register form of `PUT`.
 
 `TRIP X,Y,Z` always trips, unconditionally, to the handler at `#00`. An
 arithmetic exception trips only when its enable bit is set; instead of the
-event flag, control transfers to a fixed handler address, `#10` `#20` `#30`
-`#40` `#50` `#60` `#70` `#80` for `D V W I O U Z X` respectively. An
+event flag, control transfers to a fixed handler address, the predefined
+symbols `D_Handler` … `X_Handler` (`#10` `#20` `#30` `#40` `#50` `#60` `#70`
+`#80`) for `D V W I O U Z X` respectively. An
 instruction that raises several exceptions at once trips to the leftmost
 enabled one, in `D V W I O U Z X` order; every other raised exception whose
 enable bit is clear still sets its event flag, but one that is enabled and

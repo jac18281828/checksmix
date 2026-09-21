@@ -3967,6 +3967,71 @@ Test282d
         SET     Result,3/4        % division inside a bare expression is untouched
         SET     Expect,0
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test283
+        JMP     TestFail
+
+% ========================================
+% Test 283: local labels, qualified references, LOCAL, BSPEC/ESPEC and
+% the predefined symbol table
+% ========================================
+% Every register this test touches (Expect, Result, Temp) is written
+% here before it is ever read.
+% ========================================
+Test283 ADDU    TestNum,TestNum,1
+        LOCAL   $10               % a LOCAL declaration below the global threshold
+        SET     Result,4B         % `4B` ahead of any `4H` of that digit is 0
+        SET     Expect,0
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283b
+        JMP     TestFail
+Test283b
+        SET     Result,0
+        SET     Temp,3
+        JMP     4F                % forward local jump into the loop body
+        SET     Result,999        % unreached guard: a wrong forward target corrupts Result
+4H      ADDU    Result,Result,1   % loop body -- the forward jump's target
+        SUB     Temp,Temp,1
+        PBNZ    Temp,4B           % backward local jump, meeting the forward jump above
+        SET     Expect,3
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283c
+        JMP     TestFail
+Test283c
+        PREFIX  Test283Pfx:
+Bar     IS      42
+        PREFIX  :
+        SET     Result,Test283Pfx:Bar  % a PREFIX-qualified definition read back
+        SET     Expect,42
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283d
+        JMP     TestFail
+Test283d
+        SET     Result,D_BIT
+        SET     Expect,#80
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283e
+        JMP     TestFail
+Test283e
+        SET     Result,X_Handler
+        SET     Expect,#80
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283f
+        JMP     TestFail
+Test283f
+        SETI    Result,Inf
+        SETI    Expect,#7FF0000000000000
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test283g
+        JMP     TestFail
+Test283g
+Test283BspecStart
+        BSPEC   1
+        BYTE    1,2,3,4,5
+        ESPEC
+Test283BspecEnd
+        SET     Result,Test283BspecEnd-Test283BspecStart
+        SET     Expect,0          % the block moved the location counter nowhere
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
 

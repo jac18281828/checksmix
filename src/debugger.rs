@@ -461,14 +461,18 @@ impl Debugger {
     }
 
     /// Resolve a `break`/`delete` argument to an address, in priority order:
-    /// a decimal source line in the current file, else an exact label.
+    /// a decimal source line in the current file, else an exact label. A
+    /// leading ':' (the root-namespace spelling) is stripped before the
+    /// label lookup, since `MMixAssembler::labels` keys a root name without
+    /// it.
     fn resolve_break_location(&self, arg: &str) -> Option<u64> {
         let arg = arg.trim();
         if let Ok(line) = arg.parse::<usize>() {
             self.current_file()
                 .and_then(|file| self.assembler.addr_for_line(&file, line))
         } else {
-            self.assembler.labels.get(arg).copied()
+            let key = arg.strip_prefix(':').unwrap_or(arg);
+            self.assembler.labels.get(key).copied()
         }
     }
 
@@ -498,6 +502,8 @@ impl Debugger {
     /// `print <arg>` resolution, in priority order: `$N`/bare `N` (general
     /// register), a special-register name, a label, an IS/GREG symbol, a hex
     /// address (the memory octa at its aligned 8-byte base), else an error.
+    /// A leading ':' is stripped before the label/symbol lookups, since
+    /// `MMixAssembler::labels`/`symbols` key a root name without it.
     fn do_print(&self, arg: &str) -> String {
         let arg = arg.trim();
         if let Some(value) = self.print_register(arg) {
@@ -506,10 +512,11 @@ impl Debugger {
         if let Some(reg) = special_reg_from_name(arg) {
             return format_value(self.mmix.get_special(reg), self.format);
         }
-        if let Some(&addr) = self.assembler.labels.get(arg) {
+        let key = arg.strip_prefix(':').unwrap_or(arg);
+        if let Some(&addr) = self.assembler.labels.get(key) {
             return format_value(addr, self.format);
         }
-        if let Some(sym) = self.assembler.symbols.get(arg) {
+        if let Some(sym) = self.assembler.symbols.get(key) {
             return match sym {
                 SymbolType::Register(n) => format_value(self.mmix.get_register(*n), self.format),
                 SymbolType::Constant(v) => format_value(*v, self.format),
@@ -528,7 +535,8 @@ impl Debugger {
     /// order: `$N`/bare `N`, a special-register name, a register-aliasing
     /// symbol (a `GREG` or register-valued `IS` label), a hex address.
     /// A plain label and a constant-valued `IS` symbol are not settable --
-    /// neither names a storage location.
+    /// neither names a storage location. A leading ':' on `target` is
+    /// stripped before the symbol lookup, matching `do_print`.
     fn do_set(&mut self, target: String, value: String) -> String {
         let target = target.trim();
         let value = value.trim();
@@ -542,7 +550,8 @@ impl Debugger {
             self.mmix.set_special(reg, parsed);
             return format!("{target} = {}", format_value(parsed, self.format));
         }
-        if let Some(SymbolType::Register(n)) = self.assembler.symbols.get(target).copied() {
+        let key = target.strip_prefix(':').unwrap_or(target);
+        if let Some(SymbolType::Register(n)) = self.assembler.symbols.get(key).copied() {
             return self.write_register_and_report(n, parsed);
         }
         if let Some(addr) = self.parse_hex_address(target) {
@@ -1135,6 +1144,21 @@ Gap     LOC     #300
         assert!(
             stop.starts_with("Program exited"),
             "a deleted label breakpoint must no longer fire, got {stop:?}"
+        );
+    }
+
+    /// `break :Lib` sets a breakpoint where `break Lib` does: the root
+    /// prefix stores `Lib` and `:Lib` under the same key, and `resolve_
+    /// break_location` strips the leading `:` before the lookup.
+    #[test]
+    fn break_with_root_colon_matches_the_plain_label() {
+        let mut dbg = Debugger::load(assemble(CALL_PROGRAM, "call.mms"));
+        dbg.execute(Command::Break(":Main".to_string()));
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x100);
+        assert!(
+            stop.starts_with("call.mms:"),
+            "':Main' must resolve the same breakpoint as 'Main', got {stop:?}"
         );
     }
 

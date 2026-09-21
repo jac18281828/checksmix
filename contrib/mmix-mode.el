@@ -14,7 +14,10 @@
 ;;     \n \r \t \0 \\ and \'.
 ;;   - A statement is not column-sensitive.  Its first word is a label
 ;;     unless it is a mnemonic or directive, and a label may carry a
-;;     leading `:' (global) and a trailing `:'.
+;;     leading `:' (global), interior `:'s (`Foo:Bar', qualified by
+;;     PREFIX) and a trailing `:'.  A decimal digit followed by `H'
+;;     is a local label instead; `B'/`F' reference the nearest one
+;;     behind/ahead of it in an operand.
 ;;   - Mnemonics and directives are case-insensitive; predefined symbols
 ;;     (`rJ', `StdOut', `Fputs', `ROUND_NEAR', ...) are case-sensitive.
 ;;   - The explicit immediate spellings (ADDI, SETI, GETAB, ...), the
@@ -92,7 +95,8 @@
   "Every instruction mnemonic checksmix assembles, in upper case.")
 
 (defconst mmix-directives
-  '("BYTE" "WYDE" "TETRA" "OCTA" "LOC" "GREG" "IS" "PREFIX" "INCLUDE")
+  '("BYTE" "WYDE" "TETRA" "OCTA" "LOC" "GREG" "IS" "PREFIX" "INCLUDE"
+    "LOCAL" "BSPEC" "ESPEC")
   "Every assembler directive checksmix accepts, in upper case.")
 
 (defconst mmix-debug-directive "debug"
@@ -177,7 +181,24 @@
     ("ROUND_OFF" . "rounding-mode override 1: toward zero")
     ("ROUND_UP" . "rounding-mode override 2: toward +infinity")
     ("ROUND_DOWN" . "rounding-mode override 3: toward -infinity")
-    ("ROUND_NEAR" . "rounding-mode override 4: to nearest, ties to even"))
+    ("ROUND_NEAR" . "rounding-mode override 4: to nearest, ties to even")
+    ("Inf" . "positive floating-point infinity, #7FF0000000000000")
+    ("D_BIT" . "rA event-flag bit #80: divide check")
+    ("D_Handler" . "user-trip handler address #10, for D_BIT")
+    ("V_BIT" . "rA event-flag bit #40: integer overflow")
+    ("V_Handler" . "user-trip handler address #20, for V_BIT")
+    ("W_BIT" . "rA event-flag bit #20: float-to-fix overflow")
+    ("W_Handler" . "user-trip handler address #30, for W_BIT")
+    ("I_BIT" . "rA event-flag bit #10: invalid floating operation")
+    ("I_Handler" . "user-trip handler address #40, for I_BIT")
+    ("O_BIT" . "rA event-flag bit #08: floating overflow")
+    ("O_Handler" . "user-trip handler address #50, for O_BIT")
+    ("U_BIT" . "rA event-flag bit #04: floating underflow")
+    ("U_Handler" . "user-trip handler address #60, for U_BIT")
+    ("Z_BIT" . "rA event-flag bit #02: floating division by zero")
+    ("Z_Handler" . "user-trip handler address #70, for Z_BIT")
+    ("X_BIT" . "rA event-flag bit #01: floating inexact result")
+    ("X_Handler" . "user-trip handler address #80, for X_BIT"))
   "Constant symbols checksmix predefines, other than special registers.
 Each is (NAME . MEANING).")
 
@@ -202,12 +223,12 @@ Keywords are case-insensitive and upper case, except `debug'."
 
 ;;;; Statements
 
-(defconst mmix--standalone-instructions '("HALT" "SWYM")
+(defconst mmix--standalone-instructions '("HALT" "SWYM" "ESPEC")
   "Instructions that form a whole statement with no operands.")
 
 (defconst mmix--single-operand-keywords
   '("JMP" "JMPB" "RESUME" "SYNC" "LOC" "GREG" "PREFIX" "BYTE"
-    "WYDE" "TETRA" "OCTA")
+    "WYDE" "TETRA" "OCTA" "LOCAL" "BSPEC")
   "Keywords whose statement is complete with a single operand.")
 
 (defconst mmix--rest-of-line-directives '("INCLUDE")
@@ -526,6 +547,13 @@ Group 1 matches a label naming an address, group 2 one naming a value."
      . 'font-lock-constant-face)
     (,mmix--number-regexp 1 'font-lock-number-face)
     ("@" . 'font-lock-number-face)
+    ;; A local label (`2H') in the label field, and its backward/forward
+    ;; references (`2B'/`2F') in an operand. Highlighting a reference as
+    ;; its jump target is out of scope; this just marks the tokens.
+    (,(rx bol (* (any " \t")) (group (any "0-9") "H") symbol-end)
+     1 'font-lock-function-name-face)
+    (,(rx symbol-start (group (any "0-9") (any "BF")) symbol-end)
+     1 'font-lock-variable-name-face)
     (mmix--match-reference
      (1 'font-lock-function-name-face nil t)
      (2 'font-lock-variable-name-face nil t)))
@@ -610,6 +638,12 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Define a numeric or register alias constant")
     (("PREFIX") "PREFIX str"
      "Qualify subsequent unqualified names as str<name>; names beginning with : opt out")
+    (("LOCAL") "LOCAL expr"
+     "Declare register expr local; checked against the global threshold at the close of assembly")
+    (("BSPEC") "BSPEC expr"
+     "Open special mode; only IS, PREFIX, GREG, LOCAL and the four data directives are legal until ESPEC, and their data is discarded rather than assembled")
+    (("ESPEC") "ESPEC"
+     "Close the special mode BSPEC opened")
     (("BYTE") "BYTE expr,..."
      "Emit one byte per operand")
     (("WYDE") "WYDE expr,..."

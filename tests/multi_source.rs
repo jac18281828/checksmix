@@ -21,11 +21,12 @@ fn cross_file_pushj_resolves_to_global_address() {
     asm.parse().expect("multi-source assemble");
 
     assert_eq!(asm.labels.get("Main").copied(), Some(0x100));
-    assert_eq!(asm.labels.get(":Lib").copied(), Some(0x200));
+    // `:Lib` names the same root symbol as `Lib`, keyed without the colon.
+    assert_eq!(asm.labels.get("Lib").copied(), Some(0x200));
 
     // Find the PUSHJ instruction at 0x100 and decode its YZ field as an
     // unsigned forward tetra count from the PUSHJ's own address. With Main at
-    // 0x100 and :Lib at 0x200, the field is (0x200 - 0x100) / 4 = 0x40.
+    // 0x100 and Lib at 0x200, the field is (0x200 - 0x100) / 4 = 0x40.
     let (addr, inst) = asm
         .instructions
         .iter()
@@ -36,5 +37,5 @@ fn cross_file_pushj_resolves_to_global_address() {
     assert_eq!(bytes[0], 0xF2, "PUSHJ opcode = 0xF2");
     let yz = ((bytes[2] as u16) << 8) | bytes[3] as u16;
     let target = *addr + (yz as u64) * 4;
-    assert_eq!(target, 0x200, "PUSHJ target should be :Lib at 0x200");
+    assert_eq!(target, 0x200, "PUSHJ target should be Lib at 0x200");
 }

@@ -57,17 +57,19 @@ fn include_directive_resolves_label_from_included_file() {
     asm.parse()
         .expect("assemble include_main.mms + include_lib.mms");
 
+    // `:LibHalt` names the same root symbol as `LibHalt`, keyed without
+    // the colon.
     assert_eq!(
-        asm.labels.get(":LibHalt").copied(),
+        asm.labels.get("LibHalt").copied(),
         Some(0x100),
-        ":LibHalt, defined in the included file, should resolve at LOC #100"
+        "LibHalt, defined in the included file, should resolve at LOC #100"
     );
     let (addr, _) = asm
         .instructions
         .iter()
         .find(|(_, inst)| format!("{:?}", inst).contains("PUSHJ"))
         .expect("PUSHJ instruction present");
-    assert_eq!(*addr, 0x104, "Main's PUSHJ follows :LibHalt's TRAP");
+    assert_eq!(*addr, 0x104, "Main's PUSHJ follows LibHalt's TRAP");
 }
 
 /// Per-file diagnostics: a parse error inside an INCLUDE-d file reports

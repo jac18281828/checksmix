@@ -111,6 +111,13 @@ INCLUDE is a preprocessor stage outside the grammar."
                           (mmix-symbol-help ":Fputs")))
   (should-not (mmix-symbol-help "rj")))
 
+(ert-deftest mmix-help-describes-the-seventeen-new-predefined-symbols ()
+  "Inf, D_BIT and X_Handler carry their help strings."
+  (should (equal (mmix-symbol-help "Inf")
+                 "Inf: positive floating-point infinity, #7FF0000000000000"))
+  (should (string-match-p "divide check" (mmix-symbol-help "D_BIT")))
+  (should (string-match-p "for X_BIT" (mmix-symbol-help "X_Handler"))))
+
 (ert-deftest mmix-help-works-from-a-lone-copy ()
   "A copy of the mode alone in a directory, loaded by a fresh Emacs, has help."
   (let ((dir (make-temp-file "mmix-mode-" t)))
@@ -224,6 +231,24 @@ A name bound by IS or GREG is a variable, not a label."
     (should (eq (mmix-test--face-at "Main") 'font-lock-function-name-face))
     (should (eq (mmix-test--face-at "2ADDU") 'font-lock-keyword-face))
     (should (eq (mmix-test--face-at "@") 'font-lock-number-face))))
+
+(ert-deftest mmix-local-and-special-mode-directives-fontify ()
+  "LOCAL, BSPEC and ESPEC are directives, case-insensitively."
+  (mmix-test--with-buffer
+      (concat "\tLOCAL\t$10\n"
+              "\tbspec\t1\n"
+              "\tESPEC\n")
+    (should (eq (mmix-test--face-at "LOCAL") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "bspec") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "ESPEC") 'font-lock-preprocessor-face))))
+
+(ert-deftest mmix-local-labels-and-references-fontify ()
+  "A local label (`2H') and its references (`2B', `2F') carry a face.
+Highlighting a reference as its jump target is out of scope."
+  (mmix-test--with-buffer "2H\tJMP\t2F\n2H\tJMP\t2B\n"
+    (should (eq (mmix-test--face-at "2H") 'font-lock-function-name-face))
+    (should (eq (mmix-test--face-at "2F") 'font-lock-variable-name-face))
+    (should (eq (mmix-test--face-at "2B") 'font-lock-variable-name-face))))
 
 (ert-deftest mmix-comments-strings-and-character-literals ()
   "`%' opens a comment; `;' separates statements and fonts as neither.

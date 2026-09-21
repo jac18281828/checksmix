@@ -11,9 +11,21 @@ COMMENT = _{ "%" ~ (!"\n" ~ ANY)* }
 word_end = _{ !(ASCII_ALPHANUMERIC | "_") }
 
 // Identifier that may carry a leading ':' marking a global (linkage-visible)
-// symbol. The ':' is part of the stored name; references to ':Foo' and 'Foo'
-// are distinct keys in the symbol table.
-global_id = @{ ":"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+// symbol, and interior ':'s qualifying it (`Foo:Bar`). A colon counts as
+// part of the name only when an identifier character follows it; a colon
+// with whitespace or end of line after it is `label_def`'s own trailing
+// separator, never absorbed here -- so `Main: SET $1,0` still names `Main`
+// while `Main:SET $1,0` reads `Main:SET` as one symbol.
+global_id_part = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+global_id = @{ ":"? ~ global_id_part ~ (":" ~ global_id_part)* }
+
+// A decimal digit followed by `H` names a local label; `B`/`F` reference the
+// nearest one behind/ahead in source order. Upper case only -- `2h`, `2b`
+// and `2f` are not local symbols. `word_end` keeps a longer identifier from
+// ever being mistaken for one of these.
+local_label_def = @{ ASCII_DIGIT ~ "H" ~ word_end }
+local_ref_back = @{ ASCII_DIGIT ~ "B" ~ word_end }
+local_ref_fwd = @{ ASCII_DIGIT ~ "F" ~ word_end }
 
 // Numeric literals: decimal (a leading '0' is an ordinary digit -- the
 // MMIXAL reference has no octal spelling) and hex (#... or 0x...).
@@ -40,14 +52,17 @@ weak_op = { "+" | "-" | "|" | "^" }
 
 expr = ${ term ~ (weak_op ~ term)* }
 term = { primary ~ (strong_op ~ primary)* }
-primary = { unary_op ~ primary | group | at_symbol | constant | global_id }
+primary = {
+    unary_op ~ primary | group | at_symbol | local_ref_back | local_ref_fwd | constant | global_id
+}
 
 group_ws = _{ " " | "\t" }
 group = { "(" ~ group_ws* ~ group_expr ~ group_ws* ~ ")" }
 group_expr = { group_term ~ (group_ws* ~ weak_op ~ group_ws* ~ group_term)* }
 group_term = { group_primary ~ (group_ws* ~ strong_op ~ group_ws* ~ group_primary)* }
 group_primary = {
-    unary_op ~ group_ws* ~ group_primary | group | at_symbol | constant | global_id
+    unary_op ~ group_ws* ~ group_primary | group | at_symbol
+  | local_ref_back | local_ref_fwd | constant | global_id
 }
 
 // Identifiers (kept for backward compatibility in some contexts)
@@ -71,6 +86,9 @@ directive_loc = @{ ^"LOC" ~ word_end }
 directive_is = @{ ^"IS" ~ word_end }
 directive_greg = @{ ^"GREG" ~ word_end }
 directive_prefix = @{ ^"PREFIX" ~ word_end }
+directive_local = @{ ^"LOCAL" ~ word_end }
+directive_bspec = @{ ^"BSPEC" ~ word_end }
+directive_espec = @{ ^"ESPEC" ~ word_end }
 
 // PREFIX text is prepended verbatim, so PREFIX foo: makes bar define
 // foo:bar (PREFIX foo would give foobar); PREFIX : resets to the root
@@ -93,8 +111,11 @@ data_directive = {
 greg_directive = { directive_greg ~ expr }
 
 loc_directive = { directive_loc ~ expr }
-is_directive = { global_id ~ directive_is ~ expr }
+is_directive = { (local_label_def | global_id) ~ directive_is ~ expr }
 prefix_directive = { directive_prefix ~ prefix_arg }
+local_directive = { directive_local ~ expr }
+bspec_directive = { directive_bspec ~ expr }
+espec_directive = { directive_espec }
 
 // Group all directives under a single rule
 // Note: debug directives are handled by preprocessor, not grammar
@@ -103,6 +124,9 @@ directive = {
   | is_directive
   | loc_directive
   | greg_directive
+  | local_directive
+  | bspec_directive
+  | espec_directive
   | data_directive
 }
 
@@ -113,6 +137,7 @@ directive = {
 statement = {
     directive
   | instruction
+  | local_label_def ~ (instruction | directive)?
   | label_def ~ (instruction | directive)?
 }
 mnemonic_setmh = @{ ^"SETMH" ~ word_end }

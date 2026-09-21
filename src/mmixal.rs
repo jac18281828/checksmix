@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
 
@@ -963,6 +963,39 @@ pub struct MMixAssembler {
     /// table's 256-entry limit, if the program has one. `parse` turns this
     /// into an assembly error before walking either pass.
     debug_directive_overflow: Option<(String, usize)>,
+    /// The ten local-label lists, one per digit: each holds every `dH`
+    /// occurrence's bound value, in source order, across the whole program.
+    /// Built by pass 1; pass 2 reads them and appends nothing.
+    local_labels: [Vec<SymbolType>; 10],
+    /// Per-digit count of `dH` occurrences passed so far in the CURRENT
+    /// pass. Reset to zero before pass 2 so it replays pass 1's sequence;
+    /// `dB` reads index `count - 1` and `dF` reads index `count`, bumped
+    /// by one when the referencing statement itself defines `dH` (see
+    /// `local_pending_digit`).
+    local_occurrence: [usize; 10],
+    /// The digit the statement CURRENTLY being walked defines a `dH` for,
+    /// if any -- set before its operand is evaluated and cleared after.
+    /// A same-line reference to that same digit never resolves to the
+    /// statement's own (not yet recorded) occurrence: `2H JMP 2F` on one
+    /// line and `2H JMP 2B` on the next must jump to each other, not to
+    /// themselves. `dF` reads one past `local_occurrence[digit]` in this
+    /// case, since that slot is the statement's own, about to be pushed.
+    local_pending_digit: Option<u8>,
+    /// Every `LOCAL` declaration seen in pass 1: the declared register, and
+    /// the site for the end-of-assembly threshold diagnostic.
+    local_declarations: Vec<(u8, String, usize)>,
+    /// Whether the walk is currently between a `BSPEC` and its `ESPEC`.
+    in_special_mode: bool,
+    /// Where the currently open `BSPEC` was written, for the
+    /// unterminated-at-end-of-input diagnostic.
+    bspec_open_site: Option<(String, usize)>,
+    /// Every predefined symbol's root-namespace key, snapshotted right
+    /// after `new` seeds them, before any user statement runs.
+    predefined_names: HashSet<String>,
+    /// First (file, line) a still-predefined name was named in an operand.
+    /// A later label/IS/GREG redefining that name is an error exactly when
+    /// this is populated: the reference already saw the predefined value.
+    predefined_used_at: HashMap<String, (String, usize)>,
 }
 
 /// The original (user-facing) source location of an assembled instruction:
@@ -1106,13 +1139,14 @@ impl MMixAssembler {
         bytes
     }
 
-    /// Insert a predefined symbol under both `name` and `:name` so it remains
-    /// reachable from inside any PREFIX region. Predefined entries are not
+    /// Insert a predefined symbol at its root-namespace key. The root
+    /// prefix is the empty string and a leading `:` on a reference is
+    /// stripped before lookup (`qualify_name`), so `:name` reaches this
+    /// same entry with no second copy needed. Predefined entries are not
     /// tracked in `symbol_origins`, so user code may shadow them without
     /// triggering a redefinition error.
     fn seed_predefined(symbols: &mut HashMap<String, SymbolType>, name: &str, ty: SymbolType) {
         symbols.insert(name.to_string(), ty);
-        symbols.insert(format!(":{}", name), ty);
     }
 
     pub fn new(source: &str, filename: &str) -> Self {
@@ -1226,6 +1260,36 @@ impl MMixAssembler {
             Self::seed_predefined(&mut symbols, name, SymbolType::Constant(mode));
         }
 
+        // Inf: positive floating-point infinity, the reference's two tetras
+        // #7ff00000 and 0 read as one octabyte.
+        Self::seed_predefined(
+            &mut symbols,
+            "Inf",
+            SymbolType::Constant(0x7FF0000000000000),
+        );
+
+        // rA's eight event-flag bits and the eight user-trip handler
+        // addresses, in the reference's own D V W I O U Z X order. The bit
+        // values match `RA_D` … `RA_X` (`src/mmix/registers.rs`) and the
+        // handler addresses match `MMIX.md`'s "User trips" table.
+        for (bit_name, bit, handler_name, handler) in [
+            ("D_BIT", 0x80u64, "D_Handler", 0x10u64),
+            ("V_BIT", 0x40, "V_Handler", 0x20),
+            ("W_BIT", 0x20, "W_Handler", 0x30),
+            ("I_BIT", 0x10, "I_Handler", 0x40),
+            ("O_BIT", 0x08, "O_Handler", 0x50),
+            ("U_BIT", 0x04, "U_Handler", 0x60),
+            ("Z_BIT", 0x02, "Z_Handler", 0x70),
+            ("X_BIT", 0x01, "X_Handler", 0x80),
+        ] {
+            Self::seed_predefined(&mut symbols, bit_name, SymbolType::Constant(bit));
+            Self::seed_predefined(&mut symbols, handler_name, SymbolType::Constant(handler));
+        }
+
+        // Every predefined name lives at the root namespace; a program's own
+        // definition of one of these is a plain shadow, tracked from here.
+        let predefined_names: HashSet<String> = symbols.keys().cloned().collect();
+
         // Blank whole-line comments, then expand debug directives.
         let blanked_source = Self::blank_whole_line_comments(source);
         let (preprocessed_source, debug_strings, overflow) =
@@ -1251,6 +1315,14 @@ impl MMixAssembler {
             debug_info: BTreeMap::new(),
             debug_strings,
             debug_directive_overflow: overflow,
+            local_labels: Default::default(),
+            local_occurrence: [0; 10],
+            local_pending_digit: None,
+            local_declarations: Vec::new(),
+            in_special_mode: false,
+            bspec_open_site: None,
+            predefined_names,
+            predefined_used_at: HashMap::new(),
         }
     }
 
@@ -1281,59 +1353,115 @@ impl MMixAssembler {
         &self.debug_strings
     }
 
-    /// Apply the active PREFIX to a raw identifier. Names starting with ':'
-    /// (the global namespace marker) are returned verbatim.
+    /// Apply the active PREFIX to a raw identifier. The root prefix is the
+    /// empty string; a name beginning with ':' opts out of the active
+    /// PREFIX and is stored at the root, one leading colon stripped -- so
+    /// `x` and `:x` name the same root-level symbol.
     fn qualify_name(&self, raw: &str) -> String {
-        if raw.starts_with(':') {
-            raw.to_string()
-        } else {
-            format!("{}{}", self.current_prefix, raw)
+        match raw.strip_prefix(':') {
+            Some(rest) => rest.to_string(),
+            None => format!("{}{}", self.current_prefix, raw),
         }
+    }
+
+    /// The value currently stored under `name`, checking `labels` before
+    /// `symbols` -- the order that lets a program's own label win over a
+    /// predefined symbol of the same name.
+    fn existing_value(&self, name: &str) -> Option<SymbolType> {
+        self.labels
+            .get(name)
+            .map(|&addr| SymbolType::Constant(addr))
+            .or_else(|| self.symbols.get(name).copied())
+    }
+
+    /// Checks whether `name` may be bound to `candidate`, per the
+    /// redefinition rules: an existing user definition must match
+    /// `candidate` exactly (a differing one is the ordinary redefinition
+    /// error); a still-predefined, not-yet-shadowed name may be redefined
+    /// only if no earlier statement has used its predefined value.
+    /// `Ok(true)` means the caller should record the new origin and store
+    /// `candidate`; `Ok(false)` means an equal redefinition needs no
+    /// further action.
+    fn check_definable(
+        &self,
+        name: &str,
+        candidate: SymbolType,
+        line: usize,
+    ) -> Result<bool, String> {
+        if let Some((prev_file, prev_line)) = self
+            .label_origins
+            .get(name)
+            .or_else(|| self.symbol_origins.get(name))
+        {
+            return if self.existing_value(name) == Some(candidate) {
+                Ok(false)
+            } else {
+                Err(format!(
+                    "{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                    self.current_filename, line, name, prev_file, prev_line
+                ))
+            };
+        }
+        if self.predefined_names.contains(name)
+            && let Some((used_file, used_line)) = self.predefined_used_at.get(name)
+        {
+            return Err(format!(
+                "{}:{}: predefined symbol '{}' redefined after its value was used at {}:{}",
+                self.current_filename, line, name, used_file, used_line
+            ));
+        }
+        Ok(true)
     }
 
     /// Define a label (instruction/data/standalone) at the current address.
-    /// Returns an error if the qualified name was already defined by user code.
     fn define_label(&mut self, raw: &str, addr: u64, line: usize) -> Result<(), String> {
         let name = self.qualify_name(raw);
-        if let Some((prev_file, prev_line)) = self.label_origins.get(&name) {
-            return Err(format!(
-                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
-                self.current_filename, line, name, prev_file, prev_line
-            ));
+        if self.check_definable(&name, SymbolType::Constant(addr), line)? {
+            self.label_origins
+                .insert(name.clone(), (self.current_filename.clone(), line));
+            self.labels.insert(name, addr);
         }
-        if let Some((prev_file, prev_line)) = self.symbol_origins.get(&name) {
-            return Err(format!(
-                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
-                self.current_filename, line, name, prev_file, prev_line
-            ));
-        }
-        self.label_origins
-            .insert(name.clone(), (self.current_filename.clone(), line));
-        self.labels.insert(name, addr);
         Ok(())
     }
 
-    /// Define an IS- or GREG-bound symbol. Returns an error if the qualified
-    /// name was already defined by user code (predefined symbols are not
-    /// tracked, so user code may shadow them as before).
+    /// Define an IS- or GREG-bound symbol.
     fn define_symbol(&mut self, raw: &str, ty: SymbolType, line: usize) -> Result<(), String> {
         let name = self.qualify_name(raw);
-        if let Some((prev_file, prev_line)) = self.symbol_origins.get(&name) {
-            return Err(format!(
-                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
-                self.current_filename, line, name, prev_file, prev_line
-            ));
+        if self.check_definable(&name, ty, line)? {
+            self.symbol_origins
+                .insert(name.clone(), (self.current_filename.clone(), line));
+            self.symbols.insert(name, ty);
         }
-        if let Some((prev_file, prev_line)) = self.label_origins.get(&name) {
-            return Err(format!(
-                "{}:{}: symbol '{}' redefined (first defined at {}:{})",
-                self.current_filename, line, name, prev_file, prev_line
-            ));
-        }
-        self.symbol_origins
-            .insert(name.clone(), (self.current_filename.clone(), line));
-        self.symbols.insert(name, ty);
         Ok(())
+    }
+
+    /// Record `name`'s first use site if it is still an unshadowed
+    /// predefined symbol -- the site a later redefinition attempt cites.
+    fn mark_predefined_use(&mut self, name: &str, line: usize) {
+        if self.predefined_names.contains(name)
+            && !self.label_origins.contains_key(name)
+            && !self.symbol_origins.contains_key(name)
+            && !self.predefined_used_at.contains_key(name)
+        {
+            self.predefined_used_at
+                .insert(name.to_string(), (self.current_filename.clone(), line));
+        }
+    }
+
+    /// Walk `pair` and every descendant, marking each `global_id` leaf as a
+    /// use. Callers scope `pair` to an operand -- never a definition's own
+    /// name -- so every `global_id` found here is a reference, not a
+    /// binding.
+    fn scan_uses_for_redefinition(&mut self, pair: &pest::iterators::Pair<Rule>) {
+        if pair.as_rule() == Rule::global_id {
+            let (line, _) = pair.line_col();
+            let qualified = self.qualify_name(pair.as_str());
+            self.mark_predefined_use(&qualified, line);
+            return;
+        }
+        for inner in pair.clone().into_inner() {
+            self.scan_uses_for_redefinition(&inner);
+        }
     }
 
     /// Format Pest parse errors in a user-friendly way. Pest reports a line
@@ -1657,7 +1785,7 @@ impl MMixAssembler {
     /// the keyword itself is confirmed present. `directive_is` isn't here:
     /// it is the one directive whose own grammar folds in the preceding
     /// label, so it needs the whole segment, not `remark_text` alone.
-    const DIRECTIVE_KEYWORD_RULES: [(Rule, Rule); 7] = [
+    const DIRECTIVE_KEYWORD_RULES: [(Rule, Rule); 10] = [
         (Rule::directive_loc, Rule::loc_directive),
         (Rule::directive_greg, Rule::greg_directive),
         (Rule::directive_prefix, Rule::prefix_directive),
@@ -1665,6 +1793,9 @@ impl MMixAssembler {
         (Rule::directive_wyde, Rule::data_directive),
         (Rule::directive_tetra, Rule::data_directive),
         (Rule::directive_octa, Rule::data_directive),
+        (Rule::directive_local, Rule::local_directive),
+        (Rule::directive_bspec, Rule::bspec_directive),
+        (Rule::directive_espec, Rule::espec_directive),
     ];
 
     /// When `remark_text` opens with a recognized mnemonic or directive
@@ -1760,6 +1891,9 @@ impl MMixAssembler {
         let sources = self.sources.clone();
         debug!("Pass 1: Collecting labels and symbols");
         self.current_prefix.clear();
+        self.local_occurrence = [0; 10];
+        self.in_special_mode = false;
+        self.bspec_open_site = None;
 
         for (index, unit) in sources.iter().enumerate() {
             self.current_filename = unit.filename.clone();
@@ -1818,6 +1952,25 @@ impl MMixAssembler {
             }
         }
 
+        if let Some((file, line)) = &self.bspec_open_site {
+            return Err(format!(
+                "{file}:{line}: syntax error: BSPEC has no matching ESPEC before end of input"
+            ));
+        }
+
+        // LOCAL's threshold is fixed only once every GREG has allocated:
+        // one above the lowest register GREG handed out, `$31` at the
+        // lowest -- $0..$31 are local on every MMIX regardless of GREG
+        // activity.
+        let threshold = (self.next_greg as u16).saturating_add(1).max(32);
+        for (reg, file, line) in &self.local_declarations {
+            if u16::from(*reg) >= threshold {
+                return Err(format!(
+                    "{file}:{line}: LOCAL ${reg} is not below the global threshold ${threshold}"
+                ));
+            }
+        }
+
         debug!(
             "Pass 1 complete: {} labels, {} symbols",
             self.labels.len(),
@@ -1827,6 +1980,8 @@ impl MMixAssembler {
         let saved_addr = self.current_addr;
         self.current_addr = 0;
         self.current_prefix.clear();
+        self.local_occurrence = [0; 10];
+        self.in_special_mode = false;
 
         debug!("Pass 2: Generating instructions");
 
@@ -1861,6 +2016,7 @@ impl MMixAssembler {
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn first_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
         let mut pending_label: Option<(String, usize)> = None;
+        let mut pending_local: Option<(u8, usize)> = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -1869,12 +2025,33 @@ impl MMixAssembler {
                     let ident = inner_pair.into_inner().next().unwrap();
                     pending_label = Some((ident.as_str().to_string(), line));
                 }
+                Rule::local_label_def => {
+                    let (line, _) = inner_pair.line_col();
+                    let digit = Self::local_digit(inner_pair.as_str());
+                    pending_local = Some((digit, line));
+                    self.local_pending_digit = Some(digit);
+                }
                 Rule::instruction => {
+                    if self.in_special_mode {
+                        return Err(Self::special_mode_content_error(
+                            &self.current_filename,
+                            &inner_pair,
+                            "an instruction",
+                        ));
+                    }
                     self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
+                    self.scan_uses_for_redefinition(&inner_pair);
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
                     if let Some((raw, line)) = pending_label.take() {
                         self.define_label(&raw, self.current_addr, line)?;
+                    }
+                    if let Some((digit, _)) = pending_local.take() {
+                        self.record_local_label(
+                            digit,
+                            SymbolType::Constant(self.current_addr),
+                            true,
+                        );
                     }
                     self.current_addr += size;
                 }
@@ -1882,22 +2059,65 @@ impl MMixAssembler {
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
-                            let alignment = Self::data_directive_alignment(&directive_pair)?;
-                            self.align_current_addr(alignment);
-                            let size = self.data_directive_size(directive_pair.clone())?;
-                            if let Some((raw, line)) = pending_label.take() {
-                                self.define_label(&raw, self.current_addr, line)?;
+                            if self.in_special_mode {
+                                // Discarded: no bytes, no address movement,
+                                // but a label on the line still binds to
+                                // the (unmoved) current address.
+                                if let Some((raw, line)) = pending_label.take() {
+                                    self.define_label(&raw, self.current_addr, line)?;
+                                }
+                                if let Some((digit, _)) = pending_local.take() {
+                                    self.record_local_label(
+                                        digit,
+                                        SymbolType::Constant(self.current_addr),
+                                        true,
+                                    );
+                                }
+                            } else {
+                                self.scan_uses_for_redefinition(&directive_pair);
+                                let alignment = Self::data_directive_alignment(&directive_pair)?;
+                                self.align_current_addr(alignment);
+                                let size = self.data_directive_size(directive_pair.clone())?;
+                                if let Some((raw, line)) = pending_label.take() {
+                                    self.define_label(&raw, self.current_addr, line)?;
+                                }
+                                if let Some((digit, _)) = pending_local.take() {
+                                    self.record_local_label(
+                                        digit,
+                                        SymbolType::Constant(self.current_addr),
+                                        true,
+                                    );
+                                }
+                                self.current_addr += size;
                             }
-                            self.current_addr += size;
                         }
                         Rule::loc_directive => {
+                            if self.in_special_mode {
+                                return Err(Self::special_mode_content_error(
+                                    &self.current_filename,
+                                    &directive_pair,
+                                    "LOC",
+                                ));
+                            }
                             // A label on a LOC line names the location the
                             // counter held before LOC moves it, per the
-                            // MMIXAL reference's `X LOC @+500`.
+                            // MMIXAL reference's `X LOC @+500`. The operand
+                            // is evaluated before this line's own local
+                            // label (if any) is recorded, so a same-digit
+                            // reference in it never resolves to itself.
+                            let addr_before = self.current_addr;
                             if let Some((raw, line)) = pending_label.take() {
-                                self.define_label(&raw, self.current_addr, line)?;
+                                self.define_label(&raw, addr_before, line)?;
                             }
+                            self.scan_uses_for_redefinition(&directive_pair);
                             self.parse_loc_directive(directive_pair)?;
+                            if let Some((digit, _)) = pending_local.take() {
+                                self.record_local_label(
+                                    digit,
+                                    SymbolType::Constant(addr_before),
+                                    true,
+                                );
+                            }
                         }
                         Rule::greg_directive => {
                             // GREG allocates a global register; an attached
@@ -1913,6 +2133,13 @@ impl MMixAssembler {
                                 reg
                             };
 
+                            let mut greg_parts = directive_pair.clone().into_inner();
+                            let _directive = greg_parts.next();
+                            let operand = greg_parts.next().unwrap();
+                            self.scan_uses_for_redefinition(&operand);
+                            let value = self.parse_number(operand)?;
+                            self.greg_inits.push((allocated_reg, value));
+
                             if let Some((raw, line)) = pending_label.take() {
                                 self.define_symbol(
                                     &raw,
@@ -1920,11 +2147,13 @@ impl MMixAssembler {
                                     line,
                                 )?;
                             }
-
-                            let mut greg_parts = directive_pair.clone().into_inner();
-                            let _directive = greg_parts.next();
-                            let value = self.parse_number(greg_parts.next().unwrap())?;
-                            self.greg_inits.push((allocated_reg, value));
+                            if let Some((digit, _)) = pending_local.take() {
+                                self.record_local_label(
+                                    digit,
+                                    SymbolType::Register(allocated_reg),
+                                    true,
+                                );
+                            }
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair, true)?;
@@ -1932,6 +2161,33 @@ impl MMixAssembler {
                         }
                         Rule::prefix_directive => {
                             self.parse_prefix_directive(directive_pair);
+                        }
+                        Rule::local_directive => {
+                            Self::require_blank_label(
+                                &self.current_filename,
+                                &directive_pair,
+                                "LOCAL",
+                                pending_label.is_some() || pending_local.is_some(),
+                            )?;
+                            self.handle_local_directive(directive_pair)?;
+                        }
+                        Rule::bspec_directive => {
+                            Self::require_blank_label(
+                                &self.current_filename,
+                                &directive_pair,
+                                "BSPEC",
+                                pending_label.is_some() || pending_local.is_some(),
+                            )?;
+                            self.open_special_mode(directive_pair)?;
+                        }
+                        Rule::espec_directive => {
+                            Self::require_blank_label(
+                                &self.current_filename,
+                                &directive_pair,
+                                "ESPEC",
+                                pending_label.is_some() || pending_local.is_some(),
+                            )?;
+                            self.close_special_mode(&directive_pair)?;
                         }
                         _ => {}
                     }
@@ -1944,7 +2200,94 @@ impl MMixAssembler {
         if let Some((raw, line)) = pending_label {
             self.define_label(&raw, self.current_addr, line)?;
         }
+        if let Some((digit, _)) = pending_local {
+            self.record_local_label(digit, SymbolType::Constant(self.current_addr), true);
+        }
+        self.local_pending_digit = None;
 
+        Ok(())
+    }
+
+    /// Diagnostic for an instruction or `LOC` found between `BSPEC` and
+    /// `ESPEC`: only `IS`, `PREFIX`, `GREG`, `LOCAL` and the four data
+    /// directives are legal there.
+    fn special_mode_content_error(
+        filename: &str,
+        pair: &pest::iterators::Pair<Rule>,
+        what: &str,
+    ) -> String {
+        let (line, _) = pair.line_col();
+        format!("{filename}:{line}: syntax error: {what} is not allowed inside BSPEC/ESPEC")
+    }
+
+    /// `LOCAL`, `BSPEC` and `ESPEC` take no label field.
+    fn require_blank_label(
+        filename: &str,
+        pair: &pest::iterators::Pair<Rule>,
+        keyword: &str,
+        has_pending_label: bool,
+    ) -> Result<(), String> {
+        if has_pending_label {
+            let (line, _) = pair.line_col();
+            return Err(format!(
+                "{filename}:{line}: syntax error: {keyword} takes no label"
+            ));
+        }
+        Ok(())
+    }
+
+    /// `LOCAL expr`: `expr` must resolve to a register, checked at the
+    /// close of assembly against the global threshold `next_greg` derives.
+    fn handle_local_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let (line, _) = pair.line_col();
+        let mut parts = pair.into_inner();
+        let _keyword = parts.next();
+        let operand = parts.next().unwrap();
+        self.scan_uses_for_redefinition(&operand);
+        let reg = self.parse_register(operand)?;
+        self.local_declarations
+            .push((reg, self.current_filename.clone(), line));
+        Ok(())
+    }
+
+    /// `BSPEC expr`: opens special mode. `BSPEC` does not nest, and its
+    /// operand must fit in two bytes.
+    fn open_special_mode(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let (line, _) = pair.line_col();
+        if self.in_special_mode {
+            return Err(format!(
+                "{}:{}: syntax error: BSPEC does not nest",
+                self.current_filename, line
+            ));
+        }
+        let mut parts = pair.into_inner();
+        let _keyword = parts.next();
+        let operand = parts.next().unwrap();
+        self.scan_uses_for_redefinition(&operand);
+        let value = self.parse_number(operand)?;
+        if value > 0xFFFF {
+            return Err(format!(
+                "{}:{}: syntax error: BSPEC operand {} does not fit in two bytes",
+                self.current_filename, line, value
+            ));
+        }
+        self.in_special_mode = true;
+        self.bspec_open_site = Some((self.current_filename.clone(), line));
+        Ok(())
+    }
+
+    /// `ESPEC`: closes special mode; an `ESPEC` with no open `BSPEC` is an
+    /// error.
+    fn close_special_mode(&mut self, pair: &pest::iterators::Pair<Rule>) -> Result<(), String> {
+        let (line, _) = pair.line_col();
+        if !self.in_special_mode {
+            return Err(format!(
+                "{}:{}: syntax error: ESPEC has no matching BSPEC",
+                self.current_filename, line
+            ));
+        }
+        self.in_special_mode = false;
+        self.bspec_open_site = None;
         Ok(())
     }
 
@@ -1959,6 +2302,7 @@ impl MMixAssembler {
         // `record_debug_info` maps it back to the original source line.
         let (line, _) = pair.line_col();
         let mut label_name: Option<String> = None;
+        let mut pending_local: Option<u8> = None;
         let mut inst: Option<MMixInstruction> = None;
 
         for inner_pair in pair.into_inner() {
@@ -1967,40 +2311,69 @@ impl MMixAssembler {
                     let ident = inner_pair.into_inner().next().unwrap();
                     label_name = Some(ident.as_str().to_string());
                 }
+                Rule::local_label_def => {
+                    let digit = Self::local_digit(inner_pair.as_str());
+                    pending_local = Some(digit);
+                    self.local_pending_digit = Some(digit);
+                }
                 Rule::instruction => {
                     self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
                     if let Some(raw) = label_name.take() {
                         let qualified = self.qualify_name(&raw);
                         self.labels.insert(qualified, self.current_addr);
                     }
+                    // Evaluated before this line's own local label (if any)
+                    // is recorded, so a same-digit reference in an operand
+                    // never resolves to itself.
                     inst = Some(self.parse_instruction(inner_pair)?);
+                    if let Some(digit) = pending_local.take() {
+                        self.record_local_label(digit, SymbolType::Constant(0), false);
+                    }
                 }
                 Rule::directive => {
                     let directive_pair = inner_pair.into_inner().next().unwrap();
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
-                            let alignment = Self::data_directive_alignment(&directive_pair)?;
-                            self.align_current_addr(alignment);
-                            if let Some(raw) = label_name.take() {
-                                let qualified = self.qualify_name(&raw);
-                                self.labels.insert(qualified, self.current_addr);
-                            }
-                            let instructions = self.parse_data_directive(directive_pair)?;
-                            for instruction in instructions {
-                                let size = Self::instruction_size(&instruction);
-                                self.record_debug_info(self.current_addr, line);
-                                self.instructions.push((self.current_addr, instruction));
-                                self.current_addr += size;
+                            if self.in_special_mode {
+                                if let Some(raw) = label_name.take() {
+                                    let qualified = self.qualify_name(&raw);
+                                    self.labels.insert(qualified, self.current_addr);
+                                }
+                                if let Some(digit) = pending_local.take() {
+                                    self.record_local_label(digit, SymbolType::Constant(0), false);
+                                }
+                            } else {
+                                let alignment = Self::data_directive_alignment(&directive_pair)?;
+                                self.align_current_addr(alignment);
+                                if let Some(raw) = label_name.take() {
+                                    let qualified = self.qualify_name(&raw);
+                                    self.labels.insert(qualified, self.current_addr);
+                                }
+                                let instructions = self.parse_data_directive(directive_pair)?;
+                                if let Some(digit) = pending_local.take() {
+                                    self.record_local_label(digit, SymbolType::Constant(0), false);
+                                }
+                                for instruction in instructions {
+                                    let size = Self::instruction_size(&instruction);
+                                    self.record_debug_info(self.current_addr, line);
+                                    self.instructions.push((self.current_addr, instruction));
+                                    self.current_addr += size;
+                                }
                             }
                         }
                         Rule::loc_directive => {
                             // Mirrors first pass: the label names the
-                            // location before LOC moves the counter.
+                            // location before LOC moves the counter, and
+                            // the operand is evaluated before this line's
+                            // own local label is recorded.
                             if let Some(raw) = label_name.take() {
                                 let qualified = self.qualify_name(&raw);
                                 self.labels.insert(qualified, self.current_addr);
                             }
                             self.parse_loc_directive(directive_pair)?;
+                            if let Some(digit) = pending_local.take() {
+                                self.record_local_label(digit, SymbolType::Constant(0), false);
+                            }
                         }
                         Rule::greg_directive => {
                             // GREG was already processed in first pass.
@@ -2013,12 +2386,20 @@ impl MMixAssembler {
                                     ));
                                 }
                             }
+                            pending_local.take();
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair, false)?;
                         }
                         Rule::prefix_directive => {
                             self.parse_prefix_directive(directive_pair);
+                        }
+                        Rule::local_directive => {}
+                        Rule::bspec_directive => {
+                            self.in_special_mode = true;
+                        }
+                        Rule::espec_directive => {
+                            self.in_special_mode = false;
                         }
                         _ => {}
                     }
@@ -2040,6 +2421,10 @@ impl MMixAssembler {
             let qualified = self.qualify_name(&raw);
             self.labels.insert(qualified, self.current_addr);
         }
+        if let Some(digit) = pending_local {
+            self.record_local_label(digit, SymbolType::Constant(0), false);
+        }
+        self.local_pending_digit = None;
 
         Ok(())
     }
@@ -3935,12 +4320,14 @@ impl MMixAssembler {
     ) -> Result<(), String> {
         let mut parts = pair.into_inner();
         let lhs = parts.next().unwrap();
+        let lhs_rule = lhs.as_rule();
         let (line, _) = lhs.line_col();
         let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
         let (vline, vcol) = value_pair.line_col();
 
+        self.scan_uses_for_redefinition(&value_pair);
         let symbol_type = match self.eval_expr(value_pair)? {
             ExprValue::Register(r) => {
                 SymbolType::Register(self.require_register_in_range(r, vline, vcol)?)
@@ -3948,7 +4335,9 @@ impl MMixAssembler {
             ExprValue::Pure(value) => SymbolType::Constant(value),
         };
 
-        if checking {
+        if lhs_rule == Rule::local_label_def {
+            self.record_local_label(Self::local_digit(&raw_name), symbol_type, checking);
+        } else if checking {
             self.define_symbol(&raw_name, symbol_type, line)?;
         } else {
             let qualified = self.qualify_name(&raw_name);
@@ -3957,11 +4346,16 @@ impl MMixAssembler {
         Ok(())
     }
 
+    /// `PREFIX`'s operand is stored with one leading ':' stripped, so
+    /// `PREFIX :` is the root (the empty prefix) and `PREFIX :Foo:` equals
+    /// `PREFIX Foo:`. checksmix replaces the prefix outright rather than
+    /// qualifying a relative operand against the current one.
     fn parse_prefix_directive(&mut self, pair: pest::iterators::Pair<Rule>) {
         let mut parts = pair.into_inner();
         let _directive = parts.next(); // Skip "PREFIX" keyword
         let arg = parts.next().expect("prefix_arg required by grammar");
-        self.current_prefix = arg.as_str().to_string();
+        let arg_str = arg.as_str();
+        self.current_prefix = arg_str.strip_prefix(':').unwrap_or(arg_str).to_string();
     }
 
     /// Resolve the Z operand of a base mnemonic (auto-immediate path) into
@@ -4066,19 +4460,32 @@ impl MMixAssembler {
                 let (line, col) = pair.line_col();
                 let text = pair.as_str();
                 let qualified = self.qualify_name(text);
-                if let Some(&symbol_type) = self.symbols.get(&qualified) {
+                // Labels before symbols: a program's own label wins over a
+                // predefined symbol of the same name (a user IS/GREG
+                // symbol already overwrites the predefined entry directly
+                // in `symbols`, so this order alone is what a label needs).
+                if let Some(&label_addr) = self.labels.get(&qualified) {
+                    Ok(ExprValue::Pure(label_addr))
+                } else if let Some(&symbol_type) = self.symbols.get(&qualified) {
                     Ok(match symbol_type {
                         SymbolType::Constant(value) => ExprValue::Pure(value),
                         SymbolType::Register(reg) => ExprValue::Register(reg as u64),
                     })
-                } else if let Some(&label_addr) = self.labels.get(&qualified) {
-                    Ok(ExprValue::Pure(label_addr))
                 } else {
                     Err(format!(
                         "{}:{}:{}: Undefined symbol: {}",
                         self.current_filename, line, col, qualified
                     ))
                 }
+            }
+            Rule::local_ref_back => {
+                let digit = Self::local_digit(pair.as_str());
+                Ok(self.resolve_local_back(digit))
+            }
+            Rule::local_ref_fwd => {
+                let (line, col) = pair.line_col();
+                let digit = Self::local_digit(pair.as_str());
+                self.resolve_local_fwd(digit, line, col)
             }
             other => {
                 let (line, col) = pair.line_col();
@@ -4088,6 +4495,67 @@ impl MMixAssembler {
                 ))
             }
         }
+    }
+
+    /// The digit a local-symbol token (`dH`, `dB` or `dF`) opens with, as
+    /// an index into the ten per-digit lists.
+    fn local_digit(text: &str) -> u8 {
+        text.as_bytes()[0] - b'0'
+    }
+
+    fn symbol_type_to_expr_value(ty: SymbolType) -> ExprValue {
+        match ty {
+            SymbolType::Constant(v) => ExprValue::Pure(v),
+            SymbolType::Register(r) => ExprValue::Register(r as u64),
+        }
+    }
+
+    /// `dB`: the last `dH` of this digit at or before the referencing
+    /// statement, or `0` when none has appeared yet -- never an error.
+    fn resolve_local_back(&self, digit: u8) -> ExprValue {
+        let idx = digit as usize;
+        let occurrence = self.local_occurrence[idx];
+        if occurrence == 0 {
+            ExprValue::Pure(0)
+        } else {
+            Self::symbol_type_to_expr_value(self.local_labels[idx][occurrence - 1])
+        }
+    }
+
+    /// `dF`: the first `dH` of this digit after the referencing statement,
+    /// an error naming the reference when none follows. In pass 1 the list
+    /// for `digit` never holds more than `local_occurrence[digit]` entries
+    /// (pass 1 is still building it), so this always reports undefined
+    /// there, exactly as an undefined named forward reference does.
+    /// `local_pending_digit` bumps the search past the statement's own
+    /// not-yet-recorded occurrence, when it defines this same digit.
+    fn resolve_local_fwd(&self, digit: u8, line: usize, col: usize) -> Result<ExprValue, String> {
+        let idx = digit as usize;
+        let mut index = self.local_occurrence[idx];
+        if self.local_pending_digit == Some(digit) {
+            index += 1;
+        }
+        self.local_labels[idx]
+            .get(index)
+            .map(|&ty| Self::symbol_type_to_expr_value(ty))
+            .ok_or_else(|| {
+                format!(
+                    "{}:{}:{}: Undefined symbol: {}F",
+                    self.current_filename, line, col, digit
+                )
+            })
+    }
+
+    /// Records one `dH` occurrence. `building` is pass 1's own flag: pass 1
+    /// appends `value` to the digit's list, pass 2 only advances the
+    /// per-pass occurrence counter that keeps its `dB`/`dF` reads in step
+    /// with pass 1's completed lists.
+    fn record_local_label(&mut self, digit: u8, value: SymbolType, building: bool) {
+        let idx = digit as usize;
+        if building {
+            self.local_labels[idx].push(value);
+        }
+        self.local_occurrence[idx] += 1;
     }
 
     /// Evaluate a leaf numeric literal: hex, octal, decimal or char.
@@ -5565,10 +6033,11 @@ mod tests {
             :Foo HALT\n";
         let mut asm = MMixAssembler::new(src, "<test>");
         asm.parse().unwrap();
-        assert_eq!(asm.labels.get(":Foo").copied(), Some(0x104));
+        // The root prefix is `:`; `:Foo` and `Foo` name one symbol, keyed
+        // without the colon.
+        assert_eq!(asm.labels.get("Foo").copied(), Some(0x104));
         assert_eq!(asm.labels.get("Main").copied(), Some(0x100));
-        // ':Foo' and 'Foo' are distinct names; only the colon-form was defined.
-        assert!(!asm.labels.contains_key("Foo"));
+        assert!(!asm.labels.contains_key(":Foo"));
     }
 
     #[test]
@@ -5584,7 +6053,7 @@ mod tests {
         asm.add_source(lib_src, "lib.mms");
         asm.parse().unwrap();
         assert_eq!(asm.labels.get("Main").copied(), Some(0x100));
-        assert_eq!(asm.labels.get(":Lib").copied(), Some(0x200));
+        assert_eq!(asm.labels.get("Lib").copied(), Some(0x200));
 
         // Two LOC regions both produced instructions.
         let addrs: Vec<u64> = asm.instructions.iter().map(|(a, _)| *a).collect();
@@ -5620,7 +6089,7 @@ mod tests {
         let mut asm = MMixAssembler::new(a, "a.mms");
         asm.add_source(b, "b.mms");
         let err = asm.parse().expect_err("expected redefinition error");
-        assert!(err.contains("':Foo'"), "err: {}", err);
+        assert!(err.contains("'Foo'"), "err: {}", err);
         assert!(err.contains("a.mms"), "err: {}", err);
         assert!(err.contains("b.mms"), "err: {}", err);
     }
@@ -5661,11 +6130,15 @@ mod tests {
             :Foo IS 9\n";
         let mut asm = MMixAssembler::new(src, "<test>");
         asm.parse().unwrap();
+        // A leading ':' opts out of the active PREFIX and, at the root, is
+        // stored without the colon.
         assert_eq!(
-            asm.symbols.get(":Foo").copied(),
+            asm.symbols.get("Foo").copied(),
             Some(SymbolType::Constant(9))
         );
+        assert!(!asm.symbols.contains_key(":Foo"));
         assert!(!asm.symbols.contains_key("Sub_:Foo"));
+        assert!(!asm.symbols.contains_key("Sub_Foo"));
     }
 
     #[test]
@@ -5697,7 +6170,7 @@ mod tests {
             Some(SymbolType::Constant(1))
         );
         assert_eq!(
-            asm.symbols.get(":Baz").copied(),
+            asm.symbols.get("Baz").copied(),
             Some(SymbolType::Constant(2))
         );
     }
@@ -8201,7 +8674,9 @@ Main    SETI    $1,7
         let mut asm = MMixAssembler::new(":Foo HALT\n_Bar HALT", "<test>");
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
-        assert_eq!(asm.labels.get(":Foo"), Some(&0));
+        // `:Foo` opts out of (the empty) active prefix and is keyed at the
+        // root without its colon.
+        assert_eq!(asm.labels.get("Foo"), Some(&0));
         assert_eq!(asm.labels.get("_Bar"), Some(&4));
     }
 
@@ -8524,7 +8999,9 @@ Main    SETI    $1,7
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
         assert_eq!(asm.labels.get("Main"), Some(&0));
-        assert_eq!(asm.labels.get(":Foo"), Some(&4));
+        // `:Foo` names the same root symbol as `Foo`, keyed without the
+        // colon (§1's root-prefix rule).
+        assert_eq!(asm.labels.get("Foo"), Some(&4));
         assert_eq!(asm.labels.get("_Bar"), Some(&8));
     }
 
@@ -8791,6 +9268,14 @@ Main    SETI    $1,7
     }
 
     #[test]
+    fn test_bare_trailing_hash_assembles_like_no_remark_at_all() {
+        // The tripwire above pins `# anything at all here`, never the bare
+        // `#` alone; this is the C9.3 unit's own proof that it stays
+        // ignored.
+        assert_eq!(assemble_one("SET $1,0 #"), assemble_one("SET $1,0"));
+    }
+
+    #[test]
     fn test_hash_shield_ignores_digit_led_prose_that_would_otherwise_error() {
         assert_eq!(
             assemble_one("SET $1,0 # 2 apples"),
@@ -8888,5 +9373,544 @@ Main    SETI    $1,7
             assemble_err("  2 apples"),
             "<test>:1:3: syntax error: unknown operation: 2 apples"
         );
+    }
+
+    // ---- Local symbols (C9.3) ------------------------------------------
+
+    #[test]
+    fn test_local_labels_forward_and_backward_meet_in_the_middle() {
+        // The reference's own idiom: the first jumps to the second and the
+        // second jumps back to the first -- a same-line local reference
+        // never resolves to that same line's own (not yet recorded)
+        // occurrence.
+        let mut asm = MMixAssembler::new("2H      JMP 2F\n2H      JMP 2B\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].0, 0x0);
+        assert_eq!(asm.instructions[0].1, MMixInstruction::JMP(1));
+        assert_eq!(asm.instructions[1].0, 0x4);
+        assert_eq!(asm.instructions[1].1, MMixInstruction::JMPB(0xFFFFFF));
+    }
+
+    #[test]
+    fn test_local_back_reference_before_any_definition_is_zero() {
+        // `2B` ahead of any `2H` is `0`, never an error.
+        assert_eq!(assemble_one("OCTA 2B"), MMixInstruction::OCTA(0));
+    }
+
+    #[test]
+    fn test_local_forward_reference_with_no_later_definition_is_undefined() {
+        assert_parse_error_contains("OCTA 2F", "Undefined symbol: 2F");
+    }
+
+    #[test]
+    fn test_local_labels_are_independent_per_digit() {
+        let mut asm = MMixAssembler::new(
+            "1H      HALT\n\
+             2H      HALT\n\
+             Main    SET $1,1B\n\
+                     SET $2,2B\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[2].1, MMixInstruction::SETL(1, 0x0));
+        assert_eq!(asm.instructions[3].1, MMixInstruction::SETL(2, 0x4));
+    }
+
+    #[test]
+    fn test_second_local_label_redefines_rather_than_erroring() {
+        let mut asm = MMixAssembler::new(
+            "2H      HALT\n\
+             2H      HALT\n\
+             Main    SET $1,2B\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[2].1, MMixInstruction::SETL(1, 0x4));
+    }
+
+    #[test]
+    fn test_local_label_is_directive_counts_like_a_running_counter() {
+        // The reference's own idiom: `9H IS 9B+1` twice leaves the counter
+        // at 2 (0 -> 1 -> 2).
+        assert_eq!(
+            assemble_one(
+                "9H IS 0\n\
+                 9H IS 9B+1\n\
+                 9H IS 9B+1\n\
+                 Main SET $1,9B\n"
+            ),
+            MMixInstruction::SETL(1, 2)
+        );
+    }
+
+    #[test]
+    fn test_local_label_alone_on_a_line_takes_the_unrounded_counter() {
+        let mut asm = MMixAssembler::new(
+            "Main    BYTE 1\n\
+             2H\n\
+                     OCTA 2B\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        // 2H sits right after the one BYTE, unrounded (address 1); the
+        // following OCTA still aligns to 8.
+        let octa = asm
+            .instructions
+            .iter()
+            .find(|(_, i)| matches!(i, MMixInstruction::OCTA(_)))
+            .unwrap();
+        assert_eq!(octa.1, MMixInstruction::OCTA(1));
+        assert_eq!(octa.0, 8);
+    }
+
+    #[test]
+    fn test_lowercase_local_symbols_are_rejected() {
+        assert_parse_error_contains("2h SET $1,0", "syntax error");
+        assert_parse_error_contains("Main SET $1,2b", "syntax error");
+    }
+
+    #[test]
+    fn test_local_back_reference_after_loc_moves_backward_sees_source_order() {
+        // Resolution is by source order, not by address: a LOC that moves
+        // the counter backward still leaves a later `2B` seeing the
+        // textually preceding `2H`.
+        let mut asm = MMixAssembler::new(
+            "2H      HALT\n\
+             LOC #100\n\
+             LOC #10\n\
+             Main    SET $1,2B\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(1, 0));
+    }
+
+    #[test]
+    fn test_local_label_h_as_an_operand_is_an_error() {
+        assert_parse_error_contains("Main SET $1,2H", "syntax error");
+    }
+
+    #[test]
+    fn test_local_ref_b_in_the_label_field_is_an_error() {
+        assert_parse_error_contains("2B JMP Main\nMain HALT\n", "unknown operation");
+    }
+
+    #[test]
+    fn test_digit_literal_operand_forms_are_unaffected() {
+        assert_eq!(assemble_one("SET $1,2"), MMixInstruction::SETL(1, 2));
+        assert_eq!(assemble_one("SET $1,#2B"), MMixInstruction::SETL(1, 0x2B));
+        assert_eq!(assemble_one("SET $1,0x2B"), MMixInstruction::SETL(1, 0x2B));
+        assert_eq!(
+            assemble_one("16ADDU $1,$2,$3"),
+            MMixInstruction::ADDU16(1, 2, 3)
+        );
+        assert_parse_error_contains("SETL $1,2abc", "syntax error");
+    }
+
+    #[test]
+    fn test_set_1_2f_now_resolves_where_it_once_errored() {
+        let mut asm = MMixAssembler::new("Main SET $1,2F\n2H HALT\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 0x4));
+    }
+
+    #[test]
+    fn test_local_forward_reference_resolves_where_named_ones_do() {
+        let mut asm = MMixAssembler::new(
+            "Main    JMP 2F-4\n\
+                     OCTA 2F\n\
+             2H      HALT\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        // 2H sits at 0x10 (JMP at 0x0..0x3, OCTA aligned at 0x8..0xF).
+        assert!(
+            asm.instructions
+                .iter()
+                .any(|(_, i)| matches!(i, MMixInstruction::OCTA(v) if *v == 0x10))
+        );
+    }
+
+    #[test]
+    fn test_local_forward_reference_as_is_loc_greg_operand_is_undefined() {
+        assert_parse_error_contains("Foo IS 2F\nMain HALT\n", "Undefined symbol: 2F");
+        assert_parse_error_contains("2H IS 2F+1\nMain HALT\n", "Undefined symbol: 2F");
+        assert_parse_error_contains("LOC 2F\nMain HALT\n", "Undefined symbol: 2F");
+        assert_parse_error_contains("G1 GREG 2F\nMain HALT\n", "Undefined symbol: 2F");
+    }
+
+    // ---- Qualified references (C9.3) -----------------------------------
+
+    #[test]
+    fn test_qualified_reference_reads_a_prefix_definition_from_outside() {
+        let mut asm = MMixAssembler::new(
+            "PREFIX Foo:\n\
+             Bar IS 5\n\
+             PREFIX :\n\
+             Main SET $1,Foo:Bar\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_qualified_reference_three_part() {
+        let mut asm = MMixAssembler::new(
+            "PREFIX Foo:Bar:\n\
+             Baz IS 7\n\
+             PREFIX :\n\
+             Main SET $1,Foo:Bar:Baz\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 7));
+    }
+
+    #[test]
+    fn test_leading_colon_qualified_reference_opts_out_of_prefix() {
+        let mut asm = MMixAssembler::new(
+            "Foo IS 3\n\
+             PREFIX Sub_\n\
+             Main SET $1,:Foo\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 3));
+    }
+
+    #[test]
+    fn test_label_with_trailing_colon_and_blank_still_defines_the_plain_name() {
+        let mut asm = MMixAssembler::new("Main: SET $1,0\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Main"), Some(&0));
+        assert!(!asm.labels.contains_key("Main:"));
+    }
+
+    #[test]
+    fn test_label_with_trailing_colon_and_no_blank_is_now_an_error() {
+        // The accepted break: interior colons make `Main:SET` one symbol,
+        // so `Main:SET $1,0` no longer defines `Main`.
+        assert_parse_error_contains("Main:SET $1,0", "syntax error");
+    }
+
+    #[test]
+    fn test_qualified_definition_in_the_label_field() {
+        let mut asm = MMixAssembler::new(
+            "PREFIX Foo:\n\
+             Bar HALT\n\
+             PREFIX :\n\
+             Main SET $1,Foo:Bar\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Foo:Bar"), Some(&0));
+    }
+
+    #[test]
+    fn test_prefix_colon_foo_colon_composes_like_a_relative_reference() {
+        let mut asm = MMixAssembler::new(
+            "PREFIX :Foo:\n\
+             bar IS 5\n\
+             PREFIX :\n\
+             Main SET $1,Foo:bar\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+    }
+
+    // ---- LOCAL (C9.3) ---------------------------------------------------
+
+    #[test]
+    fn test_local_directive_with_a_global_register_assembles() {
+        let mut asm = MMixAssembler::new("LOCAL $10\nMain HALT\n", "<test>");
+        asm.parse().unwrap();
+    }
+
+    #[test]
+    fn test_local_directive_bare_value_draws_the_register_required_diagnostic() {
+        assert_parse_error_contains(
+            "LOCAL 10\nMain HALT\n",
+            "pure value 10 cannot be used where a register is required",
+        );
+    }
+
+    #[test]
+    fn test_local_directive_at_or_above_the_threshold_fails_naming_both() {
+        let err = {
+            let mut asm = MMixAssembler::new("G1 GREG 0\nLOCAL $254\nMain HALT\n", "<test>");
+            asm.parse().expect_err("expected threshold error")
+        };
+        assert!(err.contains("$254"), "err: {err}");
+        assert!(err.contains("threshold"), "err: {err}");
+    }
+
+    #[test]
+    fn test_local_directive_below_32_never_fails_regardless_of_gregs() {
+        let mut asm = MMixAssembler::new("LOCAL $5\nMain HALT\n", "<test>");
+        asm.parse().unwrap();
+    }
+
+    #[test]
+    fn test_local_directive_with_a_label_is_an_error() {
+        assert_parse_error_contains("Foo LOCAL $10\nMain HALT\n", "takes no label");
+    }
+
+    // ---- BSPEC / ESPEC (C9.3) -------------------------------------------
+
+    #[test]
+    fn test_espec_label_address_matches_the_block_deleted() {
+        let mut with_block = MMixAssembler::new(
+            "Main    SET $1,0\n\
+             BSPEC 1\n\
+             BYTE 1,2,3,4,5\n\
+             ESPEC\n\
+             After   SET $2,0\n",
+            "<test>",
+        );
+        with_block.parse().unwrap();
+        let mut without_block = MMixAssembler::new("Main SET $1,0\nAfter SET $2,0\n", "<test>");
+        without_block.parse().unwrap();
+        assert_eq!(
+            with_block.labels.get("After"),
+            without_block.labels.get("After")
+        );
+    }
+
+    #[test]
+    fn test_bspec_block_emits_no_instructions() {
+        let mut asm = MMixAssembler::new(
+            "Main SET $1,0\nBSPEC 1\nBYTE 1,2,3\nESPEC\nHALT\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions.len(), 2);
+    }
+
+    #[test]
+    fn test_bspec_allows_greg_and_is_with_full_effect() {
+        let mut asm = MMixAssembler::new(
+            "BSPEC 1\n\
+             G1 GREG 0\n\
+             Foo IS 5\n\
+             ESPEC\n\
+             Main SET $1,Foo\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+        assert!(asm.symbols.contains_key("G1"));
+    }
+
+    #[test]
+    fn test_bspec_rejects_an_instruction() {
+        assert_parse_error_contains(
+            "BSPEC 1\nSET $1,0\nESPEC\nMain HALT\n",
+            "not allowed inside BSPEC/ESPEC",
+        );
+    }
+
+    #[test]
+    fn test_bspec_rejects_loc() {
+        assert_parse_error_contains(
+            "BSPEC 1\nLOC #200\nESPEC\nMain HALT\n",
+            "not allowed inside BSPEC/ESPEC",
+        );
+    }
+
+    #[test]
+    fn test_bspec_with_no_espec_is_an_error() {
+        assert_parse_error_contains("BSPEC 1\nFoo IS 5\n", "BSPEC");
+    }
+
+    #[test]
+    fn test_espec_with_no_bspec_is_an_error() {
+        assert_parse_error_contains("ESPEC\nMain HALT\n", "ESPEC");
+    }
+
+    #[test]
+    fn test_bspec_does_not_nest() {
+        assert_parse_error_contains(
+            "BSPEC 1\nBSPEC 2\nESPEC\nESPEC\nMain HALT\n",
+            "does not nest",
+        );
+    }
+
+    #[test]
+    fn test_bspec_operand_wider_than_two_bytes_is_an_error() {
+        assert_parse_error_contains(
+            "BSPEC #10000\nESPEC\nMain HALT\n",
+            "does not fit in two bytes",
+        );
+    }
+
+    // ---- The predefined symbols (C9.3) -----------------------------------
+
+    #[test]
+    fn test_seventeen_predefined_symbols_resolve_to_the_reference_table() {
+        let cases: &[(&str, u64)] = &[
+            ("Inf", 0x7FF0000000000000),
+            ("D_BIT", 0x80),
+            ("D_Handler", 0x10),
+            ("V_BIT", 0x40),
+            ("V_Handler", 0x20),
+            ("W_BIT", 0x20),
+            ("W_Handler", 0x30),
+            ("I_BIT", 0x10),
+            ("I_Handler", 0x40),
+            ("O_BIT", 0x08),
+            ("O_Handler", 0x50),
+            ("U_BIT", 0x04),
+            ("U_Handler", 0x60),
+            ("Z_BIT", 0x02),
+            ("Z_Handler", 0x70),
+            ("X_BIT", 0x01),
+            ("X_Handler", 0x80),
+        ];
+        for (name, value) in cases {
+            assert_eq!(
+                assemble_one(&format!("OCTA {name}")),
+                MMixInstruction::OCTA(*value),
+                "for {name}"
+            );
+            // The root-colon spelling reaches the same value.
+            assert_eq!(
+                assemble_one(&format!("OCTA :{name}")),
+                MMixInstruction::OCTA(*value),
+                "for :{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_text_segment_is_still_undefined() {
+        // Pins the reference's own predefined-symbol table, which has no
+        // `Text_Segment` -- not a guard on this unit's own code.
+        assert_parse_error_contains("OCTA Text_Segment", "Undefined symbol");
+    }
+
+    // ---- The root prefix (C9.3) ------------------------------------------
+
+    #[test]
+    fn test_root_prefix_row_prefix_pk_then_reset() {
+        let mut asm = MMixAssembler::new("v IS 7\nPREFIX Pk:\nPREFIX :\nMain SET $0,v\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(0, 7));
+    }
+
+    #[test]
+    fn test_root_prefix_row_colon_x_reference() {
+        let mut asm = MMixAssembler::new("x IS 5\nMain SET $1,:x\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_root_prefix_row_prefix_foo_then_reset() {
+        let mut asm = MMixAssembler::new(
+            "PREFIX Foo\nbar IS 5\nPREFIX :\nMain SET $1,Foobar\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 5));
+    }
+
+    #[test]
+    fn test_root_prefix_main_key_carries_no_colon() {
+        let mut asm = MMixAssembler::new("PREFIX :\nMain HALT\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Main"), Some(&0));
+        assert!(!asm.labels.contains_key(":Main"));
+    }
+
+    #[test]
+    fn test_root_prefix_x_then_colon_x_is_the_redefinition_error() {
+        assert_parse_error_contains("x IS 1\n:x IS 2\nMain HALT\n", "redefined");
+    }
+
+    #[test]
+    fn test_root_prefix_labels_keys_colon_lib_without_colon() {
+        let mut asm = MMixAssembler::new(":Lib HALT\nMain HALT\n", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Lib"), Some(&0));
+        assert!(!asm.labels.contains_key(":Lib"));
+    }
+
+    // ---- Predefined names: a program's own definition wins (C9.3) --------
+
+    #[test]
+    fn test_label_named_predefined_wins_for_a_later_reference() {
+        let mut asm = MMixAssembler::new(
+            "LOC #108\nFputs HALT\nLOC #100\nMain SET $1,Fputs\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(1, 0x108));
+    }
+
+    #[test]
+    fn test_label_named_predefined_reaches_a_pushj_target() {
+        let mut asm = MMixAssembler::new(
+            "LOC #108\nTime POP 0,0\nLOC #100\nMain PUSHJ $0,Time\n",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        assert!(matches!(asm.instructions[1].1, MMixInstruction::PUSHJ(..)));
+    }
+
+    #[test]
+    fn test_use_then_redefine_via_label_is_an_error() {
+        let err = {
+            let mut asm = MMixAssembler::new("Main SET $1,Fputs\nFputs HALT\n", "<test>");
+            asm.parse().expect_err("expected used-then-redefined error")
+        };
+        assert!(
+            err.contains("predefined symbol 'Fputs' redefined"),
+            "err: {err}"
+        );
+        assert!(err.contains("its value was used at"), "err: {err}");
+    }
+
+    #[test]
+    fn test_use_then_redefine_via_is_is_an_error() {
+        let err = {
+            let mut asm = MMixAssembler::new("Main SET $1,Fputs\nFputs IS 3\n", "<test>");
+            asm.parse().expect_err("expected used-then-redefined error")
+        };
+        assert!(
+            err.contains("predefined symbol 'Fputs' redefined"),
+            "err: {err}"
+        );
+        assert!(err.contains("its value was used at"), "err: {err}");
+    }
+
+    #[test]
+    fn test_second_different_definition_after_a_label_is_the_ordinary_redefinition_error() {
+        assert_parse_error_contains(
+            "Fputs HALT\nFputs IS 3\nMain HALT\n",
+            "symbol 'Fputs' redefined",
+        );
+    }
+
+    // ---- Equal redefinition (C9.3) ----------------------------------------
+
+    #[test]
+    fn test_equal_redefinition_is_then_label_same_value_assembles() {
+        let mut asm = MMixAssembler::new("Here IS #104\nLOC #104\nHere HALT\n", "<test>");
+        asm.parse().unwrap();
+    }
+
+    #[test]
+    fn test_equal_redefinition_is_then_label_different_value_is_an_error() {
+        assert_parse_error_contains(
+            "Here IS #104\nLOC #108\nHere HALT\n",
+            "symbol 'Here' redefined",
+        );
+    }
+
+    #[test]
+    fn test_equal_redefinition_register_vs_pure_value_is_an_error() {
+        assert_parse_error_contains("x IS $1\nx IS 1\nMain HALT\n", "symbol 'x' redefined");
     }
 }
