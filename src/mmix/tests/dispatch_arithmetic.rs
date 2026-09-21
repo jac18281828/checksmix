@@ -688,11 +688,11 @@ fn test_tdifi() {
     assert_eq!(mmix.get_register(3), 0x10000000_1FFFFFF6);
 }
 
-/// IMM-1's corpus (bdif.html): with `$1` all ones, only lane 0 of an
-/// immediate `BDIF`/`WDIF`/`TDIF` subtracts; every higher lane is `$1`'s
-/// unchanged. A fourth row floors lane 0 at zero instead of wrapping.
+/// With `$1` all ones, only lane 0 of an immediate `BDIF`/`WDIF`/`TDIF`
+/// subtracts; every higher lane is `$1`'s unchanged. Each floors lane 0 at
+/// zero instead of wrapping when Z exceeds it.
 #[test]
-fn test_imm1_bdifi_subtracts_lane_zero_only() {
+fn test_bdifi_subtracts_from_lane_zero_only() {
     let mut mmix = MMix::new();
     mmix.set_register(1, 0xFFFF_FFFF_FFFF_FFFF);
     mmix.write_tetra(0, 0xD1020120); // BDIFI $2,$1,0x20
@@ -701,7 +701,7 @@ fn test_imm1_bdifi_subtracts_lane_zero_only() {
 }
 
 #[test]
-fn test_imm1_wdifi_subtracts_lane_zero_only() {
+fn test_wdifi_subtracts_from_lane_zero_only() {
     let mut mmix = MMix::new();
     mmix.set_register(1, 0xFFFF_FFFF_FFFF_FFFF);
     mmix.write_tetra(0, 0xD3020120); // WDIFI $2,$1,0x20
@@ -710,7 +710,7 @@ fn test_imm1_wdifi_subtracts_lane_zero_only() {
 }
 
 #[test]
-fn test_imm1_tdifi_subtracts_lane_zero_only() {
+fn test_tdifi_subtracts_from_lane_zero_only() {
     let mut mmix = MMix::new();
     mmix.set_register(1, 0xFFFF_FFFF_FFFF_FFFF);
     mmix.write_tetra(0, 0xD5020120); // TDIFI $2,$1,0x20
@@ -719,10 +719,28 @@ fn test_imm1_tdifi_subtracts_lane_zero_only() {
 }
 
 #[test]
-fn test_imm1_bdifi_floors_lane_zero_at_zero() {
+fn test_bdifi_floors_lane_zero_at_zero() {
     let mut mmix = MMix::new();
     mmix.set_register(3, 0x0000_0000_0000_0010);
     mmix.write_tetra(0, 0xD1020320); // BDIFI $2,$3,0x20
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(2), 0x0000_0000_0000_0000);
+}
+
+#[test]
+fn test_wdifi_floors_lane_zero_at_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x0000_0000_0000_0010);
+    mmix.write_tetra(0, 0xD3020320); // WDIFI $2,$3,0x20
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(2), 0x0000_0000_0000_0000);
+}
+
+#[test]
+fn test_tdifi_floors_lane_zero_at_zero() {
+    let mut mmix = MMix::new();
+    mmix.set_register(3, 0x0000_0000_0000_0010);
+    mmix.write_tetra(0, 0xD5020320); // TDIFI $2,$3,0x20
     assert!(mmix.execute_instruction());
     assert_eq!(mmix.get_register(2), 0x0000_0000_0000_0000);
 }

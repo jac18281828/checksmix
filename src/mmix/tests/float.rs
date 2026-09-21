@@ -2390,7 +2390,7 @@ fn test_fsub_cancellation_is_positive_by_default() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-/// EXIT-1: a rounding-mode override above 4 halts with a diagnostic and
+/// A rounding-mode override above 4 halts with a diagnostic and
 /// exits 1, like every other halt but the `Halt` trap.
 #[test]
 fn test_fix_with_illegal_round_mode_exits_1() {

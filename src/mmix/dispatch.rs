@@ -66,10 +66,10 @@ impl MMix {
         self.advance_pc();
     }
 
-    /// The first must-be-zero field VAL-1 finds nonzero, in `X, Y, Z`
-    /// order, for the five opcodes the MMIX instruction reference names
-    /// (get.html, put.html, save.html, gitraptrip.html "UNSAVE"/"RESUME").
-    /// `None` for every legal encoding and every other opcode.
+    /// The first must-be-zero field found nonzero, in `X, Y, Z` order, for
+    /// the five opcodes the MMIX instruction reference names (get.html,
+    /// put.html, save.html, gitraptrip.html "UNSAVE"/"RESUME"). `None` for
+    /// every legal encoding and every other opcode.
     fn must_be_zero_violation(
         opcode: crate::mmixal::Opcode,
         x: u8,
@@ -125,12 +125,11 @@ impl MMix {
     ) -> bool {
         use crate::mmixal::Opcode;
 
-        // VAL-1 (get.html, put.html, save.html, gitraptrip.html
-        // "UNSAVE"/"RESUME"): a nonzero must-be-zero field is an
-        // illegal-instruction interrupt, named in X, Y, Z order. This runs
-        // before every other check the instruction makes and before this
-        // claims $X as a local, so a rejected instruction leaves rL
-        // untouched.
+        // A nonzero must-be-zero field (get.html, put.html, save.html,
+        // gitraptrip.html "UNSAVE"/"RESUME") is an illegal-instruction
+        // interrupt, named in X, Y, Z order. This runs before every other
+        // check the instruction makes and before this claims $X as a
+        // local, so a rejected instruction leaves rL untouched.
         if let Some((mnemonic, field, value)) = Self::must_be_zero_violation(opcode, x, y, z) {
             return self.reject(&format!(
                 "{mnemonic} {field}={value}: must be zero; illegal-instruction \
@@ -2216,8 +2215,9 @@ impl MMix {
                 true
             }
             Opcode::PUTI => {
-                // PUT X, Z - Put immediate Z into special register X. Y is
-                // ignored; the value is Z alone, eight bits.
+                // PUT X, Z - Put immediate Z into special register X, eight
+                // bits. Y must be zero; the must-be-zero check above rejects
+                // a nonzero Y before this arm runs.
                 if !self.put_special("PUTI", x, z as u64) {
                     return false;
                 }
@@ -2315,9 +2315,9 @@ impl MMix {
                 true
             }
             Opcode::SYNC => {
-                // SYNC XYZ (sync.html; §1 VAL-2): 0-3 is a no-op user
-                // programs may issue; 4-7 is reserved for the kernel; above
-                // 7 names nothing.
+                // SYNC XYZ (sync.html): 0-3 is a no-op user programs may
+                // issue; 4-7 is reserved for the kernel; above 7 names
+                // nothing.
                 let xyz = ((x as u32) << 16) | ((y as u32) << 8) | z as u32;
                 match xyz {
                     0..=3 => {

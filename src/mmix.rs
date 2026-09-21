@@ -65,7 +65,7 @@ pub struct MMix {
     file_handles: HashMap<u8, FileHandle>,
 
     /// Process exit code: the `Halt` trap sets it from `$255`; every other
-    /// halt sets it to 1 (EXIT-1).
+    /// halt sets it to 1.
     exit_code: u64,
 
     /// Where process-level effects (writes, the clock, diagnostics, trap
@@ -305,8 +305,8 @@ impl MMix {
     /// Emit a diagnostic and report the halt `execute_instruction` should
     /// propagate: no register or memory change and no PC advance, on the
     /// caller's promise that it made none before calling this. Sets the
-    /// exit code to 1 (EXIT-1: every halt but the `Halt` trap exits 1).
-    /// Every `PUT`/`PUTI` rejection, every must-be-zero and `SYNC`-range
+    /// exit code to 1, as every halt but the `Halt` trap does. Every
+    /// `PUT`/`PUTI` rejection, every must-be-zero and `SYNC`-range
     /// violation, and `SAVE`/`UNSAVE`'s validation failures route through
     /// this one diagnose-then-refuse path.
     fn reject(&mut self, message: &str) -> bool {
@@ -330,8 +330,8 @@ impl MMix {
         self.pc = self.pc.wrapping_add(4);
     }
 
-    /// Get the process exit code: `$255` mod 256 after a `Halt` trap, 1
-    /// after any other halt.
+    /// Get the process exit code: `$255`, unreduced, after a `Halt` trap
+    /// — `process::exit` takes it mod 256 — or 1 after any other halt.
     pub fn get_exit_code(&self) -> u64 {
         self.exit_code
     }

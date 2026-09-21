@@ -54,7 +54,7 @@ fn test_put_x_at_32_names_no_special_register() {
     assert_eq!(mmix.get_exit_code(), 1);
 }
 
-/// VAL-1: `PUT`'s Y must be zero.
+/// `PUT`'s Y must be zero.
 #[test]
 fn test_put_y_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
@@ -79,7 +79,7 @@ fn test_put_y_nonzero_is_rejected() {
     );
 }
 
-/// VAL-1: `PUTI`'s Y must be zero.
+/// `PUTI`'s Y must be zero.
 #[test]
 fn test_puti_y_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
@@ -768,7 +768,7 @@ fn test_get_z_at_32_and_255_are_rejected_with_no_special_register_above_31() {
     }
 }
 
-/// VAL-1: `GET`'s Y must be zero. `$X` starts marginal, so a claim before
+/// `GET`'s Y must be zero. `$X` starts marginal, so a claim before
 /// this check would raise `rL` and show up here.
 #[test]
 fn test_get_y_nonzero_is_rejected() {

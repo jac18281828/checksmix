@@ -428,7 +428,7 @@ impl MMix {
     /// `Y > 4` on an instruction that takes a rounding-mode override is an
     /// illegal-instruction interrupt this VM has no vector for. Mirrors
     /// `Opcode::TRIP`'s halt-with-diagnostic precedent, and exits 1 like
-    /// every other halt but the `Halt` trap (EXIT-1).
+    /// every other halt but the `Halt` trap.
     pub(super) fn illegal_round_mode(&mut self, mnemonic: &str, y: u8) -> bool {
         self.host.diagnostic(&format!(
             "{mnemonic}: illegal Y={y} at PC={:#018x} (Y must be 0-4)",

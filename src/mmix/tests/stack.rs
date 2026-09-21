@@ -851,7 +851,7 @@ fn test_save_rejects_a_destination_below_rg_leaving_the_machine_unchanged() {
     assert_eq!(mmix.get_exit_code(), 1);
 }
 
-/// VAL-1: `SAVE`'s Y must be zero.
+/// `SAVE`'s Y must be zero.
 #[test]
 fn test_save_y_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
@@ -873,12 +873,13 @@ fn test_save_y_nonzero_is_rejected() {
     );
 }
 
-/// VAL-1: `SAVE`'s Z must be zero, checked after Y.
+/// `SAVE`'s Z must be zero, checked after Y.
 #[test]
 fn test_save_z_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
     mmix.set_register(0, 0x1234); // a local, must survive
+    mmix.set_register(255, 0xABCD); // SAVE's destination, must survive
 
     // SAVE $255,0,1 -- Z=1 must be zero.
     mmix.write_tetra(0, 0xFAFF0001);
@@ -886,6 +887,7 @@ fn test_save_z_nonzero_is_rejected() {
 
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(mmix.get_register(0), 0x1234, "SAVE touched nothing");
+    assert_eq!(mmix.get_register(255), 0xABCD, "SAVE touched nothing");
     assert_eq!(mmix.get_exit_code(), 1);
     assert_eq!(handle.diagnostics().len(), 1);
     assert_eq!(
@@ -894,7 +896,7 @@ fn test_save_z_nonzero_is_rejected() {
     );
 }
 
-/// VAL-1: `UNSAVE`'s X must be zero.
+/// `UNSAVE`'s X must be zero.
 #[test]
 fn test_unsave_x_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
@@ -912,6 +914,27 @@ fn test_unsave_x_nonzero_is_rejected() {
     assert_eq!(
         handle.diagnostics()[0],
         "UNSAVE X=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
+}
+
+/// `UNSAVE`'s Y must be zero, checked after X.
+#[test]
+fn test_unsave_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(0, 0xFEED); // survives iff UNSAVE never runs
+
+    // UNSAVE 0,1,$255 -- Y=1 must be zero.
+    mmix.write_tetra(0, 0xFB0001FF);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(0), 0xFEED, "UNSAVE touched nothing");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "UNSAVE Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
     );
 }
 
@@ -1455,8 +1478,8 @@ fn test_call_depth_walks_a_save_context_with_nonzero_rl_and_rg_ne_32() {
     );
 }
 
-/// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields
-/// (VAL-1): a nonzero value there is an illegal-instruction interrupt,
+/// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields:
+/// a nonzero value there is an illegal-instruction interrupt,
 /// the machine left unchanged.
 #[test]
 fn test_save_and_unsave_reject_their_must_be_zero_fields() {

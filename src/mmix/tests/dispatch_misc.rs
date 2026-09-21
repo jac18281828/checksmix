@@ -20,7 +20,7 @@ fn test_sync() {
     assert_eq!(mmix.get_pc(), 4);
 }
 
-/// VAL-2: `SYNC` 0-3 is a no-op; 3 is the top of that range.
+/// `SYNC` 0-3 is a no-op; 3 is the top of that range.
 #[test]
 fn test_sync_3_is_a_no_op() {
     let mut mmix = MMix::new();
@@ -29,7 +29,7 @@ fn test_sync_3_is_a_no_op() {
     assert_eq!(mmix.get_pc(), 4);
 }
 
-/// VAL-2: `SYNC` 4-7 is a privileged-operation interrupt.
+/// `SYNC` 4-7 is a privileged-operation interrupt.
 #[test]
 fn test_sync_4_to_7_is_privileged() {
     for xyz in [4u32, 7] {
@@ -47,7 +47,7 @@ fn test_sync_4_to_7_is_privileged() {
     }
 }
 
-/// VAL-2: `SYNC` above 7 is an illegal-instruction interrupt.
+/// `SYNC` above 7 is an illegal-instruction interrupt.
 #[test]
 fn test_sync_above_7_is_illegal() {
     for xyz in [8u32, 1000] {
@@ -123,7 +123,7 @@ fn test_resume_with_nonzero_z_halts() {
     assert_eq!(mmix.get_exit_code(), 1);
 }
 
-/// VAL-1: `RESUME`'s X must be zero, checked before the existing Z check.
+/// `RESUME`'s X must be zero, checked before the existing Z check.
 #[test]
 fn test_resume_x_nonzero_is_rejected() {
     let (host, handle) = CaptureHost::new();
@@ -140,6 +140,26 @@ fn test_resume_x_nonzero_is_rejected() {
     assert_eq!(
         handle.diagnostics()[0],
         "RESUME X=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000100"
+    );
+}
+
+/// `RESUME`'s Y must be zero, checked after X.
+#[test]
+fn test_resume_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_pc(0x100);
+
+    // RESUME 0,1,0 -- Y=1 must be zero.
+    mmix.write_tetra(0x100, 0xF9000100);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0x100, "PC stays on the rejected instruction");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "RESUME Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000100"
     );
 }
 

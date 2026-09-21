@@ -14,7 +14,7 @@ fn test_trap_halt() {
     assert_eq!(mmix.get_pc(), 4); // PC still advances
 }
 
-/// EXIT-1: the register form (`X != 0`) halts and exits 1, like every
+/// the register form (`X != 0`) halts and exits 1, like every
 /// other halt but the `Halt` trap.
 #[test]
 fn test_trap_register_form_halts_and_exits_1() {
