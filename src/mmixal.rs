@@ -1523,16 +1523,15 @@ impl MMixAssembler {
     const REMARK_CONTINUATION_CHARS: [char; 12] =
         [',', '+', '-', '*', '/', '~', '&', '|', '^', '<', '>', '$'];
 
-    /// The named predicate behind rule 2: `None` when `text` (already known
-    /// non-empty, and preceded by `blank_before`) reads as a remark; `Some`
-    /// naming the ambiguity otherwise. Rule 1 -- `EXPR` is greedy -- has
+    /// `None` when `text`, preceded by `blank_before`, reads as a remark;
+    /// `Some` naming the ambiguity otherwise. Rule 1 -- `EXPR` is greedy -- has
     /// already run by the time this is called: `text` is only ever what
     /// `EXPR` left behind.
     fn remark_ambiguity(text: &str, blank_before: bool) -> Option<RemarkAmbiguity> {
         if !blank_before {
             return Some(RemarkAmbiguity::Abutting);
         }
-        let first = text.chars().next().unwrap();
+        let first = text.chars().next()?;
         (first.is_ascii_digit() || Self::REMARK_CONTINUATION_CHARS.contains(&first))
             .then_some(RemarkAmbiguity::LeadingChar(first))
     }
@@ -1570,9 +1569,8 @@ impl MMixAssembler {
     /// Rule 2: what `EXPR` (rule 1) left behind is a remark unless it is
     /// mistakable for part of the statement. `has_statement` is false when
     /// no `Rule::statement` preceded `pair` in its segment; a remark
-    /// presupposes a statement to follow, so `remark_ambiguity`'s verdict is
-    /// unchanged but a failure there reports an unknown operation instead
-    /// of a remark diagnostic, and `segment_start` bounds that statement
+    /// presupposes a statement to follow, so an ambiguity there reports an
+    /// unknown operation instead of a remark diagnostic, and `segment_start` bounds that statement
     /// text to this segment alone -- never a sibling statement's text on
     /// the same line.
     fn check_remark(
@@ -1715,9 +1713,9 @@ impl MMixAssembler {
     }
 
     /// True when `pair` (a `Rule::statement`) is a bare label with no
-    /// instruction or directive attached -- the one shape whose trailing
-    /// text `diagnose_unrecognized_opcode` diagnoses rather than reading as
-    /// a remark.
+    /// instruction or directive attached -- the one shape whose candidate
+    /// remark `diagnose_unrecognized_opcode` diagnoses rather than reading
+    /// as a remark.
     fn statement_is_label_only(pair: &pest::iterators::Pair<Rule>) -> bool {
         let mut inner = pair.clone().into_inner();
         matches!(inner.next().map(|p| p.as_rule()), Some(Rule::label_def)) && inner.next().is_none()
@@ -8834,7 +8832,7 @@ Main    SETI    $1,7
         assert_parse_error_contains("SET $1,.", "unknown operation: SET $1,.");
     }
 
-    // ---- Remark diagnostics: full message, every position row (C9.3) ----
+    // ---- Remark diagnostics: full message, every position row ----
 
     #[test]
     fn test_remark_ambiguity_messages_pin_position_and_text() {
