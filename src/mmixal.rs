@@ -974,6 +974,20 @@ pub struct SourceLoc {
     pub line: usize,
 }
 
+/// Why a candidate remark is mistakable for part of the statement rather
+/// than commentary a reader could set apart.
+enum RemarkAmbiguity {
+    /// No blank separates the remark from the statement, so nothing marks
+    /// where the statement ended.
+    Abutting,
+    /// The remark opens with a digit or one of the twelve
+    /// [`MMixAssembler::REMARK_CONTINUATION_CHARS`]. A leading digit is a
+    /// guard against a dropped operand separator, not a claim that an
+    /// expression wanted it; a leading continuation character could extend
+    /// the expression or operand list it follows.
+    LeadingChar(char),
+}
+
 impl MMixAssembler {
     /// Blank out every line whose first character (column 1, before any
     /// leading blank) is not a letter, digit, `:` or `_` -- the MMIXAL
@@ -1435,9 +1449,10 @@ impl MMixAssembler {
 
     /// True when `segment` has more `(` than `)`, skipping the contents of
     /// any string or character literal so a quoted `(` or `)` is never
-    /// counted. `check_remainder` scopes `segment` to one statement's own
-    /// span, never the whole physical line, so a sibling statement's parens
-    /// (on either side of a `;`) can't be blamed on this one.
+    /// counted. `diagnose_unrecognized_opcode` scopes `segment` to one
+    /// statement's own span, never the whole physical line, so a sibling
+    /// statement's parens (on either side of a `;`) can't be blamed on this
+    /// one.
     fn segment_has_unclosed_paren(segment: &str) -> bool {
         let mut depth: i32 = 0;
         let mut chars = segment.char_indices();
@@ -1483,9 +1498,10 @@ impl MMixAssembler {
 
     /// Byte offset of the first `%` in `segment` that sits outside a
     /// string or character literal, or `segment.len()` when there is
-    /// none. `check_remainder` prints `segment[..cut]` as the offending
-    /// statement, so a literal's own `%` (`BYTE "50%"`) is never mistaken
-    /// for this release's comment opener and truncated mid-literal.
+    /// none. The unknown-operation diagnostic prints `segment[..cut]` as
+    /// the offending statement, so a literal's own `%` (`BYTE "50%"`) is
+    /// never mistaken for this release's comment opener and truncated
+    /// mid-literal.
     fn segment_comment_start(segment: &str) -> usize {
         let mut chars = segment.char_indices();
         while let Some((idx, ch)) = chars.next() {
@@ -1500,33 +1516,110 @@ impl MMixAssembler {
     }
 
     /// Characters that could extend a bare expression or an operand list.
-    /// Free text opening with one of these, after the blank that ends the
-    /// operand field, would otherwise drop an operand in silence.
-    const TRAILING_TEXT_OPERATOR_CHARS: [char; 12] =
+    /// A remark opening with one of these, right after the blank that ends
+    /// the operand field, would read as continuing the statement rather
+    /// than as commentary -- dropping an operand in silence if it were
+    /// ignored.
+    const REMARK_CONTINUATION_CHARS: [char; 12] =
         [',', '+', '-', '*', '/', '~', '&', '|', '^', '<', '>', '$'];
 
-    /// Enforce the trailing-text rule over a statement's `remainder` span.
-    /// `segment_start` bounds the unclosed-group check to this statement's
-    /// own text, from wherever it began (the line's start, or just past the
-    /// previous `;`) to `pair`'s own end -- never a sibling statement's text
-    /// on the same line. `label_only` is set when the statement ahead of
-    /// `pair` was a bare label with no recognized instruction or directive
-    /// attached: the MMIXAL reference reads a label as a whole statement
-    /// only when nothing but blanks and a comment follow it, so any other
-    /// content there means the opcode field held a word the grammar
-    /// doesn't know -- unless that word is itself a known mnemonic or
-    /// directive missing its operand, which reports what pest actually
-    /// expected there instead. Naming which specific word is at fault is
-    /// ambiguous in general (a valid label followed by a bad mnemonic and
-    /// a bad mnemonic swallowed as a label are the same shape), so the
-    /// diagnostic prints the statement itself and lets the reader place
-    /// the fault.
-    fn check_remainder(
+    /// The named predicate behind rule 2: `None` when `text` (already known
+    /// non-empty, and preceded by `blank_before`) reads as a remark; `Some`
+    /// naming the ambiguity otherwise. Rule 1 -- `EXPR` is greedy -- has
+    /// already run by the time this is called: `text` is only ever what
+    /// `EXPR` left behind.
+    fn remark_ambiguity(text: &str, blank_before: bool) -> Option<RemarkAmbiguity> {
+        if !blank_before {
+            return Some(RemarkAmbiguity::Abutting);
+        }
+        let first = text.chars().next().unwrap();
+        (first.is_ascii_digit() || Self::REMARK_CONTINUATION_CHARS.contains(&first))
+            .then_some(RemarkAmbiguity::LeadingChar(first))
+    }
+
+    /// Formats the diagnostic for `ambiguity`, at `filename:line:col`.
+    fn format_remark_ambiguity(
+        ambiguity: &RemarkAmbiguity,
+        filename: &str,
+        line: usize,
+        col: usize,
+    ) -> String {
+        match ambiguity {
+            RemarkAmbiguity::Abutting => format!(
+                "{filename}:{line}:{col}: syntax error: a remark must be separated from the \
+                 statement by a blank"
+            ),
+            RemarkAmbiguity::LeadingChar(c) => format!(
+                "{filename}:{line}:{col}: syntax error: a remark cannot begin with `{c}` — it \
+                 reads as part of the statement; start a comment with `%`"
+            ),
+        }
+    }
+
+    /// Formats "unknown operation: {statement}" for a bare word in the OP
+    /// field, or for a candidate remark with no statement ahead of it:
+    /// `segment`, its `%` comment stripped (raw inside the atomic `remark`
+    /// capture, so the grammar never trims it) and the blanks an indented
+    /// or post-`;` statement carries trimmed off, is the statement the
+    /// reader wrote.
+    fn unknown_operation_error(segment: &str, filename: &str, line: usize, col: usize) -> String {
+        let statement = segment[..Self::segment_comment_start(segment)].trim();
+        format!("{filename}:{line}:{col}: syntax error: unknown operation: {statement}")
+    }
+
+    /// Rule 2: what `EXPR` (rule 1) left behind is a remark unless it is
+    /// mistakable for part of the statement. `has_statement` is false when
+    /// no `Rule::statement` preceded `pair` in its segment; a remark
+    /// presupposes a statement to follow, so `remark_ambiguity`'s verdict is
+    /// unchanged but a failure there reports an unknown operation instead
+    /// of a remark diagnostic, and `segment_start` bounds that statement
+    /// text to this segment alone -- never a sibling statement's text on
+    /// the same line.
+    fn check_remark(
         pair: &pest::iterators::Pair<Rule>,
         source: &str,
         filename: &str,
         segment_start: usize,
-        label_only: bool,
+        has_statement: bool,
+    ) -> Result<(), String> {
+        let text = pair.as_str();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let (line, col) = pair.line_col();
+        let start = pair.as_span().start();
+        let blank_before = start > 0 && matches!(source.as_bytes()[start - 1], b' ' | b'\t');
+
+        let Some(ambiguity) = Self::remark_ambiguity(text, blank_before) else {
+            return Ok(());
+        };
+
+        if !has_statement {
+            let segment = &source[segment_start..pair.as_span().end()];
+            return Err(Self::unknown_operation_error(segment, filename, line, col));
+        }
+        Err(Self::format_remark_ambiguity(
+            &ambiguity, filename, line, col,
+        ))
+    }
+
+    /// A bare label whose statement position holds a word naming no
+    /// instruction or directive -- not an ambiguity test on a remark, but a
+    /// diagnosis of that word: an unclosed group that swallowed a real
+    /// instruction whole, a known mnemonic or directive missing or
+    /// malformed its operand, or, failing both, the statement itself so the
+    /// reader can place the fault. Naming which specific word is at fault
+    /// is ambiguous in general (a valid label followed by a bad mnemonic
+    /// and a bad mnemonic swallowed as a label are the same shape).
+    /// `segment_start` bounds the unclosed-group check to this statement's
+    /// own text, from wherever it began (the line's start, or just past the
+    /// previous `;`) to `pair`'s own end -- never a sibling statement's text
+    /// on the same line.
+    fn diagnose_unrecognized_opcode(
+        pair: &pest::iterators::Pair<Rule>,
+        source: &str,
+        filename: &str,
+        segment_start: usize,
     ) -> Result<(), String> {
         let text = pair.as_str();
         if text.is_empty() {
@@ -1534,66 +1627,38 @@ impl MMixAssembler {
         }
         let (line, col) = pair.line_col();
 
-        if label_only {
-            // An unclosed group makes every instruction alternative fail
-            // deep inside its operand, so `statement` falls back to
-            // reading the mnemonic as a bare label and leaves the rest for
-            // `remainder` -- trading the real problem for a confusing one
-            // unless caught here. A comment after a *successful* match
-            // never reaches this branch, so a stray `(` in commentary is
-            // never mistaken for an unterminated group.
-            let segment = &source[segment_start..pair.as_span().end()];
-            if Self::segment_has_unclosed_paren(segment) {
-                return Err(format!(
-                    "{filename}:{line}:{col}: syntax error: unterminated group"
-                ));
-            }
-            let remainder_start = pair.as_span().start();
-            if let Some((error, base_offset)) =
-                Self::recognized_keyword_error(text, remainder_start, segment, segment_start)
-            {
-                return Err(Self::format_reparse_error(
-                    &error,
-                    filename,
-                    source,
-                    base_offset,
-                ));
-            }
-            // `segment` is the whole statement, label through its trailing
-            // text; strip a `%` comment (raw inside this atomic capture,
-            // so the grammar never trims it) and the blanks an indented
-            // or post-`;` statement carries, leaving just the statement
-            // the reader wrote.
-            let statement = segment[..Self::segment_comment_start(segment)].trim();
+        // An unclosed group makes every instruction alternative fail deep
+        // inside its operand, so `statement` falls back to reading the
+        // mnemonic as a bare label and leaves the rest for `remark` --
+        // trading the real problem for a confusing one unless caught here.
+        // A comment after a *successful* match never reaches this
+        // function, so a stray `(` in commentary is never mistaken for an
+        // unterminated group.
+        let segment = &source[segment_start..pair.as_span().end()];
+        if Self::segment_has_unclosed_paren(segment) {
             return Err(format!(
-                "{filename}:{line}:{col}: syntax error: unknown operation: {statement}"
+                "{filename}:{line}:{col}: syntax error: unterminated group"
             ));
         }
-
-        let start = pair.as_span().start();
-        let blank_before = start > 0 && matches!(source.as_bytes()[start - 1], b' ' | b'\t');
-        if !blank_before {
-            return Err(format!(
-                "{filename}:{line}:{col}: syntax error: text follows the operand with no \
-                 separating blank; add a blank before it or start a comment with `%`"
+        let remark_start = pair.as_span().start();
+        if let Some((error, base_offset)) =
+            Self::recognized_keyword_error(text, remark_start, segment, segment_start)
+        {
+            return Err(Self::format_reparse_error(
+                &error,
+                filename,
+                source,
+                base_offset,
             ));
         }
-        // `text` is non-empty (checked above), so it has a first character.
-        let first = text.chars().next().unwrap();
-        if first.is_ascii_digit() || Self::TRAILING_TEXT_OPERATOR_CHARS.contains(&first) {
-            return Err(format!(
-                "{filename}:{line}:{col}: syntax error: an operand holds no blanks; close up \
-                 the expression or parenthesize it, and start a comment with `%`"
-            ));
-        }
-        Ok(())
+        Err(Self::unknown_operation_error(segment, filename, line, col))
     }
 
     /// Directive keyword-only rules, paired with the full directive rule
     /// that gives a meaningful "missing/malformed operand" diagnostic once
     /// the keyword itself is confirmed present. `directive_is` isn't here:
     /// it is the one directive whose own grammar folds in the preceding
-    /// label, so it needs the whole segment, not `remainder_text` alone.
+    /// label, so it needs the whole segment, not `remark_text` alone.
     const DIRECTIVE_KEYWORD_RULES: [(Rule, Rule); 7] = [
         (Rule::directive_loc, Rule::loc_directive),
         (Rule::directive_greg, Rule::greg_directive),
@@ -1604,7 +1669,7 @@ impl MMixAssembler {
         (Rule::directive_octa, Rule::data_directive),
     ];
 
-    /// When `remainder_text` opens with a recognized mnemonic or directive
+    /// When `remark_text` opens with a recognized mnemonic or directive
     /// keyword, re-parse the construct that keyword belongs to and return
     /// its own error, plus the byte offset (into the original source) that
     /// error's position is relative to -- so a known keyword with a
@@ -1614,36 +1679,36 @@ impl MMixAssembler {
     /// a literal mnemonic, so a failure at position 0 there means none
     /// matched even a prefix; a failure past position 0 means a mnemonic
     /// matched and only the operand is missing or malformed. `segment`
-    /// (from `segment_start`) is `remainder_text`'s own statement, label
+    /// (from `segment_start`) is `remark_text`'s own statement, label
     /// included, the only span `directive_is` can be re-parsed against,
     /// since its grammar requires that label as part of the rule itself.
     fn recognized_keyword_error(
-        remainder_text: &str,
-        remainder_start: usize,
+        remark_text: &str,
+        remark_start: usize,
         segment: &str,
         segment_start: usize,
     ) -> Option<(pest::error::Error<Rule>, usize)> {
         use pest::Parser;
 
-        if MMixalParser::parse(Rule::directive_is, remainder_text).is_ok()
+        if MMixalParser::parse(Rule::directive_is, remark_text).is_ok()
             && let Err(e) = MMixalParser::parse(Rule::directive, segment)
         {
             return Some((e, segment_start));
         }
         for (keyword, full_rule) in Self::DIRECTIVE_KEYWORD_RULES {
-            if MMixalParser::parse(keyword, remainder_text).is_ok()
-                && let Err(e) = MMixalParser::parse(full_rule, remainder_text)
+            if MMixalParser::parse(keyword, remark_text).is_ok()
+                && let Err(e) = MMixalParser::parse(full_rule, remark_text)
             {
-                return Some((e, remainder_start));
+                return Some((e, remark_start));
             }
         }
-        if let Err(e) = MMixalParser::parse(Rule::instruction, remainder_text) {
+        if let Err(e) = MMixalParser::parse(Rule::instruction, remark_text) {
             let pos = match e.location {
                 pest::error::InputLocation::Pos(p) => p,
                 pest::error::InputLocation::Span((s, _)) => s,
             };
             if pos > 0 {
-                return Some((e, remainder_start));
+                return Some((e, remark_start));
             }
         }
         None
@@ -1651,7 +1716,8 @@ impl MMixAssembler {
 
     /// True when `pair` (a `Rule::statement`) is a bare label with no
     /// instruction or directive attached -- the one shape whose trailing
-    /// text `check_remainder` never treats as ignorable commentary.
+    /// text `diagnose_unrecognized_opcode` diagnoses rather than reading as
+    /// a remark.
     fn statement_is_label_only(pair: &pest::iterators::Pair<Rule>) -> bool {
         let mut inner = pair.clone().into_inner();
         matches!(inner.next().map(|p| p.as_rule()), Some(Rule::label_def)) && inner.next().is_none()
@@ -1707,31 +1773,43 @@ impl MMixAssembler {
                     for line_pair in pair.into_inner() {
                         if line_pair.as_rule() == Rule::line {
                             // Tracks where the current `;`-delimited segment
-                            // began and whether its statement was a bare
-                            // label, so `check_remainder` never blames one
-                            // statement's trailing text on a sibling's parens
-                            // and only rejects a label's trailing text as an
-                            // unknown operation, never an instruction's.
+                            // began, whether its statement was a bare label,
+                            // and whether it had a statement at all, so a
+                            // segment's candidate remark is diagnosed by the
+                            // matching function and never blamed on a
+                            // sibling's parens.
                             let mut segment_start = line_pair.as_span().start();
                             let mut label_only = false;
+                            let mut has_statement = false;
                             for stmt_pair in line_pair.into_inner() {
                                 match stmt_pair.as_rule() {
                                     Rule::statement => {
                                         label_only = Self::statement_is_label_only(&stmt_pair);
+                                        has_statement = true;
                                         self.first_pass_statement(stmt_pair)?;
                                     }
-                                    Rule::remainder => {
-                                        Self::check_remainder(
-                                            &stmt_pair,
-                                            &unit.preprocessed,
-                                            &unit.filename,
-                                            segment_start,
-                                            label_only,
-                                        )?;
+                                    Rule::remark => {
+                                        if label_only {
+                                            Self::diagnose_unrecognized_opcode(
+                                                &stmt_pair,
+                                                &unit.preprocessed,
+                                                &unit.filename,
+                                                segment_start,
+                                            )?;
+                                        } else {
+                                            Self::check_remark(
+                                                &stmt_pair,
+                                                &unit.preprocessed,
+                                                &unit.filename,
+                                                segment_start,
+                                                has_statement,
+                                            )?;
+                                        }
                                         // Skip the `;` that follows, if any,
                                         // so the next segment starts clean.
                                         segment_start = stmt_pair.as_span().end() + 1;
                                         label_only = false;
+                                        has_statement = false;
                                     }
                                     _ => {}
                                 }
@@ -4591,8 +4669,8 @@ mod tests {
         // `HaltLoop` immediately followed by more source used to fail to
         // parse as a label: unguarded `mnemonic_halt` greedily matched the
         // "Halt" prefix of "HaltLoop" as a complete zero-operand HALT
-        // instruction before the grammar ever tried `label_def`, leaving an
-        // unparseable "Loop  ADD $1,$2,$3" remainder. After the guard,
+        // instruction before the grammar ever tried `label_def`, leaving
+        // "Loop  ADD $1,$2,$3" unparsed. After the guard,
         // "Halt" immediately followed by 'L' (alphanumeric) fails the
         // boundary check, `instruction` no longer matches at that position,
         // and `label_def` correctly claims `HaltLoop` as a label.
@@ -8010,7 +8088,7 @@ Main    SETI    $1,7
 
     /// One of the three diagnostics a dangling operator's abutting text may
     /// raise -- an unterminated group, a missing blank, or an operator that
-    /// opens the trailing text -- rather than a specific one of them.
+    /// opens the remark -- rather than a specific one of them.
     fn assert_abutting_text_is_rejected(source: &str) {
         let mut asm = MMixAssembler::new(source, "<test>");
         let err = asm
@@ -8018,10 +8096,10 @@ Main    SETI    $1,7
             .err()
             .unwrap_or_else(|| panic!("expected an error for {source:?}, parse succeeded"));
         assert!(
-            err.contains("no separating blank")
-                || err.contains("operand holds no blanks")
+            err.contains("separated from the statement by a blank")
+                || err.contains("a remark cannot begin with")
                 || err.contains("unterminated group"),
-            "error for {source:?} does not name the trailing-text rule: {err}"
+            "error for {source:?} does not name the remark rule: {err}"
         );
     }
 
@@ -8170,7 +8248,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_trailing_free_text_after_an_operand_is_ignored() {
+    fn test_remark_after_an_operand_is_ignored() {
         assert_eq!(
             assemble_one("ADD $1,$2,$3 sum of the parts"),
             MMixInstruction::ADD(1, 2, 3)
@@ -8186,7 +8264,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_trailing_free_text_after_an_empty_operand_list_is_ignored() {
+    fn test_remark_after_an_empty_operand_list_is_ignored() {
         assert_eq!(assemble_one("HALT exit here"), MMixInstruction::HALT);
     }
 
@@ -8200,12 +8278,12 @@ Main    SETI    $1,7
             "SET $1,$2 $3",
             "SET $1,2 / 3",
         ] {
-            assert_parse_error_contains(source, "operand holds no blanks");
+            assert_parse_error_contains(source, "a remark cannot begin with");
         }
     }
 
     #[test]
-    fn test_abutting_trailing_text_is_rejected() {
+    fn test_abutting_text_is_rejected() {
         for source in ["SETL $1,2abc", "SET $1,5)", "SET $1,3/", "SET $1,4//"] {
             assert_abutting_text_is_rejected(source);
         }
@@ -8356,16 +8434,17 @@ Main    SETI    $1,7
         assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(b'('));
     }
 
-    // ---- Comment and ignored-trailing-text map (C9.2) ------------------
+    // ---- Comment and ignored-remark map (C9.2) --------------------------
     //
-    // Two independent rules produce this map: `blank_whole_line_comments`
-    // decides, from column 1 alone, whether a line is a label candidate at
-    // all (rule 1); `check_remainder`, walking a statement's trailing text,
-    // decides whether that text ends the statement's meaning or is silently
-    // dropped (rule 2, shared with the grammar's `;` separator). A cell
-    // below is named for the rule it isolates.
+    // Three independent mechanisms produce this map:
+    // `blank_whole_line_comments` decides, from column 1 alone, whether a
+    // line is a label candidate at all; the grammar's `;` separator decides
+    // where one statement ends and the next begins; and the remark check
+    // decides whether a statement's candidate remark is permitted
+    // commentary or a fault. A cell below is named for the mechanism that
+    // decides it.
 
-    // -- Column 1: every marker discards the line (rule 1) ---------------
+    // -- Column 1: every marker discards the line -------------------------
     //
     // Each payload abuts its operand (`2abc`), which is a syntax error if
     // parsed at all, so a passing assertion proves the line was discarded,
@@ -8453,11 +8532,13 @@ Main    SETI    $1,7
 
     // -- Indented alone: a marker line between two real instructions -----
     //
-    // Indentation puts the line past rule 1's reach; what happens to it is
-    // rule 2 alone. `#`, `!`, `.` and `@` carry a `; SETL $2,2` tail and
-    // assert the second statement still assembles -- without the tail these
-    // assertions would stay green even if the marker became a true comment
-    // character, which is the silent change this map exists to catch.
+    // Indentation puts the line past `blank_whole_line_comments`'s reach --
+    // that mechanism decides from column 1 alone. What happens to the line
+    // instead is decided by pest's `COMMENT` for `%`, the grammar's `;`
+    // separator, and the remark check for `*`, `/` and no marker. `#`, `!`,
+    // `.` and `@` carry a `; SETL $2,2` tail and assert the second
+    // statement still assembles -- without the tail these assertions would
+    // stay green even if the marker became a true comment character.
 
     #[test]
     fn test_percent_indented_alone_is_a_comment_the_tailed_statement_is_lost() {
@@ -8501,9 +8582,10 @@ Main    SETI    $1,7
 
     #[test]
     fn test_semicolon_indented_alone_opens_an_empty_statement_then_an_unknown_operation() {
-        // The indented `;` opens an empty first statement (rule 2), not a
-        // comment; the prose after it is then read as its own statement, a
-        // bare word read as a label with text trailing it.
+        // The indented `;` opens an empty first statement, per the
+        // grammar's `;` separator, not a comment; the prose after it is
+        // then read as its own statement, a bare word read as a label with
+        // text trailing it.
         let err = assemble_err("SETL $1,1\n    ; note text\nSETL $3,3");
         assert!(
             err.contains("unknown operation: note text"),
@@ -8513,10 +8595,30 @@ Main    SETI    $1,7
     }
 
     #[test]
+    fn test_semicolon_indented_alone_lone_word_defines_a_label() {
+        // a lone word after ';' is defined as a label
+        let mut asm = MMixAssembler::new("SETL $1,1\n    ; counter\nSET $2,counter", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.labels.get("counter"), Some(&4));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 4));
+    }
+
+    #[test]
+    fn test_semicolon_indented_alone_defines_an_is_constant() {
+        let mut asm = MMixAssembler::new("SETL $1,1\n    ; offset IS 8\nSET $2,offset", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 8));
+    }
+
+    #[test]
     fn test_asterisk_indented_alone_is_rejected_as_a_dropped_operator() {
+        // No statement precedes this line's candidate remark, so a failed
+        // remark reports an unknown operation, not a remark diagnostic.
         assert_parse_error_contains(
             "SETL $1,1\n    * note text\nSETL $3,3",
-            "an operand holds no blanks",
+            "unknown operation: * note text",
         );
     }
 
@@ -8524,15 +8626,15 @@ Main    SETI    $1,7
     fn test_slash_indented_alone_is_rejected_as_a_dropped_operator() {
         assert_parse_error_contains(
             "SETL $1,1\n    / note text\nSETL $3,3",
-            "an operand holds no blanks",
+            "unknown operation: / note text",
         );
     }
 
     #[test]
     fn test_no_marker_indented_alone_is_an_unknown_operation() {
         // No marker at all: the indented prose's first word reads as a
-        // label, and the second word is trailing text a label statement
-        // cannot carry.
+        // label, and the second word is text a label statement cannot
+        // carry, so together they are an unknown operation.
         assert_parse_error_contains(
             "SETL $1,1\n    note text\nSETL $3,3",
             "unknown operation: note text",
@@ -8541,13 +8643,13 @@ Main    SETI    $1,7
 
     // -- Trailing: the same run after a complete statement ---------------
     //
-    // The trailing `;` cell (four outcomes, all silent or misleading) is
-    // pinned separately below; it is not one of these.
+    // The trailing `;` cell (four outcomes) is pinned separately below; it
+    // is not one of these.
 
     #[test]
     fn test_percent_wins_over_a_later_semicolon_dropping_the_second_statement() {
-        // Also step 9's first pin: `%` beats a later `;` because it is a
-        // pest implicit comment, consumed before the `;`-loop ever runs.
+        // `%` beats a later `;` because it is a pest implicit comment,
+        // consumed before the `;`-loop ever runs.
         let mut asm = MMixAssembler::new("SETL $1,1 % note; SETL $2,2", "<test>");
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
@@ -8588,35 +8690,35 @@ Main    SETI    $1,7
 
     #[test]
     fn test_asterisk_trailing_is_rejected_as_a_dropped_operator() {
-        assert_parse_error_contains("SETL $1,1 * note", "an operand holds no blanks");
+        assert_parse_error_contains("SETL $1,1 * note", "a remark cannot begin with");
     }
 
     #[test]
     fn test_slash_trailing_is_rejected_as_a_dropped_operator() {
-        assert_parse_error_contains("SETL $1,1 / note", "an operand holds no blanks");
+        assert_parse_error_contains("SETL $1,1 / note", "a remark cannot begin with");
     }
 
-    // -- The three trailing-text exceptions -------------------------------
+    // -- The three ambiguities that disqualify a remark --------------------
 
     #[test]
-    fn test_abutting_trailing_text_errors_with_no_separating_blank() {
-        assert_parse_error_contains("SETL $1,2abc", "no separating blank");
+    fn test_abutting_remark_must_be_separated_by_a_blank() {
+        assert_parse_error_contains("SETL $1,2abc", "separated from the statement by a blank");
     }
 
     #[test]
-    fn test_operator_led_trailing_text_errors_for_every_operator_char() {
+    fn test_operator_led_remark_errors_for_every_operator_char() {
         for c in [',', '+', '-', '*', '/', '~', '&', '|', '^', '<', '>', '$'] {
-            assert_parse_error_contains(&format!("SETL $1,2 {c} 3"), "an operand holds no blanks");
+            assert_parse_error_contains(&format!("SETL $1,2 {c} 3"), "a remark cannot begin with");
         }
     }
 
     #[test]
-    fn test_digit_led_trailing_text_errors_as_a_dropped_separator() {
-        assert_parse_error_contains("HALT 2 apples", "an operand holds no blanks");
+    fn test_digit_led_remark_errors_as_a_dropped_separator() {
+        assert_parse_error_contains("HALT 2 apples", "a remark cannot begin with");
     }
 
     #[test]
-    fn test_trailing_free_text_opening_with_a_letter_is_ignored() {
+    fn test_remark_opening_with_a_letter_is_ignored() {
         assert_eq!(
             assemble_one("ADD $1,$2,$3 sum of the parts"),
             MMixInstruction::ADD(1, 2, 3)
@@ -8624,7 +8726,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_trailing_free_text_opening_with_underscore_or_colon_is_ignored_too() {
+    fn test_remark_opening_with_underscore_or_colon_is_ignored_too() {
         assert_eq!(
             assemble_one("ADD $1,$2,$3 _underscore"),
             MMixInstruction::ADD(1, 2, 3)
@@ -8635,10 +8737,11 @@ Main    SETI    $1,7
         );
     }
 
-    // -- The trailing `;`: four outcomes, three silent or misleading -----
+    // -- The trailing `;`: four outcomes -----------------------------------
 
     #[test]
-    fn test_trailing_semicolon_comment_silently_defines_a_label() {
+    fn test_trailing_semicolon_lone_word_defines_a_label() {
+        // a lone word after ';' is defined as a label
         let mut asm = MMixAssembler::new("SET $1,0 ; counter\nSET $2,counter", "<test>");
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
@@ -8653,7 +8756,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_trailing_semicolon_comment_silently_defines_an_is_constant() {
+    fn test_trailing_semicolon_lone_word_defines_an_is_constant() {
         let mut asm = MMixAssembler::new("SET $1,0 ; offset is 8\nSET $2,offset", "<test>");
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
@@ -8697,7 +8800,7 @@ Main    SETI    $1,7
         );
         // Without the shield, a digit-led run is the deliberate exception:
         // an error, not a warning.
-        assert_parse_error_contains("SET $1,0 2 apples", "an operand holds no blanks");
+        assert_parse_error_contains("SET $1,0 2 apples", "a remark cannot begin with");
     }
 
     // -- The three remaining pins -----------------------------------------
@@ -8729,5 +8832,63 @@ Main    SETI    $1,7
         assert_eq!(assemble_one("SET $1,@"), MMixInstruction::SETL(1, 0));
         assert_parse_error_contains("SET $1,!", "unknown operation: SET $1,!");
         assert_parse_error_contains("SET $1,.", "unknown operation: SET $1,.");
+    }
+
+    // ---- Remark diagnostics: full message, every position row (C9.3) ----
+
+    #[test]
+    fn test_remark_ambiguity_messages_pin_position_and_text() {
+        assert_eq!(
+            assemble_err("SETL $1,2abc"),
+            "<test>:1:10: syntax error: a remark must be separated from the statement by a blank"
+        );
+        assert_eq!(
+            assemble_err("HALT+3"),
+            "<test>:1:5: syntax error: a remark must be separated from the statement by a blank"
+        );
+        assert_eq!(
+            assemble_err("SETL $1,2 + 3"),
+            "<test>:1:11: syntax error: a remark cannot begin with `+` — it reads as part of \
+             the statement; start a comment with `%`"
+        );
+        assert_eq!(
+            assemble_err("HALT + 3"),
+            "<test>:1:6: syntax error: a remark cannot begin with `+` — it reads as part of \
+             the statement; start a comment with `%`"
+        );
+        assert_eq!(
+            assemble_err("SET $1,2 , 3"),
+            "<test>:1:10: syntax error: a remark cannot begin with `,` — it reads as part of \
+             the statement; start a comment with `%`"
+        );
+        assert_eq!(
+            assemble_err("HALT 2 apples"),
+            "<test>:1:6: syntax error: a remark cannot begin with `2` — it reads as part of \
+             the statement; start a comment with `%`"
+        );
+    }
+
+    #[test]
+    fn test_unknown_operation_with_no_statement_ahead_pins_position_and_text() {
+        assert_eq!(
+            assemble_err("9Bar\tSETL\t$1,1"),
+            "<test>:1:1: syntax error: unknown operation: 9Bar\tSETL\t$1,1"
+        );
+        assert_eq!(
+            assemble_err("SETL $1,1;9foo"),
+            "<test>:1:11: syntax error: unknown operation: 9foo"
+        );
+        assert_eq!(
+            assemble_err("SETL $1,1 ;+3"),
+            "<test>:1:12: syntax error: unknown operation: +3"
+        );
+        assert_eq!(
+            assemble_err("\tSETL $1,1\n    * note"),
+            "<test>:2:5: syntax error: unknown operation: * note"
+        );
+        assert_eq!(
+            assemble_err("  2 apples"),
+            "<test>:1:3: syntax error: unknown operation: 2 apples"
+        );
     }
 }

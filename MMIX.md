@@ -25,12 +25,13 @@ first instruction's when there is no `Main` (MMIXAL reference).
 
 ## Line structure
 
-A line holds a label field, an opcode field and an operand field, each
-separated from the next by a blank; every field but the opcode is optional.
-A label with nothing but blanks and a comment after it is a statement on its
-own; anything else there means the opcode field held a word the assembler
-doesn't recognize, reported as an unknown operation with the statement
-printed in full.
+A statement holds a LABEL field, an OP field and an EXPR field, each
+separated from the next by a blank; every field but OP is optional (Knuth,
+*The Art of Computer Programming*, Volume 1, Fascicle 1, §1.3.2′ "The MMIX
+Assembly Language", p. 34). A label with nothing but blanks and a comment
+after it is a statement on its own; anything else there means the OP field
+held a word the assembler doesn't recognize, reported as an unknown
+operation with the statement printed in full.
 
 `;` separates statements — `SETL $1,1; ADD $1,$1,1` assembles both — and
 needs no blank on either side. A statement after a `;` is read exactly like
@@ -44,16 +45,26 @@ A line whose first character is not a letter, a digit, `:` or `_` is a
 comment in its entirety — `;`, `*`, `#`, `/` and `-` all open one this way.
 An indented line is not covered by this rule; its content parses normally.
 
-Once a statement's operands have parsed, text past them is ignored, provided
-a blank separates it from the operand field: `ADD $1,$2,$3 sum of the parts`
-assembles, the trailing words dropped. Text abutting the operand with no
-blank is a syntax error, as is text opening with a digit or with `,` `+` `-`
-`*` `/` `~` `&` `|` `^` `<` `>` or `$` — a digit there almost always means a
-dropped separator rather than a comment, so `HALT 2 apples` is an error, not
-a warning; a bare operand holds no blanks, so `SETL $1,2 + 3`
-would otherwise assemble as `2` with `+ 3` dropped in silence. `/` is in
-this set: `SET $1,2 / 3` is an error, though `SET $1,2/3` (no blank) still
-divides to `0` inside the expression itself.
+Text past EXPR is a **remark** — Knuth's own word, from his listings'
+Remarks column, for the commentary his prose permits there. Two rules
+govern it: EXPR is greedy, taking the longest operand field the grammar
+reads; and whatever it leaves behind is a remark unless it is mistakable
+for part of the statement. Text disqualifies itself from being a remark by:
+
+- abutting the statement, with no blank marking where the statement ended;
+- opening with one of `, + - * / ~ & | ^ < > $`, any of which could extend
+  an expression or an operand list — `/` is in this set, so `SET $1,2 / 3`
+  is an error though `SET $1,2/3` (no blank) still divides to `0` inside
+  the expression itself;
+- opening with a digit, almost always a dropped operand separator rather
+  than commentary, so `HALT 2 apples` is an error, not a warning.
+
+`ADD $1,$2,$3 sum of the parts` assembles, the trailing words a permitted
+remark; `SETL $1,2 + 3` is a syntax error, `+ 3` read as continuing the
+expression rather than dropped in silence. Text with no statement ahead of
+it passes the same test: ignored when it passes (`    # note` assembles),
+an unknown operation when it fails (`SETL $1,1;9foo` reports
+`unknown operation: 9foo`).
 
 Whitespace around an operand list's commas stays legal — `TRAP 0, Time, 2`
 parses — a checksmix extension over MMIXAL, which ends the operand field at
@@ -115,7 +126,7 @@ no symbol table to index).
 A bare expression — one with no enclosing parentheses — holds no whitespace:
 it is one unbroken run of characters ending at the first space, tab, comma,
 `;`, comment character or newline. What follows a bare expression is subject
-to the trailing-text rule in "Line structure" above. Write a negative
+to the remark rules in "Line structure" above. Write a negative
 literal closed up:
 `SET $1,-5`, never `SET $1,- 5`. A parenthesized group is the one place an
 expression may hold whitespace, a checksmix extension over MMIXAL's own

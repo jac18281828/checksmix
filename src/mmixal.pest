@@ -750,15 +750,16 @@ instruction = {
     inst_trap | inst_halt
 }
 
-// Text past a statement's operand field, up to the next statement
-// separator or end of line. Never itself parsed: `parse_two_pass` inspects
-// its span against the raw source to enforce the blank-before-it and
-// no-leading-operator rules a bare rule match can't express.
-remainder = @{ (!(NEWLINE | ";") ~ ANY)* }
+// A candidate remark: text past a statement's operand field, up to the next
+// statement separator or end of line. Never itself parsed: `parse_two_pass`
+// inspects its span against the raw source to tell permitted commentary
+// from text mistakable for part of the statement, a distinction a bare rule
+// match can't express.
+remark = @{ (!(NEWLINE | ";") ~ ANY)* }
 
-// One logical line: `;` separates statements, each trailed by whatever
-// free text follows its operand field before the next `;` or newline.
-line = { statement? ~ remainder ~ (";" ~ statement? ~ remainder)* }
+// One logical line: `;` separates statements, each followed by whatever
+// candidate remark trails its operand field up to the next `;` or newline.
+line = { statement? ~ remark ~ (";" ~ statement? ~ remark)* }
 
 // Program is zero or more lines separated by newlines
 // This allows blank lines, comment-only lines, and empty files

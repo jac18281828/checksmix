@@ -1,3 +1,7 @@
+0.3.13 (2026-09-21)
+
+* Text past a statement's EXPR field is a **remark** — Knuth's own word (*The Art of Computer Programming*, Volume 1, Fascicle 1, §1.3.2′ "The MMIX Assembly Language", p. 34) for the commentary his prose permits there. Two rules govern it: EXPR is greedy, taking the longest operand field the grammar reads, and whatever it leaves behind is a remark unless it is mistakable for part of the statement — because it abuts the statement with no separating blank, it opens with one of `, + - * / ~ & | ^ < > $`, or it opens with a digit. The two diagnostics now read `a remark must be separated from the statement by a blank` and, naming the character, `` a remark cannot begin with `C` — it reads as part of the statement; start a comment with `%` ``. Text with no statement ahead of it passes the same test — ignored when it passes, an unknown operation when it fails. Supersedes the diagnostic wording in 0.3.12's trailing-text bullets
+
 0.3.12 (2026-09-21)
 
 * `contrib/mmix-mode.el`'s predefined-symbol help matches the assembler again: the 0.3.11 TRAP numbering, `Fopen`'s five mode constants (`TextRead`/`TextWrite`/`BinaryRead`/`BinaryWrite`/`BinaryReadWrite`) and `Debug` are documented, and `Trip` is gone. `mmix-predefined-symbols-match-the-assembler`, meant to catch this drift, instead searched for a call site `preprocess_debug(source)` C8 had already rewritten and failed on a nil bound before it compared anything
