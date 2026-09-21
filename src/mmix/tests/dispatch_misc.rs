@@ -20,6 +20,51 @@ fn test_sync() {
     assert_eq!(mmix.get_pc(), 4);
 }
 
+/// VAL-2: `SYNC` 0-3 is a no-op; 3 is the top of that range.
+#[test]
+fn test_sync_3_is_a_no_op() {
+    let mut mmix = MMix::new();
+    mmix.write_tetra(0, 0xFC000003); // SYNC 3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 4);
+}
+
+/// VAL-2: `SYNC` 4-7 is a privileged-operation interrupt.
+#[test]
+fn test_sync_4_to_7_is_privileged() {
+    for xyz in [4u32, 7] {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.write_tetra(0, 0xFC000000 | xyz); // SYNC xyz
+        assert!(!mmix.execute_instruction(), "SYNC {xyz}");
+        assert_eq!(mmix.get_pc(), 0, "PC unmoved for SYNC {xyz}");
+        assert_eq!(mmix.get_exit_code(), 1, "SYNC {xyz}");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert_eq!(
+            handle.diagnostics()[0],
+            format!("SYNC {xyz}: privileged-operation interrupt at PC=0x0000000000000000")
+        );
+    }
+}
+
+/// VAL-2: `SYNC` above 7 is an illegal-instruction interrupt.
+#[test]
+fn test_sync_above_7_is_illegal() {
+    for xyz in [8u32, 1000] {
+        let (host, handle) = CaptureHost::new();
+        let mut mmix = MMix::with_host(host);
+        mmix.write_tetra(0, 0xFC000000 | xyz); // SYNC xyz
+        assert!(!mmix.execute_instruction(), "SYNC {xyz}");
+        assert_eq!(mmix.get_pc(), 0, "PC unmoved for SYNC {xyz}");
+        assert_eq!(mmix.get_exit_code(), 1, "SYNC {xyz}");
+        assert_eq!(handle.diagnostics().len(), 1);
+        assert_eq!(
+            handle.diagnostics()[0],
+            format!("SYNC {xyz}: illegal-instruction interrupt at PC=0x0000000000000000")
+        );
+    }
+}
+
 #[test]
 fn test_resume_with_negative_rx_continues_at_rw() {
     let mut mmix = MMix::new();
@@ -61,6 +106,7 @@ fn test_resume_ropcodes_1_to_3_halt() {
         assert!(!mmix.execute_instruction(), "ropcode {ropcode}");
         assert_eq!(mmix.get_pc(), 0x100, "PC unmoved for ropcode {ropcode}");
         assert_eq!(handle.diagnostics().len(), 1);
+        assert_eq!(mmix.get_exit_code(), 1, "ropcode {ropcode}");
     }
 }
 
@@ -74,6 +120,27 @@ fn test_resume_with_nonzero_z_halts() {
     assert!(!mmix.execute_instruction());
     assert_eq!(mmix.get_pc(), 0x100, "PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(mmix.get_exit_code(), 1);
+}
+
+/// VAL-1: `RESUME`'s X must be zero, checked before the existing Z check.
+#[test]
+fn test_resume_x_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_pc(0x100);
+
+    // RESUME 1,0,0 -- X=1 must be zero.
+    mmix.write_tetra(0x100, 0xF9010000);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0x100, "PC stays on the rejected instruction");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "RESUME X=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000100"
+    );
 }
 
 #[test]

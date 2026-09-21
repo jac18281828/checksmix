@@ -278,7 +278,7 @@ mmixasm         main.mms lib.mms -o prog.mmo
 
 All floating-point instructions use IEEE 754 double precision. Positive
 infinity is the predefined constant `Inf`, rather than a bit pattern the
-reader must spell out. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top: `PUT rA,$X` above `#3FFFF` is an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic. `PUTI` cannot reach the field — its operand is `Z` alone, eight bits — so selecting a mode needs the register form of `PUT`:
+reader must spell out. Results honor the **rounding mode** in bits 17–16 of special register `rA` (register 21). `rA` is 18 bits wide, so the mode field sits at its top: `PUT rA,$X` above `#3FFFF` is an illegal-instruction interrupt, and since this VM has no interrupt vector, it halts with a diagnostic and exits 1 — every halt but the `TRAP 0,Halt,0` trap does. `PUTI` cannot reach the field — its operand is `Z` alone, eight bits — so selecting a mode needs the register form of `PUT`:
 
 | rA bits 17–16 | Mode | Meaning |
 | --- | --- | --- |
@@ -515,8 +515,10 @@ machine unchanged. Otherwise every saved register restores, `rL` becomes the
 saved local count, and `rO = rS` land at the address of the first restored
 local — where `rO` stood before the matching `SAVE`.
 
-Both instructions ignore their must-be-zero fields (`SAVE`'s `Y` and `Z`,
-`UNSAVE`'s `X` and `Y`) rather than rejecting a nonzero value there.
+A nonzero must-be-zero field — `SAVE`'s `Y` and `Z`, `UNSAVE`'s `X` and `Y` —
+is an illegal-instruction interrupt, which halts. `GET`, `PUT` and `RESUME`
+carry the same rule: `GET`'s and `PUT`'s `Y`, and `RESUME`'s `X` and `Y`, must
+also be zero.
 
 Writing a marginal register `$X` raises `rL` to `X+1` and zeroes `$rL`
 through `$X`. For an instruction whose `X` field is a general-register
@@ -712,11 +714,11 @@ Measured on MMIXware:
 | `MUX` | `MUX $X, $Y, $Z` | Bitwise multiplex using rM mask |
 | `MUXI` | `MUX $X, $Y, Z` | Bitwise multiplex immediate |
 | `BDIF` | `BDIF $X, $Y, $Z` | Byte difference (saturating, each byte) |
-| `BDIFI` | `BDIF $X, $Y, Z` | Byte difference immediate |
+| `BDIFI` | `BDIF $X, $Y, Z` | Byte difference immediate; Z is the octabyte `#00…0Z`, so only the low byte subtracts |
 | `WDIF` | `WDIF $X, $Y, $Z` | Wyde difference (saturating) |
-| `WDIFI` | `WDIF $X, $Y, Z` | Wyde difference immediate |
+| `WDIFI` | `WDIF $X, $Y, Z` | Wyde difference immediate; Z is the octabyte `#00…0Z`, so only the low wyde subtracts |
 | `TDIF` | `TDIF $X, $Y, $Z` | Tetra difference (saturating) |
-| `TDIFI` | `TDIF $X, $Y, Z` | Tetra difference immediate |
+| `TDIFI` | `TDIF $X, $Y, Z` | Tetra difference immediate; Z is the octabyte `#00…0Z`, so only the low tetra subtracts |
 | `ODIF` | `ODIF $X, $Y, $Z` | Octa difference (saturating) |
 | `ODIFI` | `ODIF $X, $Y, Z` | Octa difference immediate |
 | `SADD` | `SADD $X, $Y, $Z` | Sideways add (population count of `$Y & ~$Z`) |
@@ -808,16 +810,16 @@ Measured on MMIXware:
 | `GOI` | `GO $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
 | `GETA` | `GETA $X, addr` | Get relative address into `$X` |
 | `GETAB` | `GETAB $X, addr` | Get relative address (backward hint) |
-| `GET` | `GET $X, Z` | Read special register Z into `$X`; `Z ≥ 32` halts |
-| `PUT` | `PUT X, $Z` | Write `$Z` into special register X; `X ≥ 32` halts; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18) are read-only in user mode; `rG` must be 32–255 and at least `rL`; `rA` at most `#3FFFF` |
+| `GET` | `GET $X, Z` | Read special register Z into `$X`; `Z ≥ 32` or `Y != 0` halts |
+| `PUT` | `PUT X, $Z` | Write `$Z` into special register X; `X ≥ 32` or `Y != 0` halts; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18) are read-only in user mode; `rG` must be 32–255 and at least `rL`; `rA` at most `#3FFFF` |
 | `PUTI` | `PUT X, Z` | Write immediate Z into special register X; same rejections as `PUT` |
-| `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address |
-| `UNSAVE` | `UNSAVE 0, $Z` | Restore the context `$Z` addresses from the register stack |
-| `RESUME` | `RESUME XYZ` | Resume after interrupt or trip |
+| `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address; a nonzero `Y` or `Z` halts |
+| `UNSAVE` | `UNSAVE 0, $Z` | Restore the context `$Z` addresses from the register stack; a nonzero `X` or `Y` halts |
+| `RESUME` | `RESUME XYZ` | Resume after interrupt or trip; a nonzero `X` or `Y` halts |
 | `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
 | `HALT` | `HALT` | checksmix extension — encodes as `TRAP 0,Halt,0` |
 | `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
-| `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline |
+| `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline; `XYZ` 0–3 is a no-op, 4–7 a privileged-operation interrupt, above 7 an illegal-instruction interrupt |
 | `SWYM` | `SWYM` / `SWYM X, Y, Z` | Sympathize with your machinery (no-op); operands optional, default to zero |
 | `PRELD` | `PRELD $X, $Y, $Z` | Prefetch data into cache |
 | `PRELDI` | `PRELD $X, $Y, Z` | Prefetch data (immediate) |

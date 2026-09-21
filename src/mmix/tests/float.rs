@@ -2389,3 +2389,19 @@ fn test_fsub_cancellation_is_positive_by_default() {
     assert_eq!(mmix.get_register(1), 0);
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
+
+/// EXIT-1: a rounding-mode override above 4 halts with a diagnostic and
+/// exits 1, like every other halt but the `Halt` trap.
+#[test]
+fn test_fix_with_illegal_round_mode_exits_1() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(3, 42.0f64.to_bits());
+    mmix.write_tetra(0, 0x05020503); // FIX $2,5,$3 -- Y=5 is out of range
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(2), 0, "the write did not land");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert!(handle.diagnostics()[0].contains("FIX"));
+}

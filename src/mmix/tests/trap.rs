@@ -14,6 +14,21 @@ fn test_trap_halt() {
     assert_eq!(mmix.get_pc(), 4); // PC still advances
 }
 
+/// EXIT-1: the register form (`X != 0`) halts and exits 1, like every
+/// other halt but the `Halt` trap.
+#[test]
+fn test_trap_register_form_halts_and_exits_1() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(2, 10);
+    mmix.set_register(3, 20);
+    mmix.write_tetra(0, 0x00010203); // TRAP 1,$2,$3 -- register form
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert!(handle.diagnostics()[0].contains("Register TRAP"));
+}
+
 #[test]
 fn test_trap_fputs_stdout() {
     let (host, handle) = CaptureHost::new();

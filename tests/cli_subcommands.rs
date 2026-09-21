@@ -193,6 +193,32 @@ fn run_multi_source_mms() {
     assert!(status.success(), "run of multi-source .mms should succeed");
 }
 
+// ── run: a diagnostic halt exits 1; a Halt trap keeps its own status ────────
+
+#[test]
+fn run_illegal_instruction_exits_1() {
+    let status = checksmix()
+        .args(["run"])
+        .arg(fixture("put_rc_halts.mms"))
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(1), "a diagnostic halt (PUT rC) exits 1");
+}
+
+#[test]
+fn run_halt_trap_exits_with_its_own_255_value() {
+    let status = checksmix()
+        .args(["run"])
+        .arg(fixture("halt_with_255.mms"))
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(255),
+        "TRAP 0,Halt,0 exits with $255, not 1"
+    );
+}
+
 // ── run all_instructions_test.mms: no leftover debug noise on stderr ─────────
 
 #[test]

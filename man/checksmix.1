@@ -55,6 +55,16 @@ Assemble one or more
 source files into a single
 .B .mmo
 object file. Multiple inputs are assembled into one shared symbol space.
+.SH EXIT STATUS
+For an MMIX program
+.RB ( .mms " or " .mmo ),
+.B run
+exits with
+.B $255
+mod 256 when the program executes
+.BR "TRAP 0,Halt,0" ,
+and with 1 when assembly or loading fails or the machine halts any other
+way. A MIX program exits 0 unless it fails to load.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG

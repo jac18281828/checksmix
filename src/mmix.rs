@@ -64,7 +64,8 @@ pub struct MMix {
     /// and never reassigned).
     file_handles: HashMap<u8, FileHandle>,
 
-    /// Exit code from HALT trap (to be returned as process exit code)
+    /// Process exit code: the `Halt` trap sets it from `$255`; every other
+    /// halt sets it to 1 (EXIT-1).
     exit_code: u64,
 
     /// Where process-level effects (writes, the clock, diagnostics, trap
@@ -303,11 +304,14 @@ impl MMix {
 
     /// Emit a diagnostic and report the halt `execute_instruction` should
     /// propagate: no register or memory change and no PC advance, on the
-    /// caller's promise that it made none before calling this. Every
-    /// `PUT`/`PUTI` rejection and `SAVE`/`UNSAVE`'s validation failures route
-    /// through this one diagnose-then-refuse path.
+    /// caller's promise that it made none before calling this. Sets the
+    /// exit code to 1 (EXIT-1: every halt but the `Halt` trap exits 1).
+    /// Every `PUT`/`PUTI` rejection, every must-be-zero and `SYNC`-range
+    /// violation, and `SAVE`/`UNSAVE`'s validation failures route through
+    /// this one diagnose-then-refuse path.
     fn reject(&mut self, message: &str) -> bool {
         self.host.diagnostic(message);
+        self.exit_code = 1;
         false
     }
 
@@ -326,7 +330,8 @@ impl MMix {
         self.pc = self.pc.wrapping_add(4);
     }
 
-    /// Get the exit code set by TRAP 0 (Halt).
+    /// Get the process exit code: `$255` mod 256 after a `Halt` trap, 1
+    /// after any other halt.
     pub fn get_exit_code(&self) -> u64 {
         self.exit_code
     }
@@ -381,9 +386,12 @@ impl MMix {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Stop {
-    /// The machine halted (TRAP 0, an unhandled TRIP, or an unhandled
-    /// register trap — `execute_instruction` returning `false` covers all
-    /// three with no finer distinction).
+    /// The machine halted: a `Halt` trap, an unhandled TRIP, an unhandled
+    /// register trap, or a diagnostic rejection (illegal-instruction,
+    /// privileged-operation, or an unloaded vector) — `execute_instruction`
+    /// returning `false` covers every case with no finer distinction.
+    /// [`MMix::get_exit_code`] distinguishes only the `Halt` trap from
+    /// everything else.
     Halted,
     /// The instruction budget ran out before the machine halted. The
     /// machine is unchanged; resuming from here is calling the same

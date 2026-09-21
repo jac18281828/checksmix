@@ -2716,7 +2716,7 @@ Test207 ADDUI   TestNum,TestNum,1
 Test208 ADDUI   TestNum,TestNum,1
         SETI $10,#0A14
         BDIFI   Result,$10,5
-        SETI Expect,#050F
+        SETI Expect,#0A0F
         CMP     Temp,Result,Expect
         PBZ     Temp,Test209
         JMP     TestFail
@@ -2727,7 +2727,7 @@ Test208 ADDUI   TestNum,TestNum,1
 Test209 ADDUI   TestNum,TestNum,1
         SETI $10,#0A000014
         WDIFI   Result,$10,5
-        SETI Expect,#9FB000F
+        SETI Expect,#0A00000F
         CMP     Temp,Result,Expect
         PBZ     Temp,Test210
         JMP     TestFail
@@ -2738,7 +2738,7 @@ Test209 ADDUI   TestNum,TestNum,1
 Test210 ADDUI   TestNum,TestNum,1
         SETI $10,#A00000014
         TDIFI   Result,$10,5
-        SETI Expect,#50000000F
+        SETI Expect,#A0000000F
         CMP     Temp,Result,Expect
         PBZ     Temp,Test211
         JMP     TestFail

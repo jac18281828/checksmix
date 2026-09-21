@@ -34,10 +34,10 @@ fn test_put_get() {
 }
 
 #[test]
-fn test_puti_ignores_y_and_stores_z_alone() {
+fn test_puti_stores_z_alone() {
     let mut mmix = MMix::new();
-    // PUTI rH, YZ=0x1234 - Y is ignored; only Z=0x34 reaches rH.
-    mmix.write_tetra(0, 0xF7031234); // PUTI X=3 (rH), Y=0x12, Z=0x34
+    // PUTI rH, Y=0, Z=0x34 - only Z reaches rH.
+    mmix.write_tetra(0, 0xF7030034); // PUTI X=3 (rH), Y=0, Z=0x34
     assert!(mmix.execute_instruction());
     assert_eq!(mmix.get_special(SpecialReg::RH), 0x34);
 }
@@ -51,6 +51,56 @@ fn test_put_x_at_32_names_no_special_register() {
     assert!(!mmix.execute_instruction());
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(mmix.get_exit_code(), 1);
+}
+
+/// VAL-1: `PUT`'s Y must be zero.
+#[test]
+fn test_put_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(1, 1);
+
+    // PUT rA,1,$1 -- Y=1 must be zero.
+    mmix.write_tetra(0, 0xF6150101);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(
+        mmix.get_special(SpecialReg::RA),
+        0,
+        "the write did not land"
+    );
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "PUT Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
+}
+
+/// VAL-1: `PUTI`'s Y must be zero.
+#[test]
+fn test_puti_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+
+    // PUTI rA,1,1 -- Y=1 must be zero.
+    mmix.write_tetra(0, 0xF7150101);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(
+        mmix.get_special(SpecialReg::RA),
+        0,
+        "the write did not land"
+    );
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "PUTI Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
 }
 
 #[test]
@@ -69,6 +119,7 @@ fn test_put_rc_is_rejected_with_a_privileged_operation_interrupt() {
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rC"));
     assert!(handle.diagnostics()[0].contains("privileged"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -87,6 +138,7 @@ fn test_put_rn_is_rejected_with_an_illegal_instruction_interrupt() {
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rN"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -105,6 +157,7 @@ fn test_put_ro_is_rejected_with_an_illegal_instruction_interrupt() {
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rO"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -123,6 +176,7 @@ fn test_put_rs_is_rejected_with_an_illegal_instruction_interrupt() {
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rS"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -136,6 +190,7 @@ fn test_put_rg_below_32_is_rejected() {
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rG"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -149,6 +204,7 @@ fn test_put_rg_below_rl_is_rejected() {
     assert_eq!(mmix.get_special(SpecialReg::RG), 32, "rG unchanged");
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -161,6 +217,7 @@ fn test_put_rg_above_255_is_rejected() {
     assert_eq!(mmix.get_special(SpecialReg::RG), 32, "rG unchanged");
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]
@@ -707,7 +764,32 @@ fn test_get_z_at_32_and_255_are_rejected_with_no_special_register_above_31() {
         assert_eq!(mmix.get_special(SpecialReg::RL), 5);
         assert_eq!(mmix.get_special(SpecialReg::RA), 333);
         assert_eq!(handle.diagnostics().len(), 1);
+        assert_eq!(mmix.get_exit_code(), 1);
     }
+}
+
+/// VAL-1: `GET`'s Y must be zero. `$X` starts marginal, so a claim before
+/// this check would raise `rL` and show up here.
+#[test]
+fn test_get_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_special(SpecialReg::RG, 40);
+    mmix.set_special(SpecialReg::RL, 0);
+
+    // GET $1,1,rZZ ($1 is marginal; Y=1 must be zero)
+    mmix.write_tetra(0, 0xFE01011F);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(1), 0, "$X did not change");
+    assert_eq!(mmix.get_special(SpecialReg::RL), 0, "rL did not rise");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "GET Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
 }
 
 #[test]
@@ -866,6 +948,7 @@ fn test_put_ra_rejects_a_value_wider_than_18_bits() {
     assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rA"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 #[test]

@@ -66,6 +66,31 @@ impl MMix {
         self.advance_pc();
     }
 
+    /// The first must-be-zero field VAL-1 finds nonzero, in `X, Y, Z`
+    /// order, for the five opcodes the MMIX instruction reference names
+    /// (get.html, put.html, save.html, gitraptrip.html "UNSAVE"/"RESUME").
+    /// `None` for every legal encoding and every other opcode.
+    fn must_be_zero_violation(
+        opcode: crate::mmixal::Opcode,
+        x: u8,
+        y: u8,
+        z: u8,
+    ) -> Option<(&'static str, char, u8)> {
+        use crate::mmixal::Opcode;
+        match opcode {
+            Opcode::GET if y != 0 => Some(("GET", 'Y', y)),
+            Opcode::PUT if y != 0 => Some(("PUT", 'Y', y)),
+            Opcode::PUTI if y != 0 => Some(("PUTI", 'Y', y)),
+            Opcode::SAVE if y != 0 => Some(("SAVE", 'Y', y)),
+            Opcode::SAVE if z != 0 => Some(("SAVE", 'Z', z)),
+            Opcode::UNSAVE if x != 0 => Some(("UNSAVE", 'X', x)),
+            Opcode::UNSAVE if y != 0 => Some(("UNSAVE", 'Y', y)),
+            Opcode::RESUME if x != 0 => Some(("RESUME", 'X', x)),
+            Opcode::RESUME if y != 0 => Some(("RESUME", 'Y', y)),
+            _ => None,
+        }
+    }
+
     // ========== Instruction Execution ==========
 
     /// Execute a single instruction at the current program counter.
@@ -99,6 +124,20 @@ impl MMix {
         z: u8,
     ) -> bool {
         use crate::mmixal::Opcode;
+
+        // VAL-1 (get.html, put.html, save.html, gitraptrip.html
+        // "UNSAVE"/"RESUME"): a nonzero must-be-zero field is an
+        // illegal-instruction interrupt, named in X, Y, Z order. This runs
+        // before every other check the instruction makes and before this
+        // claims $X as a local, so a rejected instruction leaves rL
+        // untouched.
+        if let Some((mnemonic, field, value)) = Self::must_be_zero_violation(opcode, x, y, z) {
+            return self.reject(&format!(
+                "{mnemonic} {field}={value}: must be zero; illegal-instruction \
+                 interrupt at PC={:#018x}",
+                self.pc
+            ));
+        }
 
         // Operands are read before the destination raises rL. A marginal $Y
         // or $Z still reads as zero when the instruction executes.
@@ -157,6 +196,7 @@ impl MMix {
                     ));
                     self.set_special(SpecialReg::RBB, trap_val);
                     self.advance_pc();
+                    self.exit_code = 1;
                     false // Halt by default for unhandled register traps
                 }
             }
@@ -1927,14 +1967,13 @@ impl MMix {
                 true
             }
             Opcode::BDIFI => {
-                // BDIFI $X, $Y, Z - Byte difference immediate
+                // BDIFI $X, $Y, Z - Byte difference immediate. Z is the
+                // octabyte #00...0Z (bdif.html): lane 0 subtracts, every
+                // higher lane is $Y's lane unchanged.
                 let val_y = self.get_register(y);
-                let mut result: u64 = 0;
-                for i in 0..8 {
-                    let byte_y = ((val_y >> (i * 8)) & 0xFF) as u8;
-                    let diff = byte_y.saturating_sub(z);
-                    result |= (diff as u64) << (i * 8);
-                }
+                let byte0 = (val_y & 0xFF) as u8;
+                let diff = byte0.saturating_sub(z);
+                let result = (val_y & !0xFFu64) | diff as u64;
                 self.set_register(x, result);
                 self.advance_pc();
                 true
@@ -1955,15 +1994,13 @@ impl MMix {
                 true
             }
             Opcode::WDIFI => {
-                // WDIFI $X, $Y, Z - Wyde difference immediate
+                // WDIFI $X, $Y, Z - Wyde difference immediate. Z is the
+                // octabyte #00...0Z: lane 0 subtracts, every higher lane
+                // is $Y's lane unchanged.
                 let val_y = self.get_register(y);
-                let z_wyde = z as u16;
-                let mut result: u64 = 0;
-                for i in 0..4 {
-                    let wyde_y = ((val_y >> (i * 16)) & 0xFFFF) as u16;
-                    let diff = wyde_y.saturating_sub(z_wyde);
-                    result |= (diff as u64) << (i * 16);
-                }
+                let wyde0 = (val_y & 0xFFFF) as u16;
+                let diff = wyde0.saturating_sub(z as u16);
+                let result = (val_y & !0xFFFFu64) | diff as u64;
                 self.set_register(x, result);
                 self.advance_pc();
                 true
@@ -1984,15 +2021,13 @@ impl MMix {
                 true
             }
             Opcode::TDIFI => {
-                // TDIFI $X, $Y, Z - Tetra difference immediate
+                // TDIFI $X, $Y, Z - Tetra difference immediate. Z is the
+                // octabyte #00...0Z: lane 0 subtracts, every higher lane
+                // is $Y's lane unchanged.
                 let val_y = self.get_register(y);
-                let z_tetra = z as u32;
-                let mut result: u64 = 0;
-                for i in 0..2 {
-                    let tetra_y = ((val_y >> (i * 32)) & 0xFFFFFFFF) as u32;
-                    let diff = tetra_y.saturating_sub(z_tetra);
-                    result |= (diff as u64) << (i * 32);
-                }
+                let tetra0 = (val_y & 0xFFFF_FFFF) as u32;
+                let diff = tetra0.saturating_sub(z as u32);
+                let result = (val_y & !0xFFFF_FFFFu64) | diff as u64;
                 self.set_register(x, result);
                 self.advance_pc();
                 true
@@ -2280,11 +2315,24 @@ impl MMix {
                 true
             }
             Opcode::SYNC => {
-                // SYNC XYZ - Synchronize
-                // Memory synchronization barrier
-                // For a simulator, this is typically a no-op
-                self.advance_pc();
-                true
+                // SYNC XYZ (sync.html; §1 VAL-2): 0-3 is a no-op user
+                // programs may issue; 4-7 is reserved for the kernel; above
+                // 7 names nothing.
+                let xyz = ((x as u32) << 16) | ((y as u32) << 8) | z as u32;
+                match xyz {
+                    0..=3 => {
+                        self.advance_pc();
+                        true
+                    }
+                    4..=7 => self.reject(&format!(
+                        "SYNC {xyz}: privileged-operation interrupt at PC={:#018x}",
+                        self.pc
+                    )),
+                    _ => self.reject(&format!(
+                        "SYNC {xyz}: illegal-instruction interrupt at PC={:#018x}",
+                        self.pc
+                    )),
+                }
             }
             Opcode::SWYM => {
                 // SWYM XYZ - Sympathize with your machinery (no-op)

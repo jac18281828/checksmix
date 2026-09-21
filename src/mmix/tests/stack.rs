@@ -848,6 +848,71 @@ fn test_save_rejects_a_destination_below_rg_leaving_the_machine_unchanged() {
     assert_eq!(mmix.get_register(45), 0, "the rejected SAVE wrote nothing");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("SAVE"));
+    assert_eq!(mmix.get_exit_code(), 1);
+}
+
+/// VAL-1: `SAVE`'s Y must be zero.
+#[test]
+fn test_save_y_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(0, 0x1234); // a local, must survive
+
+    // SAVE $60,1,0 -- Y=1 must be zero.
+    mmix.write_tetra(0, 0xFA3C0100);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(0), 0x1234, "SAVE touched nothing");
+    assert_eq!(mmix.get_register(60), 0, "SAVE touched nothing");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "SAVE Y=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
+}
+
+/// VAL-1: `SAVE`'s Z must be zero, checked after Y.
+#[test]
+fn test_save_z_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(0, 0x1234); // a local, must survive
+
+    // SAVE $255,0,1 -- Z=1 must be zero.
+    mmix.write_tetra(0, 0xFAFF0001);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(0), 0x1234, "SAVE touched nothing");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "SAVE Z=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
+}
+
+/// VAL-1: `UNSAVE`'s X must be zero.
+#[test]
+fn test_unsave_x_nonzero_is_rejected() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(0, 0xFEED); // survives iff UNSAVE never runs
+
+    // UNSAVE 1,0,$255 -- X=1 must be zero.
+    mmix.write_tetra(0, 0xFB0100FF);
+    assert!(!mmix.execute_instruction());
+
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(0), 0xFEED, "UNSAVE touched nothing");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "UNSAVE X=1: must be zero; illegal-instruction interrupt at PC=0x0000000000000000"
+    );
 }
 
 #[test]
@@ -911,6 +976,7 @@ fn test_unsave() {
     mmix.write_tetra(0, 0xFB000001); // UNSAVE 0,$1
     assert!(!mmix.execute_instruction());
     assert_eq!(mmix.get_pc(), 0);
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 /// After `SAVE`, the register stack holds — lowest address to highest
@@ -1293,6 +1359,7 @@ fn test_pop_halts_on_a_misaligned_ro() {
     assert_eq!(mmix.get_register(0), 0xFEED, "no register change on a halt");
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rO"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 /// An `rO` above the register-stack segment — only reachable through a
@@ -1317,6 +1384,7 @@ fn test_pop_halts_on_an_ro_above_the_stack_segment() {
     assert_eq!(mmix.get_register(0), 0xFEED);
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rO"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 /// The review's non-forged reproduction: a real top-level `SAVE $40,0`,
@@ -1387,28 +1455,34 @@ fn test_call_depth_walks_a_save_context_with_nonzero_rl_and_rg_ne_32() {
     );
 }
 
-/// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields the
-/// machine never reads. A nonzero value there behaves exactly as zero.
+/// `SAVE`'s Y and Z, and `UNSAVE`'s X and Y, are must-be-zero fields
+/// (VAL-1): a nonzero value there is an illegal-instruction interrupt,
+/// the machine left unchanged.
 #[test]
-fn test_save_and_unsave_ignore_their_must_be_zero_fields() {
-    let mut mmix = MMix::new();
+fn test_save_and_unsave_reject_their_must_be_zero_fields() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
     mmix.set_register(0, 0x1234); // a local
     mmix.set_register(50, 0xABCD); // a global
 
-    // SAVE $60,255,255 - Y and Z both nonzero.
+    // SAVE $60,255,255 - Y and Z both nonzero; Y is named first.
     mmix.write_tetra(0, 0xFA3CFFFF);
-    assert!(mmix.execute_instruction());
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_register(0), 0x1234, "SAVE touched nothing");
+    assert_eq!(mmix.get_register(50), 0xABCD, "SAVE touched nothing");
+    assert_eq!(mmix.get_exit_code(), 1);
 
-    mmix.set_register(0, 0);
-    mmix.set_register(50, 0);
-
-    // UNSAVE 255,255,$60 - X and Y both nonzero; the address still
-    // comes from $Z alone.
+    // UNSAVE 255,255,$60 - X and Y both nonzero; X is named first.
+    mmix.set_pc(4);
     mmix.write_tetra(4, 0xFBFFFF3C);
-    assert!(mmix.execute_instruction());
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 4, "the PC stays on the rejected instruction");
+    assert_eq!(mmix.get_exit_code(), 1);
 
-    assert_eq!(mmix.get_register(0), 0x1234);
-    assert_eq!(mmix.get_register(50), 0xABCD);
+    assert_eq!(handle.diagnostics().len(), 2);
+    assert!(handle.diagnostics()[0].contains("SAVE Y=255"));
+    assert!(handle.diagnostics()[1].contains("UNSAVE X=255"));
 }
 
 /// Two independent machines run the same `SAVE`; `$X` lands on the same
@@ -1449,6 +1523,7 @@ fn test_unsave_rejects_a_packed_rg_below_32() {
     assert_eq!(mmix.get_special(SpecialReg::RG), 32);
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rG"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 /// `UNSAVE` rejects a packed rA above `RA_MAX`.
@@ -1471,6 +1546,7 @@ fn test_unsave_rejects_a_packed_ra_above_ra_max() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("rA"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
 
 /// `UNSAVE` rejects a saved local count greater than the packed rG. A
@@ -1506,4 +1582,5 @@ fn test_unsave_rejects_a_saved_local_count_above_the_packed_rg() {
     assert_eq!(mmix.get_register(0), 0xFEED);
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("local count"));
+    assert_eq!(mmix.get_exit_code(), 1);
 }
