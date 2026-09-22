@@ -244,54 +244,42 @@ fn find_lop_post(mmo_data: &[u8]) -> usize {
         .expect("built .mmo must have a lop_post record")
 }
 
+/// `checksmix build` and `mmixasm` share one object-code path; each must
+/// carry a program's `GREG` value through its postamble.
 #[test]
-fn build_of_a_program_with_a_greg_carries_it_in_the_postamble() {
-    let tmp_mmo = std::env::temp_dir().join("checksmix_test_greg_build.mmo");
+fn each_binarys_build_of_a_program_with_a_greg_carries_it_in_the_postamble() {
+    let cases: [(Command, &[&str], &str); 2] = [
+        (
+            checksmix(),
+            &["build", "-o"],
+            "checksmix_test_greg_build.mmo",
+        ),
+        (mmixasm(), &["-o"], "checksmix_test_greg_mmixasm.mmo"),
+    ];
 
-    let build_out = checksmix()
-        .args(["build", "-o"])
-        .arg(&tmp_mmo)
-        .arg(fixture("greg_postamble.mms"))
-        .output()
-        .unwrap();
-    assert!(
-        build_out.status.success(),
-        "build should succeed; stderr: {}",
-        String::from_utf8_lossy(&build_out.stderr)
-    );
+    for (mut cmd, args, tmp_name) in cases {
+        let tmp_mmo = std::env::temp_dir().join(tmp_name);
 
-    let mmo_data = std::fs::read(&tmp_mmo).unwrap();
-    let post = find_lop_post(&mmo_data);
-    assert_eq!(mmo_data[post + 3], 254, "G must be 254 for one GREG");
-    let reg254 = u64::from_be_bytes(mmo_data[post + 4..post + 12].try_into().unwrap());
-    assert_eq!(reg254, 1000, "$254 must carry the GREG's value");
+        let build_out = cmd
+            .args(args)
+            .arg(&tmp_mmo)
+            .arg(fixture("greg_postamble.mms"))
+            .output()
+            .unwrap();
+        assert!(
+            build_out.status.success(),
+            "build should succeed; stderr: {}",
+            String::from_utf8_lossy(&build_out.stderr)
+        );
 
-    let _ = std::fs::remove_file(&tmp_mmo);
-}
+        let mmo_data = std::fs::read(&tmp_mmo).unwrap();
+        let post = find_lop_post(&mmo_data);
+        assert_eq!(mmo_data[post + 3], 254, "G must be 254 for one GREG");
+        let reg254 = u64::from_be_bytes(mmo_data[post + 4..post + 12].try_into().unwrap());
+        assert_eq!(reg254, 1000, "$254 must carry the GREG's value");
 
-#[test]
-fn mmixasm_of_a_program_with_a_greg_carries_it_in_the_postamble() {
-    let tmp_mmo = std::env::temp_dir().join("checksmix_test_greg_mmixasm.mmo");
-
-    let build_out = mmixasm()
-        .args(["-o"])
-        .arg(&tmp_mmo)
-        .arg(fixture("greg_postamble.mms"))
-        .output()
-        .unwrap();
-    assert!(
-        build_out.status.success(),
-        "mmixasm should succeed; stderr: {}",
-        String::from_utf8_lossy(&build_out.stderr)
-    );
-
-    let mmo_data = std::fs::read(&tmp_mmo).unwrap();
-    let post = find_lop_post(&mmo_data);
-    assert_eq!(mmo_data[post + 3], 254, "G must be 254 for one GREG");
-    let reg254 = u64::from_be_bytes(mmo_data[post + 4..post + 12].try_into().unwrap());
-    assert_eq!(reg254, 1000, "$254 must carry the GREG's value");
-
-    let _ = std::fs::remove_file(&tmp_mmo);
+        let _ = std::fs::remove_file(&tmp_mmo);
+    }
 }
 
 // ── run greg_base_address.mms: the two-operand base-address form ─────────────
