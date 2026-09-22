@@ -110,7 +110,7 @@ its characters as comma-separated character constants: an operator before
 the string applies to its first character and one after it to its last, so
 `BYTE 1+"ace"+2,0` is `BYTE 1+'a','c','e'+2,0` — four bytes, `b`, `c`, `g`,
 `0`. A string alone as an item keeps the rule above. This expansion reaches
-data-list items only; a string is still not a valid instruction operand.
+data-list items only; a string is not a valid instruction operand.
 
 The assembler aligns before it places an item: it rounds the location counter
 up to the item's natural width — 4 for an instruction, 2, 4 or 8 for `WYDE`,

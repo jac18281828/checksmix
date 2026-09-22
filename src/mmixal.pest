@@ -96,15 +96,20 @@ directive_espec = @{ "ESPEC" ~ word_end }
 prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
 // A data directive's list mirrors `expr`/`term`/`primary` and `group*`,
-// with one addition: a string may stand where a term or, singly, where a
-// group's inner value stands. A string is not an expression operand
-// elsewhere -- the reference defines it as shorthand for a list of
-// character constants, not as a value arithmetic can touch, so `data_expr`
-// serves data lists only and `expr` keeps serving instruction operands.
+// with one addition: a string may stand wherever a `data_primary` stands,
+// combining with a unary operator directly on it and with a strong or weak
+// operator on either side. A string is not an expression operand elsewhere
+// -- the reference defines it as shorthand for a list of character
+// constants, not as a value arithmetic can touch, so `data_expr` serves
+// data lists only and `expr` keeps serving instruction operands.
 data_expr = ${ data_term ~ (weak_op ~ data_term)* }
-data_term = { string_literal | (data_primary ~ (strong_op ~ data_primary)*) }
+// The trailing `string_literal` alternative never matches on its own --
+// `data_primary` already covers a bare string -- but its presence keeps a
+// string-free failure's diagnostic naming `data_primary`, not `data_term`.
+data_term = { (data_primary ~ (strong_op ~ data_primary)*) | string_literal }
 data_primary = {
     unary_op ~ data_primary | data_group | at_symbol | local_ref_back | local_ref_fwd | constant | global_id
+  | string_literal
 }
 
 data_group = { "(" ~ group_ws* ~ data_group_expr ~ group_ws* ~ ")" }
