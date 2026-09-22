@@ -1297,7 +1297,7 @@ fn loaded_extent_includes_the_hello_world_nul_terminator_that_occupied_omits() {
     const HELLO_WORLD: &str = "\
 \tLOC\tData_Segment
 \tGREG\t@
-Text\tBYTE\t\"Hello world!\",'\\n',0
+Text\tBYTE\t\"Hello world!\",10,0
 
 \tLOC\t#100
 
@@ -1308,7 +1308,7 @@ Main\tLDA\t$255,Text
     let mut asm = MMixAssembler::new(HELLO_WORLD, "hello_world.mms");
     asm.parse().expect("hello_world.mms must assemble");
     let text_addr = *asm.labels.get("Text").expect("Text label");
-    // "Hello world!",'\n',0 is 14 bytes; the NUL terminator is the last.
+    // "Hello world!",10,0 is 14 bytes; the NUL terminator is the last.
     let nul_addr = text_addr + 13;
 
     let mut mmix = MMix::new();

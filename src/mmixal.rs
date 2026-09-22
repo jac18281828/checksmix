@@ -1104,45 +1104,18 @@ impl MMixAssembler {
         (result, strings, overflow)
     }
 
-    /// Count the actual number of bytes in a string literal, accounting for escape sequences
+    /// Count the actual number of bytes in a string literal's content.
     fn count_string_bytes(content: &str) -> usize {
         Self::decode_byte_string(content).len()
     }
 
     /// Decode a data directive's string literal content into the bytes it
-    /// represents, resolving the escape sequences `\n`, `\r`, `\t`, `\0`,
-    /// `\\`, `\'`, `\"`. Any other escaped character decodes to that
-    /// character's own byte value. Pass-1 (`count_string_bytes`) and pass-2
+    /// represents: one byte per character, low byte only (§1's Unicode
+    /// carve-out). Pass-1 (`count_string_bytes`) and pass-2
     /// (`parse_data_directive`) both go through this single function so they
     /// cannot disagree on size.
     fn decode_byte_string(content: &str) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        let mut chars = content.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '\\' {
-                if let Some(next_ch) = chars.next() {
-                    let decoded = match next_ch {
-                        'n' => b'\n',
-                        'r' => b'\r',
-                        't' => b'\t',
-                        '0' => 0u8,
-                        '\\' => b'\\',
-                        '\'' => b'\'',
-                        '"' => b'"',
-                        other => other as u8,
-                    };
-                    bytes.push(decoded);
-                } else {
-                    // Backslash at end of string
-                    bytes.push(b'\\');
-                }
-            } else {
-                bytes.push(ch as u8);
-            }
-        }
-
-        bytes
+        content.chars().map(|ch| ch as u8).collect()
     }
 
     /// Insert a predefined symbol at its root-namespace key. The root
@@ -1526,6 +1499,7 @@ impl MMixAssembler {
                             Rule::directive_is => "IS directive (symbol definition)".to_string(),
                             Rule::directive_loc => "LOC directive".to_string(),
                             Rule::expr => "number or expression".to_string(),
+                            Rule::data_expr => "number, expression or string".to_string(),
                             Rule::global_id => "label or symbol name".to_string(),
                             Rule::identifier => "label or symbol name".to_string(),
                             _ => format!("{:?}", r),
@@ -1605,11 +1579,11 @@ impl MMixAssembler {
     }
 
     /// Advances `chars` past a string or character literal `ch` opens --
-    /// a `"` consumes to the next `"`, a `'` an optional backslash escape
-    /// plus the closing quote -- returning whether `ch` opened one.
-    /// Shared by every scan that walks a segment's raw text ignoring
-    /// literal contents, so a quoted `(`, `)` or `%` is never mistaken
-    /// for this release's own syntax.
+    /// a `"` consumes to the next `"`, a `'` consumes exactly one character
+    /// plus the closing quote -- returning whether `ch` opened one. Shared
+    /// by every scan that walks a segment's raw text ignoring literal
+    /// contents, so a quoted `(`, `)` or `%` is never mistaken for this
+    /// release's own syntax.
     fn skip_literal(chars: &mut std::str::CharIndices, ch: char) -> bool {
         match ch {
             '"' => {
@@ -1621,9 +1595,7 @@ impl MMixAssembler {
                 true
             }
             '\'' => {
-                if chars.next().map(|(_, c)| c) == Some('\\') {
-                    chars.next(); // the escaped character
-                }
+                chars.next(); // the character
                 chars.next(); // the closing quote, if present
                 true
             }
@@ -2741,7 +2713,10 @@ impl MMixAssembler {
     }
 
     /// Calculate the actual size of a data directive: its unit width times
-    /// its unit count, where a string contributes one unit per decoded byte.
+    /// its unit count. A term-level string contributes one unit per decoded
+    /// byte; every other term contributes one, matching what pass 2's
+    /// `eval_data_value_items` emits (`n₁ + … + n_k − k + 1` items for a
+    /// value holding k strings, per `MMIX.md`).
     fn data_directive_size(&self, pair: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let mut parts = pair.clone().into_inner();
         let directive = parts.next().ok_or("Empty data directive")?;
@@ -2751,15 +2726,7 @@ impl MMixAssembler {
 
         let mut unit_count = 0u64;
         for value in values.into_inner() {
-            let first = value.into_inner().next().unwrap();
-
-            if first.as_rule() == Rule::string_literal {
-                let text = first.as_str();
-                let content = &text[1..text.len() - 1]; // Remove surrounding quotes
-                unit_count += Self::count_string_bytes(content) as u64;
-            } else {
-                unit_count += 1;
-            }
+            unit_count += self.data_value_unit_count(value)?;
         }
         let total_size = unit_width * unit_count;
         debug!(
@@ -2767,6 +2734,40 @@ impl MMixAssembler {
             unit_count, unit_width, total_size
         );
         Ok(total_size)
+    }
+
+    /// The number of values one `data_value` contributes, without
+    /// evaluating any of them. A term joined to its neighbors only by real
+    /// weak operators always combines into a single value, exactly as
+    /// `expr` would; a term-level string is the one thing that splits a
+    /// value into more than one, contributing one value per character (0
+    /// when it stands alone, the existing meaning of `BYTE ""`) instead of
+    /// combining with its neighbor beyond its first and last character. So
+    /// a value holding k strings of n₁ … n_k characters contributes
+    /// n₁ + … + n_k − k + 1, matching pass 2's `eval_data_value_items`. An
+    /// empty string beside another term is an error here, at the string's
+    /// own position, since pass 2 rejects it the same way.
+    fn data_value_unit_count(&self, value: pest::iterators::Pair<Rule>) -> Result<u64, String> {
+        let data_expr = value.into_inner().next().ok_or("Missing data expression")?;
+        let terms: Vec<_> = data_expr.into_inner().step_by(2).collect();
+        let term_count = terms.len();
+
+        let mut char_total = 0u64;
+        let mut string_term_count = 0u64;
+        for term in &terms {
+            if let Some((content, line, col)) = Self::bare_string_term_text(term) {
+                let len = Self::count_string_bytes(content) as u64;
+                if len == 0 && term_count > 1 {
+                    return Err(format!(
+                        "{}:{}:{}: an empty string is not a value inside an expression",
+                        self.current_filename, line, col
+                    ));
+                }
+                char_total += len;
+                string_term_count += 1;
+            }
+        }
+        Ok(1 + char_total - string_term_count)
     }
 
     /// The unit width, in bytes, that a data directive assembles per value.
@@ -4656,16 +4657,17 @@ impl MMixAssembler {
 
         let mut result = Vec::new();
         for value in values_pair.into_inner() {
-            let actual_value = value.into_inner().next().unwrap(); // string_literal or expr_value
-
-            if actual_value.as_rule() == Rule::string_literal {
-                let s = actual_value.as_str();
-                let s = &s[1..s.len() - 1]; // Remove quotes
-                for b in Self::decode_byte_string(s) {
-                    result.push(Self::data_directive_unit(directive_kind, b as u64)?);
-                }
-            } else {
-                let val = self.parse_number(actual_value)?;
+            let (line, col) = value.line_col();
+            for item in self.eval_data_value_items(value)? {
+                let val = match item {
+                    ExprValue::Pure(v) => v,
+                    ExprValue::Register(r) => {
+                        return Err(format!(
+                            "{}:{}:{}: register ${} cannot be used where a pure value is required",
+                            self.current_filename, line, col, r
+                        ));
+                    }
+                };
                 result.push(Self::data_directive_unit(directive_kind, val)?);
             }
         }
@@ -4840,7 +4842,7 @@ impl MMixAssembler {
                     .next()
                     .expect("operand wraps exactly one expr"),
             ),
-            Rule::expr | Rule::group_expr => {
+            Rule::expr | Rule::group_expr | Rule::data_group_expr => {
                 let mut parts = pair.into_inner();
                 let mut acc = self.eval_expr(parts.next().expect("expr has a term"))?;
                 while let Some(op) = parts.next() {
@@ -4850,7 +4852,7 @@ impl MMixAssembler {
                 }
                 Ok(acc)
             }
-            Rule::term | Rule::group_term => {
+            Rule::term | Rule::group_term | Rule::data_group_term => {
                 let mut parts = pair.into_inner();
                 let mut acc = self.eval_expr(parts.next().expect("term has a primary"))?;
                 while let Some(op) = parts.next() {
@@ -4861,7 +4863,7 @@ impl MMixAssembler {
                 }
                 Ok(acc)
             }
-            Rule::primary | Rule::group_primary => {
+            Rule::primary | Rule::group_primary | Rule::data_primary | Rule::data_group_primary => {
                 let (line, col) = pair.line_col();
                 let mut parts = pair.into_inner();
                 let first = parts.next().expect("primary has a child");
@@ -4873,11 +4875,31 @@ impl MMixAssembler {
                     self.eval_expr(first)
                 }
             }
-            Rule::group => self.eval_expr(
+            Rule::group | Rule::data_group => self.eval_expr(
                 pair.into_inner()
                     .next()
                     .expect("group has an inner expression"),
             ),
+            // Reached only through `data_group_primary`: a string standing
+            // where a single value is required (a data list's own bare-string
+            // term expands before evaluation, in `eval_data_value_items`).
+            Rule::string_literal => {
+                let (line, col) = pair.line_col();
+                let text = pair.as_str();
+                let content = &text[1..text.len() - 1];
+                let bytes = Self::decode_byte_string(content);
+                if bytes.len() == 1 {
+                    Ok(ExprValue::Pure(bytes[0] as u64))
+                } else {
+                    Err(format!(
+                        "{}:{}:{}: a {}-character string is not a single value here",
+                        self.current_filename,
+                        line,
+                        col,
+                        bytes.len()
+                    ))
+                }
+            }
             Rule::at_symbol => Ok(ExprValue::Pure(self.current_addr)),
             Rule::constant => self.eval_literal(
                 pair.into_inner()
@@ -4923,6 +4945,145 @@ impl MMixAssembler {
                 ))
             }
         }
+    }
+
+    /// Evaluate a `data_term` that is not a bare string: a `data_primary`
+    /// possibly chained by strong operators, exactly as `term` combines
+    /// `primary`s. A bare string term never reaches here --
+    /// `eval_data_value_items` expands it before evaluation.
+    fn eval_data_term(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
+        let mut parts = pair.into_inner();
+        let mut acc = self.eval_expr(parts.next().expect("data_term has a primary"))?;
+        while let Some(op) = parts.next() {
+            let (line, col) = op.line_col();
+            let rhs = self.eval_expr(parts.next().expect("strong operator needs a primary"))?;
+            acc = self.apply_strong(op.as_str(), acc, rhs, line, col)?;
+        }
+        Ok(acc)
+    }
+
+    /// The raw content a `data_term` wraps when it is a bare string, with
+    /// its opening quote's line and column, or `None` when the term is the
+    /// ordinary `data_primary` chain. A term-level string is the one place
+    /// a data-list item may hold more than one character.
+    fn bare_string_term_text<'i>(
+        pair: &pest::iterators::Pair<'i, Rule>,
+    ) -> Option<(&'i str, usize, usize)> {
+        let first = pair.clone().into_inner().next()?;
+        if first.as_rule() != Rule::string_literal {
+            return None;
+        }
+        let (line, col) = first.line_col();
+        let text = first.as_str();
+        Some((&text[1..text.len() - 1], line, col))
+    }
+
+    /// [`Self::bare_string_term_text`], decoded to the bytes it emits.
+    fn bare_string_term(pair: &pest::iterators::Pair<Rule>) -> Option<(Vec<u8>, usize, usize)> {
+        let (content, line, col) = Self::bare_string_term_text(pair)?;
+        Some((Self::decode_byte_string(content), line, col))
+    }
+
+    /// Evaluate a `data_value` (a `data_expr`) into the values it
+    /// contributes to its directive's list. Every `data_term` but a bare
+    /// string contributes exactly one value, as `expr` would. A bare string
+    /// of n characters contributes n: the weak operator before it (if any)
+    /// combines with its first character only, and the one after it (if
+    /// any) with its last, so `1+"ace"+2` is `1+'a'`, `'c'`, `'e'+2`. A
+    /// string standing alone, with no operator on either side, keeps its
+    /// existing meaning -- one value per character, including none for an
+    /// empty string.
+    fn eval_data_value_items(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Vec<ExprValue>, String> {
+        let data_expr = pair
+            .into_inner()
+            .next()
+            .expect("data_value has a data_expr");
+        let mut parts = data_expr.into_inner();
+        let first_term = parts.next().expect("data_expr has a term");
+
+        let mut terms = vec![first_term];
+        let mut ops = Vec::new();
+        while let Some(op) = parts.next() {
+            ops.push(op);
+            terms.push(parts.next().expect("weak operator needs a term"));
+        }
+
+        if terms.len() > 1 {
+            for term in &terms {
+                if let Some((chars, line, col)) = Self::bare_string_term(term)
+                    && chars.is_empty()
+                {
+                    return Err(format!(
+                        "{}:{}:{}: an empty string is not a value inside an expression",
+                        self.current_filename, line, col
+                    ));
+                }
+            }
+        }
+
+        // `acc` accumulates the item under construction; `is_first_atom` is
+        // true only before the very first atom of the whole data_value has
+        // been placed, which is the one atom with no combining operator.
+        let mut items = Vec::new();
+        let mut acc = ExprValue::Pure(0);
+        let mut is_first_atom = true;
+        for (i, term) in terms.into_iter().enumerate() {
+            let op_before = if i > 0 { Some(&ops[i - 1]) } else { None };
+            match Self::bare_string_term(&term) {
+                Some((chars, ..)) => {
+                    for (j, byte) in chars.into_iter().enumerate() {
+                        let atom = ExprValue::Pure(byte as u64);
+                        if j == 0 {
+                            (acc, is_first_atom) = (
+                                self.place_data_atom(acc, atom, op_before, is_first_atom)?,
+                                false,
+                            );
+                        } else {
+                            // An internal character never merges with its
+                            // neighbor: each is its own item.
+                            items.push(acc);
+                            acc = atom;
+                        }
+                    }
+                }
+                None => {
+                    let atom = self.eval_data_term(term)?;
+                    (acc, is_first_atom) = (
+                        self.place_data_atom(acc, atom, op_before, is_first_atom)?,
+                        false,
+                    );
+                }
+            }
+        }
+        // `is_first_atom` still true means every term was an empty bare
+        // string -- only reachable when it is the sole, lone term (the
+        // multi-term case was already rejected above) -- so the value
+        // contributes no item at all, the existing meaning of `BYTE ""`.
+        if !is_first_atom {
+            items.push(acc);
+        }
+        Ok(items)
+    }
+
+    /// Folds one atom into the item under construction: the very first atom
+    /// of the whole `data_value` starts it (there is no operator before it);
+    /// every later atom combines with the weak operator that led into it.
+    fn place_data_atom(
+        &self,
+        acc: ExprValue,
+        atom: ExprValue,
+        op: Option<&pest::iterators::Pair<Rule>>,
+        is_first_atom: bool,
+    ) -> Result<ExprValue, String> {
+        if is_first_atom {
+            return Ok(atom);
+        }
+        let op = op.expect("only the first atom has no combining operator");
+        let (line, col) = op.line_col();
+        self.apply_weak(op.as_str(), acc, atom, line, col)
     }
 
     /// The digit a local-symbol token (`dH`, `dB` or `dF`) opens with, as
@@ -4994,30 +5155,10 @@ impl MMixAssembler {
         let value = match pair.as_rule() {
             Rule::char_literal => {
                 let inner = &text[1..text.len() - 1];
-                let ch = if let Some(rest) = inner.strip_prefix('\\') {
-                    match rest {
-                        "n" => '\n',
-                        "r" => '\r',
-                        "t" => '\t',
-                        "0" => '\0',
-                        "\\" => '\\',
-                        "'" => '\'',
-                        _ => {
-                            return Err(format!(
-                                "Line {}:{}: Unsupported escape in char literal: \\{}",
-                                line, col, rest
-                            ));
-                        }
-                    }
-                } else {
-                    if inner.chars().count() != 1 {
-                        return Err(format!(
-                            "Line {}:{}: Invalid char literal (must be one byte): '{}'",
-                            line, col, inner
-                        ));
-                    }
-                    inner.chars().next().unwrap()
-                };
+                let ch = inner
+                    .chars()
+                    .next()
+                    .expect("grammar admits exactly one character between the quotes");
 
                 if !ch.is_ascii() {
                     return Err(format!(
@@ -5027,6 +5168,10 @@ impl MMixAssembler {
                 }
                 ch as u8 as u64
             }
+            // A digit string the grammar matched always has a value: a hex
+            // or decimal constant of 2^64 or more reduces mod 2^64, the
+            // reference's own rule, computed digit by digit so no width
+            // limit on the source spelling is ever reached.
             Rule::hex_literal => {
                 let hex_str = if let Some(stripped) = text.strip_prefix('#') {
                     stripped
@@ -5037,12 +5182,15 @@ impl MMixAssembler {
                 } else {
                     text
                 };
-                u64::from_str_radix(hex_str, 16)
-                    .map_err(|e| format!("Line {}:{}: Invalid hex number: {}", line, col, e))?
+                hex_str.chars().fold(0u64, |acc, c| {
+                    let digit = c.to_digit(16).expect("grammar admits only hex digits") as u64;
+                    acc.wrapping_shl(4).wrapping_add(digit)
+                })
             }
-            Rule::dec_literal => text
-                .parse::<u64>()
-                .map_err(|e| format!("Line {}:{}: Invalid decimal number: {}", line, col, e))?,
+            Rule::dec_literal => text.chars().fold(0u64, |acc, c| {
+                let digit = c.to_digit(10).expect("grammar admits only decimal digits") as u64;
+                acc.wrapping_mul(10).wrapping_add(digit)
+            }),
             other => {
                 return Err(format!(
                     "Line {}:{}: Expected a literal, got: {:?}",
@@ -5690,24 +5838,17 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_byte_string_decodes_escapes() {
-        assert_eq!(
-            MMixAssembler::decode_byte_string("a\\nb"),
-            vec![b'a', b'\n', b'b']
-        );
-    }
-
-    #[test]
-    fn test_byte_escape_pass1_pass2_agree() {
-        // count_string_bytes sizes the escape in pass 1 and decode_byte_string
+    fn test_byte_string_pass1_pass2_agree() {
+        // count_string_bytes sizes the string in pass 1 and decode_byte_string
         // expands it in pass 2; the two must agree. The forward OCTA reads
         // pass 1's counter, because pass 2 resolves it before reaching the
         // label and overwriting the entry; the emitted bytes read pass 2's.
         // The label sits on a BYTE so that no rounding can absorb a
-        // disagreement between them.
+        // disagreement between them. A backslash is an ordinary byte, so
+        // "a\nb" is four bytes, not three.
         let mut asm = MMixAssembler::new("OCTA LABEL\nBYTE \"a\\nb\",0\nLABEL BYTE 7", "<test>");
         asm.parse().unwrap();
-        let bytes: Vec<_> = asm.instructions[1..5]
+        let bytes: Vec<_> = asm.instructions[1..6]
             .iter()
             .map(|(addr, inst)| (*addr, inst.clone()))
             .collect();
@@ -5715,12 +5856,13 @@ mod tests {
             bytes,
             vec![
                 (8, MMixInstruction::BYTE(b'a')),
-                (9, MMixInstruction::BYTE(b'\n')),
-                (10, MMixInstruction::BYTE(b'b')),
-                (11, MMixInstruction::BYTE(0)),
+                (9, MMixInstruction::BYTE(b'\\')),
+                (10, MMixInstruction::BYTE(b'n')),
+                (11, MMixInstruction::BYTE(b'b')),
+                (12, MMixInstruction::BYTE(0)),
             ]
         );
-        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(12));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(13));
     }
 
     #[test]
@@ -6166,13 +6308,6 @@ mod tests {
         let mut asm = MMixAssembler::new("ANDI $1, $2, 'A'", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 65));
-    }
-
-    #[test]
-    fn test_parse_char_literal_escape_newline() {
-        let mut asm = MMixAssembler::new("ANDI $1, $2, '\\n'", "<test>");
-        asm.parse().unwrap();
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 10));
     }
 
     #[test]
@@ -7892,8 +8027,6 @@ ZSEVI $7,$8,128
     #[test]
     fn test_immediate_char_literal() {
         assert_first_instruction("ADD $1,$2,'A'", MMixInstruction::ADDI(1, 2, 65));
-        assert_first_instruction("AND $1,$2,'\\n'", MMixInstruction::ANDI(1, 2, 10));
-        assert_first_instruction("OR $1,$2,'\\0'", MMixInstruction::ORI(1, 2, 0));
     }
 
     // ---- Symbol/label resolution at the Z slot ----------------------
@@ -8148,7 +8281,7 @@ ZSP  $3,$4,2
         let lines = [
             "\tLOC\tData_Segment",
             "\tGREG\t@",
-            "Text\tBYTE\t\"Hello world!\",'\\n',0",
+            "Text\tBYTE\t\"Hello world!\",10,0",
             "",
             "\tLOC\t#100",
             "",
@@ -8883,7 +9016,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_wyde_data_list_mixes_expression_items_and_a_string() {
-        // The pass-agreement pattern of test_byte_escape_pass1_pass2_agree:
+        // The pass-agreement pattern of test_byte_string_pass1_pass2_agree:
         // a forward OCTA reads pass 1's size for the list, so pass 2 must
         // compute the same expression values or Next's address disagrees.
         let mut asm = MMixAssembler::new(
@@ -9253,6 +9386,19 @@ Main    SETI    $1,7
         assert!(
             err.contains("unknown operation: ADDx '%',b"),
             "expected the literal's `%` to survive intact, got: {err}"
+        );
+        // A character literal's scan must consume exactly one character
+        // plus its closing quote: it must not over-consume into whatever
+        // follows just because that character happens to be a backslash.
+        let err = assemble_err("ADDx '\\'\"50%\"");
+        assert!(
+            err.contains("unknown operation: ADDx '\\'\"50%\""),
+            "expected both literals to survive intact, got: {err}"
+        );
+        let err = assemble_err("ADDx '\\''%'");
+        assert!(
+            err.contains("unknown operation: ADDx '\\''%'"),
+            "expected both literals to survive intact, got: {err}"
         );
     }
 
@@ -10805,5 +10951,149 @@ Main    SETI    $1,7
         // register holding 0 instead of erroring on the digit-led text
         // after the label `greg`.
         assert!(assemble_err("greg 0").contains("unknown operation: greg 0"));
+    }
+
+    // ---- The reference's own literal and constant rules (C9.7) ---------
+
+    #[test]
+    fn test_char_literal_takes_the_reference_form() {
+        // One quote, one character, one quote -- the character may itself
+        // be a quote, so `'''` is the apostrophe and `'\'` the backslash.
+        // Every other character constant keeps its existing value.
+        assert_first_instruction("SET $1,'''", MMixInstruction::SETL(1, 39));
+        assert_first_instruction("SET $1,'\\'", MMixInstruction::SETL(1, 92));
+        assert_first_instruction("SET $1,'A'", MMixInstruction::SETL(1, 65));
+        assert_first_instruction("SET $1,'0'", MMixInstruction::SETL(1, 48));
+        assert_first_instruction("SET $1,'%'", MMixInstruction::SETL(1, 37));
+        assert_first_instruction("SET $1,';'", MMixInstruction::SETL(1, 59));
+    }
+
+    #[test]
+    fn test_byte_string_backslash_is_an_ordinary_byte() {
+        let mut asm = MMixAssembler::new("BYTE \"a\\nb\"", "<test>");
+        asm.parse().unwrap();
+        let bytes: Vec<_> = asm
+            .instructions
+            .iter()
+            .map(|(_, inst)| inst.clone())
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![
+                MMixInstruction::BYTE(b'a'),
+                MMixInstruction::BYTE(b'\\'),
+                MMixInstruction::BYTE(b'n'),
+                MMixInstruction::BYTE(b'b'),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_debug_string_holds_a_backslash_as_four_ordinary_bytes() {
+        let source = "        LOC     #100\nMain    debug \"a\\tb\"\n        TRAP    0,Halt,0\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.debug_strings(), &[b"a\\tb".to_vec()]);
+    }
+
+    #[test]
+    fn test_abutting_string_after_a_backslash_constant_is_a_remark_error() {
+        // '\'' is a whole constant (the backslash); the string that abuts
+        // it with no blank between reads as continuing the statement, not
+        // as a remark -- the same rule any other abutting text follows.
+        assert_eq!(
+            assemble_err("SET $1,'\\'\"(\""),
+            "<test>:1:11: syntax error: a remark must be separated from the \
+             statement by a blank"
+        );
+    }
+
+    #[test]
+    fn test_hex_and_decimal_constants_reduce_mod_2_64() {
+        assert_first_instruction(
+            "OCTA #112233445566778899",
+            MMixInstruction::OCTA(0x2233445566778899),
+        );
+        assert_first_instruction("OCTA 18446744073709551621", MMixInstruction::OCTA(5));
+        assert_first_instruction("OCTA 0x10000000000000005", MMixInstruction::OCTA(5));
+        assert_first_instruction(
+            "OCTA 340282366920938463463374607431768211461",
+            MMixInstruction::OCTA(5),
+        );
+        let src = format!("OCTA #1{}5", "0".repeat(32));
+        assert_first_instruction(&src, MMixInstruction::OCTA(5));
+    }
+
+    #[test]
+    fn test_byte_list_string_in_expression_splits_at_its_boundary_characters() {
+        // MMIX.md's example: an operator before the string binds to its
+        // first character, one after it to its last, and the characters
+        // between stand alone. The forward OCTA is resolved in pass 1, so
+        // it must agree with the label pass 2 actually places.
+        let mut asm = MMixAssembler::new("OCTA Next\nBYTE 1+\"ace\"+2,0\nNext BYTE 99", "<test>");
+        asm.parse().unwrap();
+        let items: Vec<_> = asm.instructions[1..5]
+            .iter()
+            .map(|(_, inst)| inst.clone())
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                MMixInstruction::BYTE(b'b'),
+                MMixInstruction::BYTE(b'c'),
+                MMixInstruction::BYTE(b'g'),
+                MMixInstruction::BYTE(0),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&12));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(12));
+    }
+
+    #[test]
+    fn test_byte_list_two_strings_joined_by_an_operator_merge_at_the_seam() {
+        let mut asm = MMixAssembler::new("OCTA Next\nBYTE \"ab\"+\"cd\"\nNext BYTE 99", "<test>");
+        asm.parse().unwrap();
+        let items: Vec<_> = asm.instructions[1..4]
+            .iter()
+            .map(|(_, inst)| inst.clone())
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                MMixInstruction::BYTE(b'a'),
+                MMixInstruction::BYTE(197), // 'b' (98) + 'c' (99)
+                MMixInstruction::BYTE(b'd'),
+            ]
+        );
+        assert_eq!(asm.labels.get("Next"), Some(&11));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(11));
+    }
+
+    #[test]
+    fn test_wyde_single_char_string_combines_with_its_operator() {
+        assert_first_instruction("WYDE \"a\"+1", MMixInstruction::WYDE(0x0062));
+    }
+
+    #[test]
+    fn test_byte_list_parenthesized_single_char_string_is_its_value() {
+        assert_first_instruction("BYTE (\"a\")", MMixInstruction::BYTE(97));
+    }
+
+    #[test]
+    fn test_byte_list_parenthesized_multi_char_string_is_an_error() {
+        assert!(assemble_err("BYTE (\"ab\")").contains("not a single value"));
+    }
+
+    #[test]
+    fn test_byte_list_empty_string_inside_an_expression_is_an_error() {
+        assert!(
+            assemble_err("BYTE 1+\"\"+2")
+                .contains("an empty string is not a value inside an expression")
+        );
+    }
+
+    #[test]
+    fn test_set_operand_string_is_still_an_error() {
+        assemble_err("SET $1,\"a\"");
     }
 }

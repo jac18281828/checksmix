@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), or character literals; every operand is an MMIXAL expression (see "Expressions" below). A leading `0` is an ordinary decimal digit, as in MMIXAL — `SET $1,010` loads 10, and there is no octal spelling.
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), or character literals — one quote, one character, one quote, the character possibly a quote itself, so `'''` is the apostrophe; every operand is an MMIXAL expression (see "Expressions" below). A leading `0` is an ordinary decimal digit, as in MMIXAL — `SET $1,010` loads 10, and there is no octal spelling. A string literal has no escape mechanism either: its content is exactly what it spells, one byte per character (a data directive's own per-character rule for a string is in "Assembler directives" below).
 
 ## Memory access
 
@@ -105,6 +105,13 @@ the first blank.
 A string operand assembles one unit per character. The directive aligns
 once, before the first unit; a list does not realign between items.
 
+A string also stands inside a data-list item's own expression, abbreviating
+its characters as comma-separated character constants: an operator before
+the string applies to its first character and one after it to its last, so
+`BYTE 1+"ace"+2,0` is `BYTE 1+'a','c','e'+2,0` — four bytes, `b`, `c`, `g`,
+`0`. A string alone as an item keeps the rule above. This expansion reaches
+data-list items only; a string is still not a valid instruction operand.
+
 The assembler aligns before it places an item: it rounds the location counter
 up to the item's natural width — 4 for an instruction, 2, 4 or 8 for `WYDE`,
 `TETRA` and `OCTA` — and the label on that line takes the rounded address. The
@@ -136,7 +143,11 @@ have if the whole block were deleted.
 
 Every operand — a register, an immediate, `LOC`'s target, a data item — is an
 MMIXAL expression: constants, symbols, `@`, unary operators, and two
-left-associative precedence levels of binary operators.
+left-associative precedence levels of binary operators. A decimal or
+hexadecimal constant always has a value, however many digits it spells: one
+of 2⁶⁴ or more reduces mod 2⁶⁴, so `OCTA #112233445566778899` assembles
+`#2233445566778899` and `OCTA 18446744073709551621` assembles `5`. Whether
+that value then fits the field it lands in is a separate, later check.
 
 | Level | Operators |
 | --- | --- |
@@ -497,7 +508,8 @@ program order across every translation unit assembled together. `K` is one
 byte, so a 257th `debug` directive in one program is an assembly error
 naming its file and line.
 
-The directive's text lives in a table outside guest memory: nothing is
+The directive's text is taken exactly as written between the quotes, one
+byte per character, and lives in a table outside guest memory: nothing is
 written to guest memory and no label is generated. Running the TRAP writes
 the string and a newline (`#0A`) to handle 1, changing no register —
 `$255` included. A `K` past the table's end prints nothing and reports a

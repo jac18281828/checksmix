@@ -10,8 +10,10 @@
 ;;
 ;;   - `%' starts a comment that runs to the end of the line; `;'
 ;;     separates statements.
-;;   - A string literal has no escapes; a character literal accepts
-;;     \n \r \t \0 \\ and \'.
+;;   - A string literal's content is exactly what it spells, one byte
+;;     per character; a character literal is one quote, one character,
+;;     one quote -- the character may itself be a quote, so ''' is the
+;;     apostrophe.
 ;;   - An indented line has no label field: its first word is the
 ;;     operation.  In column 1, or after a `;', the first word is a label
 ;;     unless it is a mnemonic or directive, and a label may carry a
@@ -388,9 +390,7 @@ other label an address.  A label with a trailing colon before one of
   "Syntax table for `mmix-mode'.")
 
 (defconst mmix--char-literal-regexp
-  (rx (group "'")
-      (or (seq "\\" (any "nrt0\\'")) (not (any "'\\\n")))
-      (group "'"))
+  (rx (group "'") (not (any "\n")) (group "'"))
   "A character literal, with its two quotes as groups 1 and 2.")
 
 (defun mmix--syntax-propertize (start end)

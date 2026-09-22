@@ -33,7 +33,7 @@ local_ref_fwd = @{ ASCII_DIGIT ~ "F" ~ word_end }
 at_symbol = @{ "@" }
 hex_literal = @{ ("#" | "0x" | "0X") ~ ASCII_HEX_DIGIT+ }
 dec_literal = @{ ASCII_DIGIT+ }
-char_literal = @{ "'" ~ ( "\\" ~ ( "n" | "r" | "t" | "0" | "\\" | "'" ) | (!"'" ~ ANY)) ~ "'" }
+char_literal = @{ "'" ~ (!NEWLINE ~ ANY) ~ "'" }
 constant = { hex_literal | dec_literal | char_literal }
 
 // MMIXAL expressions: two left-associative precedence levels over unary
@@ -95,10 +95,27 @@ directive_espec = @{ "ESPEC" ~ word_end }
 // namespace.
 prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 
-// A data directive takes a list of strings and/or expressions. A string is
-// not an expression operand: MMIXAL defines it as shorthand for a list of
-// character constants, not as a value arithmetic can touch.
-data_value = { string_literal | expr }
+// A data directive's list mirrors `expr`/`term`/`primary` and `group*`,
+// with one addition: a string may stand where a term or, singly, where a
+// group's inner value stands. A string is not an expression operand
+// elsewhere -- the reference defines it as shorthand for a list of
+// character constants, not as a value arithmetic can touch, so `data_expr`
+// serves data lists only and `expr` keeps serving instruction operands.
+data_expr = ${ data_term ~ (weak_op ~ data_term)* }
+data_term = { string_literal | (data_primary ~ (strong_op ~ data_primary)*) }
+data_primary = {
+    unary_op ~ data_primary | data_group | at_symbol | local_ref_back | local_ref_fwd | constant | global_id
+}
+
+data_group = { "(" ~ group_ws* ~ data_group_expr ~ group_ws* ~ ")" }
+data_group_expr = { data_group_term ~ (group_ws* ~ weak_op ~ group_ws* ~ data_group_term)* }
+data_group_term = { data_group_primary ~ (group_ws* ~ strong_op ~ group_ws* ~ data_group_primary)* }
+data_group_primary = {
+    unary_op ~ group_ws* ~ data_group_primary | data_group | at_symbol
+  | local_ref_back | local_ref_fwd | constant | global_id | string_literal
+}
+
+data_value = { data_expr }
 data_values = { data_value ~ ("," ~ data_value)* }
 
 data_directive = {

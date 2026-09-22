@@ -254,18 +254,21 @@ Highlighting a reference as its jump target is out of scope."
 
 (ert-deftest mmix-comments-strings-and-character-literals ()
   "`%' opens a comment; `;' separates statements and fonts as neither.
-Neither character opens a comment inside a string or character literal."
+Neither character opens a comment inside a string or character literal.
+A backslash inside a string is ordinary text, never a quoted quote;
+`''' is the apostrophe and `'\\'' the backslash, both whole constants."
   (mmix-test--with-buffer
       (concat "\tSETL\t$0,1\t% percent comment\n"
               "\tSETL\t$0,1\t; semicolon separator\n"
-              "Text\tBYTE\t\"50% ; off\\\",'%',';','\\'',0\n"
+              "Text\tBYTE\t\"50% ; off\\\",'%',';',''','\\',0\n"
               "\tSETL\t$1,2\n")
     (should (eq (mmix-test--face-at "percent") 'font-lock-comment-face))
     (should-not (eq (mmix-test--face-at "semicolon") 'font-lock-comment-face))
     (should (eq (mmix-test--face-at "50%") 'font-lock-string-face))
     (should (eq (mmix-test--face-at "'%'") 'font-lock-string-face))
     (should (eq (mmix-test--face-at "';'") 'font-lock-string-face))
-    (should (eq (mmix-test--face-at "'\\''") 'font-lock-string-face))
+    (should (eq (mmix-test--face-at "'''") 'font-lock-string-face))
+    (should (eq (mmix-test--face-at "'\\'") 'font-lock-string-face))
     (should (eq (mmix-test--face-at ",0") nil))
     (should (eq (mmix-test--face-at "$1,2") 'font-lock-variable-name-face))))
 
