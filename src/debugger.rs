@@ -246,15 +246,16 @@ pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
 
     mmix.set_debug_strings(assembler.debug_strings().to_vec());
 
+    // MMIX starts a program with rG at 255 minus its GREG count: the
+    // lowest-numbered register GREG allocated, floored at 32, or 255 with
+    // no GREG directive at all. rG must move before a GREG value is written:
+    // set_register claims a register below rG as local, and a GREG target
+    // can sit below whatever rG the machine already holds on entry.
+    mmix.set_special(SpecialReg::RG, derive_rg(&assembler.greg_inits) as u64);
+
     for &(reg, value) in &assembler.greg_inits {
         mmix.set_register(reg, value);
     }
-
-    // MMIX starts a program with rG at 255 minus its GREG count: the
-    // lowest-numbered register GREG allocated, floored at 32 (set_register
-    // relies on rG >= 32 to keep local-window growth confined below it), or
-    // 255 with no GREG directive at all.
-    mmix.set_special(SpecialReg::RG, derive_rg(&assembler.greg_inits) as u64);
 }
 
 /// Start a program at `entry`: set the PC there, and `$255` to the same
@@ -1748,6 +1749,20 @@ Main\tTRAP\t0,Halt,0
 
         let dbg = Debugger::load(assemble(ONE_GREG_PROGRAM, "one_greg.mms"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+    }
+
+    /// `write_image` moves rG before applying a `GREG` value: entering with
+    /// rG above the value this program derives, its one `GREG` register
+    /// sits below the machine's current rG, and applying the value before
+    /// rG drops would wrongly claim that register as local.
+    #[test]
+    fn write_image_moves_rg_before_applying_greg_values() {
+        let asm = assemble(ONE_GREG_PROGRAM, "one_greg.mms");
+        let mut mmix = MMix::new();
+        mmix.set_special(SpecialReg::RG, 255);
+        write_image(&mut mmix, &asm);
+        assert_eq!(mmix.get_special(SpecialReg::RG), 254);
+        assert_eq!(mmix.get_special(SpecialReg::RL), 0);
     }
 
     /// With no `GREG`, rG = 255 puts `$100` below the global threshold: a
