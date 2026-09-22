@@ -1,5 +1,5 @@
 /// MMIX Assembler - Compile .mms assembly files to .mmo object code
-use checksmix::MMixAssembler;
+use checksmix::{MMixAssembler, MmoGenerator};
 use clap::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,10 @@ fn main() {
     }
 
     // Generate object code
-    let object_code = assembler.generate_object_code();
+    let object_code = MmoGenerator::new(assembler.instructions.clone(), assembler.labels.clone())
+        .with_debug_strings(assembler.debug_strings().to_vec())
+        .with_greg_inits(assembler.greg_inits.clone())
+        .generate();
 
     println!("Generated {} bytes of object code", object_code.len());
 

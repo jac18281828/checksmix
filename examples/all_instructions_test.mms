@@ -1,6 +1,10 @@
 % MMIX Comprehensive Instruction Test
 % This program tests all major instruction families
 % It validates itself - if it completes without error, all tests passed
+%
+% No GREG declares a global register here, so MMIX starts this program at
+% rG = 255; the corpus's bookkeeping ($252-$254) and its SAVE and PUT rG
+% tests assume rG = 32, so Main sets rG itself before anything else runs.
 
 % User trip handlers (gitraptrip.html). TRIP's vector is #00; an enabled
 % arithmetic exception's is #10-#80 by DVWIOUZX (V is #20). Each vector just
@@ -37,7 +41,8 @@ FailNum IS      $253    % Failed test number
 TestNum IS      $252    % Current test number
 Temp    IS      $254    % Temporary register (canonical t register)
 
-Main    SETI TestNum,0       % Initialize test counter
+Main    PUT  rG,32           % this corpus assumes rG = 32; see the header
+        SETI TestNum,0       % Initialize test counter
 
 % ========================================
 % Test 1: SET and immediate load instructions

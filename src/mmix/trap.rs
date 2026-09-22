@@ -653,7 +653,7 @@ impl MMix {
         let seek_from = if offset >= 0 {
             SeekFrom::Start(offset as u64)
         } else {
-            SeekFrom::End(-offset - 1)
+            SeekFrom::End(offset + 1)
         };
 
         let file = self.open_file(handle);

@@ -33,7 +33,14 @@ Main    SETL    $0,42       % your code here
 ```
 
 A program starts with `$255` holding its entry address — `Main`'s, or the
-first instruction's when there is no `Main` (MMIXAL reference).
+first instruction's when there is no `Main` (MMIXAL reference). rG starts at
+255 minus the number of `GREG`s the program declares — every register but
+`$255` is local with none — and rL at 0, `$0` and `$1` zero (MMIX passes argc
+and argv there; checksmix's command line passes no arguments). rK, rT, rTT
+and rV start `#FFFFFFFFFFFFFFFF`, `#8000000500000000`, `#8000000600000000`
+and `#369C200400000000` (TAOCP Vol. 1 Fascicle 1, p. 90). A byte two
+statements assemble to the same address loads as their XOR, not the second
+overwriting the first.
 
 ## Line structure
 
@@ -300,6 +307,17 @@ checksmix check main.mms lib.mms
 checksmix build -o prog.mmo main.mms lib.mms
 mmixasm         main.mms lib.mms -o prog.mmo
 ```
+
+### The `.mmo` object format
+
+`build` writes the MMIXAL reference's object format: a preamble with a
+zero timestamp (so the same source always builds the same bytes), one
+location record and its data tetras per contiguous run of assembled bytes, a
+`debug` string table, and a postamble carrying every `GREG`-initialized
+register through `$255`'s entry point. `run` on a `.mmo` reads exactly that
+shape back and rejects anything else — a stray record, a foreign-shaped one,
+or a file built before this reader — rather than risk loading it wrong. A
+`.mmo` built by checksmix 0.3.12 or earlier must be rebuilt.
 
 ## Floating-point arithmetic
 

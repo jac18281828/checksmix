@@ -9,6 +9,7 @@
 
 use crate::mmix::{Host, MMix, SpecialReg, ValueFormat};
 use crate::mmixal::{MMixAssembler, SymbolType};
+use crate::mmo::derive_rg;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -249,15 +250,11 @@ pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
         mmix.set_register(reg, value);
     }
 
-    // GREG allocates downward from $254, so the lowest-numbered allocated
-    // register is where the global range starts. MMIX requires rG >= 32
-    // (set_register relies on it to keep local-window growth confined to
-    // registers below rG), so the derived value is floored there, never
-    // clamped down. With no GREG directive, rG keeps MMix::initialize's
-    // default of 32.
-    if let Some(min_reg) = assembler.greg_inits.iter().map(|&(reg, _)| reg).min() {
-        mmix.set_special(SpecialReg::RG, std::cmp::max(min_reg as u64, 32));
-    }
+    // MMIX starts a program with rG at 255 minus its GREG count: the
+    // lowest-numbered register GREG allocated, floored at 32 (set_register
+    // relies on rG >= 32 to keep local-window growth confined below it), or
+    // 255 with no GREG directive at all.
+    mmix.set_special(SpecialReg::RG, derive_rg(&assembler.greg_inits) as u64);
 }
 
 /// Start a program at `entry`: set the PC there, and `$255` to the same
@@ -1731,15 +1728,35 @@ Main\tTRAP\t0,Halt,0
         assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 253);
     }
 
-    #[test]
-    fn write_image_derives_rg_stays_32_with_no_greg() {
-        // No GREG: rG stays at MMix::initialize's default.
-        const NO_GREG_PROGRAM: &str = "\
+    /// A program with no `GREG` at all declares no globals, so MMIX starts
+    /// it with every register but `$255` local: rG = 255.
+    const NO_GREG_PROGRAM: &str = "\
 \tLOC\t#100
 Main\tTRAP\t0,Halt,0
 ";
+
+    #[test]
+    fn write_image_derives_rg_255_with_no_greg() {
         let dbg = Debugger::load(assemble(NO_GREG_PROGRAM, "no_greg.mms"));
-        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 32);
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 255);
+    }
+
+    #[test]
+    fn write_image_leaves_rl_at_zero_after_load() {
+        let dbg = Debugger::load(assemble(NO_GREG_PROGRAM, "no_greg.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+
+        let dbg = Debugger::load(assemble(ONE_GREG_PROGRAM, "one_greg.mms"));
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+    }
+
+    /// With no `GREG`, rG = 255 puts `$100` below the global threshold: a
+    /// write to it grows rL to claim it as a local register.
+    #[test]
+    fn write_to_a_local_register_raises_rl_under_the_no_greg_default() {
+        let mut dbg = Debugger::load(assemble(NO_GREG_PROGRAM, "no_greg.mms"));
+        dbg.mmix.set_register(100, 7);
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 101);
     }
 
     #[test]

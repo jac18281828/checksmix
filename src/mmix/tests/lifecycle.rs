@@ -11,6 +11,33 @@ fn test_mmix_new() {
     assert_eq!(mmix.get_pc(), 0);
 }
 
+/// A fresh machine holds the four start values TAOCP Vol. 1 Fascicle 1
+/// (p. 90) gives before any program runs, and `reset` restores them after
+/// they are overwritten.
+#[test]
+fn fresh_and_reset_machines_hold_the_boot3_start_values() {
+    let expected = [
+        (SpecialReg::RK, 0xFFFFFFFFFFFFFFFFu64),
+        (SpecialReg::RT, 0x8000000500000000),
+        (SpecialReg::RTT, 0x8000000600000000),
+        (SpecialReg::RV, 0x369C200400000000),
+    ];
+
+    let mmix = MMix::new();
+    for &(reg, value) in &expected {
+        assert_eq!(mmix.get_special(reg), value, "{reg:?}");
+    }
+
+    let mut mmix = MMix::new();
+    for &(reg, _) in &expected {
+        mmix.set_special(reg, 0);
+    }
+    mmix.reset();
+    for &(reg, value) in &expected {
+        assert_eq!(mmix.get_special(reg), value, "{reg:?} after reset");
+    }
+}
+
 #[test]
 fn test_pc_operations() {
     let mut mmix = MMix::new();

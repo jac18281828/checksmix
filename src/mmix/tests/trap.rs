@@ -613,7 +613,9 @@ fn test_debug_string_survives_the_mmo_round_trip() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
     let decoder = MmoDecoder::new(object_code);
-    let entry = decoder.decode(|addr, byte| mmix.write_byte(addr, byte));
+    let entry = decoder
+        .decode(|addr, byte| mmix.write_byte(addr, byte))
+        .expect("well-formed object code");
     mmix.set_debug_strings(decoder.debug_strings());
     mmix.set_pc(entry);
 
@@ -628,4 +630,40 @@ fn test_debug_string_survives_the_mmo_round_trip() {
     mmix2.set_pc(entry_point(&asm));
     mmix2.run_bounded(1_000);
     assert_eq!(handle.stdout(), handle2.stdout());
+}
+
+/// A `TRIP` handler at `#00` built to `.mmo` and loaded with `load` is
+/// reachable: `write_loaded_byte` (not plain `write_byte`) is what makes
+/// vector 0 count as loaded rather than tripping "unloaded vector 0x00".
+#[test]
+fn trip_handler_at_vector_zero_is_reachable_after_an_mmo_load() {
+    use crate::mmixal::MMixAssembler;
+    use crate::mmo::{MmoDecoder, MmoGenerator};
+
+    let source = "\
+        LOC     #00
+        SETI    $9,42
+        RESUME  0
+        LOC     #100
+Main    TRIP    0,0,0
+        SETI    $10,7
+        TRAP    0,Halt,0
+";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    asm.parse().expect("program must assemble");
+
+    let mmo_data = MmoGenerator::new(asm.instructions.clone(), asm.labels.clone())
+        .with_debug_strings(asm.debug_strings().to_vec())
+        .with_greg_inits(asm.greg_inits.clone())
+        .generate();
+
+    let mut mmix = MMix::new();
+    let decoder = MmoDecoder::new(mmo_data);
+    let entry = decoder.load(&mut mmix).expect("well-formed object code");
+    mmix.set_pc(entry);
+
+    let (_, stop) = mmix.run_bounded(1_000);
+    assert_eq!(stop, Stop::Halted);
+    assert_eq!(mmix.get_register(9), 42, "the TRIP handler at #00 must run");
+    assert_eq!(mmix.get_register(10), 7, "RESUME must return to Main");
 }

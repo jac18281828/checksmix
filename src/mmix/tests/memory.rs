@@ -1358,6 +1358,53 @@ Sub\tSETI\t$0,3
     );
 }
 
+/// Two `BYTE`s assembled to the same address load as their XOR (the
+/// MMIXAL reference's loader rule), not the second overwriting the first:
+/// `#0f` and `#3c` give `#33`.
+#[test]
+fn two_bytes_assembled_to_one_address_load_as_their_xor() {
+    use crate::debugger::write_image;
+    use crate::mmixal::MMixAssembler;
+
+    const SOURCE: &str = "\
+\tLOC\t#1000
+\tBYTE\t#0f
+\tLOC\t#1000
+\tBYTE\t#3c
+";
+    let mut asm = MMixAssembler::new(SOURCE, "<test>");
+    asm.parse().expect("program must assemble");
+
+    let mut mmix = MMix::new();
+    write_image(&mut mmix, &asm);
+
+    assert_eq!(mmix.read_byte(0x1000), 0x33);
+    assert!(mmix.loaded_extent().any(|(addr, _)| addr == 0x1000));
+}
+
+/// An `OCTA` with a `WYDE` assembled over two of its bytes combines by XOR
+/// there too, leaving the octa's other six bytes untouched.
+#[test]
+fn an_octa_with_a_wyde_assembled_over_it_combines_by_xor() {
+    use crate::debugger::write_image;
+    use crate::mmixal::MMixAssembler;
+
+    const SOURCE: &str = "\
+\tLOC\t#1000
+\tOCTA\t#0102030405060708
+\tLOC\t#1002
+\tWYDE\t#ffff
+";
+    let mut asm = MMixAssembler::new(SOURCE, "<test>");
+    asm.parse().expect("program must assemble");
+
+    let mut mmix = MMix::new();
+    write_image(&mut mmix, &asm);
+
+    // WYDE at #1002 covers bytes #1002-#1003: 0x03^0xff=0xfc, 0x04^0xff=0xfb.
+    assert_eq!(mmix.read_octa(0x1000), 0x0102fcfb05060708);
+}
+
 #[test]
 fn journal_records_writes_only_while_enabled_including_a_zero_write() {
     let mut mmix = MMix::new();

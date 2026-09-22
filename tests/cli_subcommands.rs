@@ -235,6 +235,65 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
     );
 }
 
+// ── build/mmixasm: a program with a GREG carries it in the postamble ────────
+
+fn find_lop_post(mmo_data: &[u8]) -> usize {
+    mmo_data
+        .windows(2)
+        .position(|w| w[0] == 0x98 && w[1] == 0x0A)
+        .expect("built .mmo must have a lop_post record")
+}
+
+#[test]
+fn build_of_a_program_with_a_greg_carries_it_in_the_postamble() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_greg_build.mmo");
+
+    let build_out = checksmix()
+        .args(["build", "-o"])
+        .arg(&tmp_mmo)
+        .arg(fixture("greg_postamble.mms"))
+        .output()
+        .unwrap();
+    assert!(
+        build_out.status.success(),
+        "build should succeed; stderr: {}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let mmo_data = std::fs::read(&tmp_mmo).unwrap();
+    let post = find_lop_post(&mmo_data);
+    assert_eq!(mmo_data[post + 3], 254, "G must be 254 for one GREG");
+    let reg254 = u64::from_be_bytes(mmo_data[post + 4..post + 12].try_into().unwrap());
+    assert_eq!(reg254, 1000, "$254 must carry the GREG's value");
+
+    let _ = std::fs::remove_file(&tmp_mmo);
+}
+
+#[test]
+fn mmixasm_of_a_program_with_a_greg_carries_it_in_the_postamble() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_greg_mmixasm.mmo");
+
+    let build_out = mmixasm()
+        .args(["-o"])
+        .arg(&tmp_mmo)
+        .arg(fixture("greg_postamble.mms"))
+        .output()
+        .unwrap();
+    assert!(
+        build_out.status.success(),
+        "mmixasm should succeed; stderr: {}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let mmo_data = std::fs::read(&tmp_mmo).unwrap();
+    let post = find_lop_post(&mmo_data);
+    assert_eq!(mmo_data[post + 3], 254, "G must be 254 for one GREG");
+    let reg254 = u64::from_be_bytes(mmo_data[post + 4..post + 12].try_into().unwrap());
+    assert_eq!(reg254, 1000, "$254 must carry the GREG's value");
+
+    let _ = std::fs::remove_file(&tmp_mmo);
+}
+
 // ── run greg_base_address.mms: the two-operand base-address form ─────────────
 //
 // The one operand form AGENTS.md's corpus rule excuses from

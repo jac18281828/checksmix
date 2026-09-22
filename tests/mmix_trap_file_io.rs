@@ -448,6 +448,30 @@ fn fseek_negative_one_lands_at_the_end_and_ftell_agrees() {
 }
 
 #[test]
+fn fseek_negative_offsets_land_offset_plus_one_before_the_end() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fseek_negative.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "01234567890123456789").unwrap(); // 20 bytes
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+
+    assert_eq!(fseek(&mut mmix, 3, -1), 0);
+    assert_eq!(ftell(&mut mmix, 3), 20);
+
+    assert_eq!(fseek(&mut mmix, 3, -5), 0);
+    assert_eq!(ftell(&mut mmix, 3), 16);
+
+    assert_eq!(fseek(&mut mmix, 3, -21), 0);
+    assert_eq!(ftell(&mut mmix, 3), 0);
+
+    // -22 would land before byte 0 of the file: no position to seek to.
+    assert_eq!(fseek(&mut mmix, 3, -22), -1);
+
+    drop(guard);
+}
+
+#[test]
 fn fseek_to_a_nonzero_offset_returns_zero_not_the_position() {
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fseek_nonzero.txt");

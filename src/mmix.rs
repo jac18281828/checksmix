@@ -208,6 +208,13 @@ impl MMix {
         self.set_special(SpecialReg::RO, STACK_SEGMENT_START);
         self.set_special(SpecialReg::RS, STACK_SEGMENT_START);
 
+        // rK, rT, rTT and rV start at the values TAOCP Vol. 1 Fascicle 1
+        // (p. 90) gives the machine before any program runs.
+        self.set_special(SpecialReg::RK, 0xFFFFFFFFFFFFFFFF);
+        self.set_special(SpecialReg::RT, 0x8000000500000000);
+        self.set_special(SpecialReg::RTT, 0x8000000600000000);
+        self.set_special(SpecialReg::RV, 0x369C200400000000);
+
         // StdIn/StdOut/StdErr are open at start, TextRead/TextWrite/TextWrite
         // per the reference. None carries a `File`: fd 0's reads and fd 1/2's
         // writes route through the installed `Host`.

@@ -42,16 +42,20 @@ impl MMix {
         addrs.into_iter().map(|addr| (addr, self.memory[&addr]))
     }
 
-    /// [`MMix::write_byte`], plus recording `addr` into `loaded` regardless
-    /// of value. `write_image`'s per-byte loop calls this in place of
-    /// `write_byte` so that a zero byte the loaded program actually placed
-    /// stays visible to [`MMix::loaded_extent`] even after the sparse-memory
-    /// write drops it from `self.memory`. Not for general writes: a running
-    /// program's own stores (register-stack spills, `STO`, ...) must go
-    /// through plain `write_byte`, or `loaded_extent` would degrade into the
-    /// write journal's noise.
+    /// Combine a loaded byte with whatever already sits at `addr` by XOR --
+    /// MMIX's loader rule, so two assemblies of the same address combine
+    /// rather than one silently overwriting the other -- and record `addr`
+    /// into `loaded` regardless of the result. `write_image`'s and a `.mmo`
+    /// load's per-byte loops call this in place of `write_byte` so that a
+    /// zero byte the loaded program actually placed stays visible to
+    /// [`MMix::loaded_extent`] even after the sparse-memory write drops it
+    /// from `self.memory`. Not for general writes: a running program's own
+    /// stores (register-stack spills, `STO`, ...) must go through plain
+    /// `write_byte`, or `loaded_extent` would degrade into the write
+    /// journal's noise.
     pub(crate) fn write_loaded_byte(&mut self, addr: u64, value: u8) {
-        self.write_byte(addr, value);
+        let combined = self.read_byte(addr) ^ value;
+        self.write_byte(addr, combined);
         self.loaded.insert(addr);
     }
 

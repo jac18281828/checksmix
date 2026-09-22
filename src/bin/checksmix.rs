@@ -1,6 +1,6 @@
 use checksmix::{
-    MMix, MMixAssembler, Mix, MmoDecoder, Program, ValueFormat, entry_point, start_program,
-    write_image,
+    MMix, MMixAssembler, Mix, MmoDecoder, MmoGenerator, Program, ValueFormat, entry_point,
+    start_program, write_image,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -171,7 +171,10 @@ fn cmd_build(files: &[PathBuf], output: Option<&Path>) {
         eprintln!("error: no instructions to assemble");
         process::exit(1);
     }
-    let object_code = asm.generate_object_code();
+    let object_code = MmoGenerator::new(asm.instructions.clone(), asm.labels.clone())
+        .with_debug_strings(asm.debug_strings().to_vec())
+        .with_greg_inits(asm.greg_inits.clone())
+        .generate();
     let out_path = output
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| files[0].with_extension("mmo"));
@@ -280,10 +283,10 @@ fn run_mmo(filename: &str, value_format: ValueFormat) {
     let mut mmix = MMix::new();
 
     let decoder = MmoDecoder::new(data);
-    let entry = decoder.decode(|addr, byte| {
-        mmix.write_byte(addr, byte);
+    let entry = decoder.load(&mut mmix).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        process::exit(1);
     });
-    mmix.set_debug_strings(decoder.debug_strings());
 
     start_program(&mut mmix, entry);
 
