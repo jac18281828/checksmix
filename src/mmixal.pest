@@ -103,9 +103,11 @@ prefix_arg = @{ (ASCII_ALPHA | "_" | ":") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
 // constants, not as a value arithmetic can touch, so `data_expr` serves
 // data lists only and `expr` keeps serving instruction operands.
 data_expr = ${ data_term ~ (weak_op ~ data_term)* }
-// The trailing `string_literal` alternative never matches on its own --
-// `data_primary` already covers a bare string -- but its presence keeps a
-// string-free failure's diagnostic naming `data_primary`, not `data_term`.
+// The trailing `string_literal` alternative never matches: `data_primary`
+// already covers a bare string, so the first alternative always succeeds
+// where this one would. It keeps a string-free failure's diagnostic naming
+// `data_term`, not `data_primary`. The evaluators assume a `string_literal`
+// never appears directly in `data_term` position.
 data_term = { (data_primary ~ (strong_op ~ data_primary)*) | string_literal }
 data_primary = {
     unary_op ~ data_primary | data_group | at_symbol | local_ref_back | local_ref_fwd | constant | global_id

@@ -146,8 +146,9 @@ MMIXAL expression: constants, symbols, `@`, unary operators, and two
 left-associative precedence levels of binary operators. A decimal or
 hexadecimal constant always has a value, however many digits it spells: one
 of 2⁶⁴ or more reduces mod 2⁶⁴, so `OCTA #112233445566778899` assembles
-`#2233445566778899` and `OCTA 18446744073709551621` assembles `5`. Whether
-that value then fits the field it lands in is a separate, later check.
+`#2233445566778899` and `OCTA 18446744073709551621` assembles `5`. A data
+item's value is not range-checked: `BYTE 300` keeps its low byte, `WYDE
+70000` its low wyde.
 
 | Level | Operators |
 | --- | --- |

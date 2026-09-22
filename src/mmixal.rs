@@ -906,6 +906,73 @@ enum ExprValue {
     Register(u64),
 }
 
+/// `fold_data_atoms`'s `child` parameter: evaluates one `data_term` or
+/// `data_primary` into the atoms it contributes.
+type EvalOperand = fn(&MMixAssembler, pest::iterators::Pair<Rule>) -> Result<DataAtoms, String>;
+
+/// `fold_data_atoms`'s `apply` parameter, applying a binary operator to two
+/// atoms. `apply_weak` and `apply_strong` share this signature.
+type ApplyOperator =
+    fn(&MMixAssembler, &str, ExprValue, ExprValue, usize, usize) -> Result<ExprValue, String>;
+
+/// One or more values a `data_primary`, `data_term` or `data_expr`
+/// contributes: a string's every character is its own atom, so a
+/// multi-character string's interior stays free of whatever touches its
+/// neighbors while its first and last atom combine with them. Emptiness is
+/// unrepresentable, so combining two lists across an operator needs no
+/// guard for it.
+struct DataAtoms {
+    head: ExprValue,
+    tail: Vec<ExprValue>,
+}
+
+impl DataAtoms {
+    fn one(value: ExprValue) -> Self {
+        DataAtoms {
+            head: value,
+            tail: Vec::new(),
+        }
+    }
+
+    fn from_bytes(first: u8, rest: Vec<u8>) -> Self {
+        DataAtoms {
+            head: ExprValue::Pure(first as u64),
+            tail: rest
+                .into_iter()
+                .map(|byte| ExprValue::Pure(byte as u64))
+                .collect(),
+        }
+    }
+
+    fn last(&self) -> ExprValue {
+        *self.tail.last().unwrap_or(&self.head)
+    }
+
+    fn last_mut(&mut self) -> &mut ExprValue {
+        self.tail.last_mut().unwrap_or(&mut self.head)
+    }
+
+    fn into_vec(self) -> Vec<ExprValue> {
+        let mut items = vec![self.head];
+        items.extend(self.tail);
+        items
+    }
+
+    /// Merges `self` and `other` across an operator: combines `self`'s last
+    /// atom with `other`'s first via `combine`, leaving every other atom in
+    /// place.
+    fn merge(
+        mut self,
+        other: DataAtoms,
+        combine: impl FnOnce(ExprValue, ExprValue) -> Result<ExprValue, String>,
+    ) -> Result<DataAtoms, String> {
+        let combined = combine(self.last(), other.head)?;
+        *self.last_mut() = combined;
+        self.tail.extend(other.tail);
+        Ok(self)
+    }
+}
+
 /// A PC-relative displacement in the instruction encoding: the forward opcode
 /// carries `field` directly, the backward opcode carries `2^bits - magnitude`.
 #[derive(Debug, Clone, Copy)]
@@ -1493,7 +1560,6 @@ impl MMixAssembler {
                             Rule::directive_is => "IS directive (symbol definition)".to_string(),
                             Rule::directive_loc => "LOC directive".to_string(),
                             Rule::expr => "number or expression".to_string(),
-                            Rule::data_expr => "number, expression or string".to_string(),
                             Rule::global_id => "label or symbol name".to_string(),
                             Rule::identifier => "label or symbol name".to_string(),
                             // A data-list item holding no string parses through
@@ -2744,12 +2810,10 @@ impl MMixAssembler {
     /// n₁ … n_k characters contributes n₁ + … + n_k − k + 1, whatever
     /// operators surround them. An empty string is an error at its own
     /// position, the same rule pass 2 applies, unless it is the value's
-    /// only content -- the existing meaning of `BYTE ""`.
+    /// only content, which contributes zero.
     fn data_value_unit_count(&self, value: pest::iterators::Pair<Rule>) -> Result<u64, String> {
-        let data_expr = value.into_inner().next().ok_or("Missing data expression")?;
-        if let Some((content, ..)) = Self::sole_bare_string(&data_expr)
-            && content.is_empty()
-        {
+        let data_expr = Self::data_expr(value)?;
+        if Self::is_bare_empty_string(&data_expr) {
             return Ok(0);
         }
 
@@ -2773,14 +2837,19 @@ impl MMixAssembler {
         string_count: &mut u64,
     ) -> Result<(), String> {
         let mut children = primary.into_inner();
-        let first = children.next().expect("data_primary has a child");
+        let first = children
+            .next()
+            .ok_or_else(|| "data_primary has a child".to_string())?;
         match first.as_rule() {
             Rule::unary_op => {
-                let operand = children.next().expect("unary operator needs an operand");
+                let operand = children
+                    .next()
+                    .ok_or_else(|| "unary operator needs an operand".to_string())?;
                 self.count_data_primary_strings(operand, char_total, string_count)
             }
             Rule::string_literal => {
-                *char_total += self.decode_data_string_literal(&first)?.len() as u64;
+                let (_, rest) = self.decode_data_string_literal(&first)?;
+                *char_total += 1 + rest.len() as u64;
                 *string_count += 1;
                 Ok(())
             }
@@ -4946,66 +5015,78 @@ impl MMixAssembler {
     /// string outside a group, where it may expand to more than one item.
     fn eval_group_string(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
         let (line, col) = pair.line_col();
-        let text = pair.as_str();
-        let bytes = Self::decode_byte_string(&text[1..text.len() - 1]);
-        if bytes.len() == 1 {
-            Ok(ExprValue::Pure(bytes[0] as u64))
-        } else {
-            Err(format!(
-                "{}:{}:{}: a {}-character string is not a single value here",
-                self.current_filename,
-                line,
-                col,
-                bytes.len()
-            ))
+        let (first, rest) = self.decode_data_string_literal(&pair)?;
+        if rest.is_empty() {
+            return Ok(ExprValue::Pure(first as u64));
         }
+        Err(format!(
+            "{}:{}:{}: a {}-character string is not a single value here",
+            self.current_filename,
+            line,
+            col,
+            1 + rest.len()
+        ))
     }
 
-    /// The content of a `data_value` that is exactly one bare string -- no
-    /// unary wrap, no sibling term or primary -- with its opening quote's
-    /// line and column, or `None` otherwise. This is the one shape that
-    /// keeps `BYTE ""`'s existing meaning: zero items, not an error.
-    fn sole_bare_string<'i>(
-        data_expr: &pest::iterators::Pair<'i, Rule>,
-    ) -> Option<(&'i str, usize, usize)> {
+    /// Whether `data_expr` is `BYTE ""`'s one exempt shape: a bare string,
+    /// with no unary wrap, sibling term or primary, and no content. Its
+    /// empty string contributes zero items, not the error every other
+    /// position gives one.
+    fn is_bare_empty_string(data_expr: &pest::iterators::Pair<Rule>) -> bool {
         let mut terms = data_expr.clone().into_inner();
-        let term = terms.next()?;
+        let Some(term) = terms.next() else {
+            return false;
+        };
         if terms.next().is_some() {
-            return None;
+            return false;
         }
         let mut primaries = term.into_inner();
-        let primary = primaries.next()?;
+        let Some(primary) = primaries.next() else {
+            return false;
+        };
         if primaries.next().is_some() {
-            return None;
+            return false;
         }
         let mut children = primary.into_inner();
-        let child = children.next()?;
+        let Some(child) = children.next() else {
+            return false;
+        };
         if children.next().is_some() || child.as_rule() != Rule::string_literal {
-            return None;
+            return false;
         }
-        let (line, col) = child.line_col();
         let text = child.as_str();
-        Some((&text[1..text.len() - 1], line, col))
+        text.len() == 2
     }
 
-    /// A `string_literal`'s content, decoded to the bytes it emits. An empty
-    /// string is an error at its own position: the one place it is not an
-    /// error is `BYTE ""` standing entirely alone, caught by
-    /// [`Self::sole_bare_string`] before either pass reaches this.
+    /// A `data_value`'s inner `data_expr`, present whenever the grammar
+    /// built the node.
+    fn data_expr(
+        value: pest::iterators::Pair<Rule>,
+    ) -> Result<pest::iterators::Pair<Rule>, String> {
+        value
+            .into_inner()
+            .next()
+            .ok_or_else(|| "Missing data expression".to_string())
+    }
+
+    /// A `string_literal`'s content, decoded to its first byte and the
+    /// rest. Rejects an empty string with an error at its own position;
+    /// the one exemption, `BYTE ""` standing entirely alone, is caught by
+    /// [`Self::is_bare_empty_string`] before either pass reaches this.
     fn decode_data_string_literal(
         &self,
         string_pair: &pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(u8, Vec<u8>), String> {
         let (line, col) = string_pair.line_col();
         let text = string_pair.as_str();
-        let bytes = Self::decode_byte_string(&text[1..text.len() - 1]);
-        if bytes.is_empty() {
-            return Err(format!(
+        let mut bytes = Self::decode_byte_string(&text[1..text.len() - 1]).into_iter();
+        let first = bytes.next().ok_or_else(|| {
+            format!(
                 "{}:{}:{}: an empty string is not a value inside an expression",
                 self.current_filename, line, col
-            ));
-        }
-        Ok(bytes)
+            )
+        })?;
+        Ok((first, bytes.collect()))
     }
 
     /// Evaluate a `data_value` (a `data_expr`) into the values it
@@ -5013,108 +5094,92 @@ impl MMixAssembler {
     /// `data_primary` stands: an operator directly on it combines with its
     /// first character (a leading unary or the operator before it) or its
     /// last (the operator after it), and each character between stays its
-    /// own item. A string standing alone, with no operator anywhere, keeps
-    /// its existing meaning -- one item per character, none for an empty
-    /// string.
+    /// own item. A string standing alone, with no operator anywhere,
+    /// contributes one item per character, none for an empty string.
     fn eval_data_value_items(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<ExprValue>, String> {
-        let data_expr = pair
-            .into_inner()
-            .next()
-            .expect("data_value has a data_expr");
-        if let Some((content, ..)) = Self::sole_bare_string(&data_expr)
-            && content.is_empty()
-        {
+        let data_expr = Self::data_expr(pair)?;
+        if Self::is_bare_empty_string(&data_expr) {
             return Ok(Vec::new());
         }
-        self.eval_data_expr_atoms(data_expr)
+        Ok(self.eval_data_expr_atoms(data_expr)?.into_vec())
+    }
+
+    /// Folds a `data_expr`'s `data_term`s or a `data_term`'s
+    /// `data_primary`s into one [`DataAtoms`]: `child` evaluates each
+    /// operand and `apply` combines a pair of atoms across the operator
+    /// between them, via [`DataAtoms::merge`].
+    fn fold_data_atoms(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        child: EvalOperand,
+        apply: ApplyOperator,
+    ) -> Result<DataAtoms, String> {
+        let mut parts = pair.into_inner();
+        let mut atoms = child(
+            self,
+            parts
+                .next()
+                .ok_or_else(|| "a fold operand list is never empty".to_string())?,
+        )?;
+        while let Some(op) = parts.next() {
+            let (line, col) = op.line_col();
+            let rhs = child(
+                self,
+                parts
+                    .next()
+                    .ok_or_else(|| "an operator needs a right operand".to_string())?,
+            )?;
+            atoms = atoms.merge(rhs, |lhs, rhs| {
+                apply(self, op.as_str(), lhs, rhs, line, col)
+            })?;
+        }
+        Ok(atoms)
     }
 
     /// [`Self::eval_data_value_items`]'s fold across a `data_expr`'s weak
     /// operators: each `data_term` contributes one or more atoms, and a
     /// weak operator combines the last atom before it with the first atom
     /// after -- every atom between stays its own item.
-    fn eval_data_expr_atoms(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<ExprValue>, String> {
-        let mut parts = pair.into_inner();
-        let mut atoms = self.eval_data_term_atoms(parts.next().expect("data_expr has a term"))?;
-        while let Some(op) = parts.next() {
-            let (line, col) = op.line_col();
-            let rhs =
-                self.eval_data_term_atoms(parts.next().expect("weak operator needs a term"))?;
-            Self::fold_atoms(&mut atoms, rhs, |lhs, rhs| {
-                self.apply_weak(op.as_str(), lhs, rhs, line, col)
-            })?;
-        }
-        Ok(atoms)
+    fn eval_data_expr_atoms(&self, pair: pest::iterators::Pair<Rule>) -> Result<DataAtoms, String> {
+        self.fold_data_atoms(pair, Self::eval_data_term_atoms, Self::apply_weak)
     }
 
     /// [`Self::eval_data_expr_atoms`]'s counterpart for a `data_term`'s
     /// strong operators, combining `data_primary` atom lists the same way.
-    fn eval_data_term_atoms(
-        &self,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<ExprValue>, String> {
-        let mut parts = pair.into_inner();
-        let mut atoms =
-            self.eval_data_primary_atoms(parts.next().expect("data_term has a primary"))?;
-        while let Some(op) = parts.next() {
-            let (line, col) = op.line_col();
-            let rhs = self
-                .eval_data_primary_atoms(parts.next().expect("strong operator needs a primary"))?;
-            Self::fold_atoms(&mut atoms, rhs, |lhs, rhs| {
-                self.apply_strong(op.as_str(), lhs, rhs, line, col)
-            })?;
-        }
-        Ok(atoms)
-    }
-
-    /// Combines two atom lists across the operator between them: the last
-    /// atom of `lhs` and the first of `rhs` merge into one via `combine`;
-    /// every other atom stands unchanged. This is the one place a
-    /// multi-character string's interior breaks free of its neighbors.
-    fn fold_atoms(
-        lhs: &mut Vec<ExprValue>,
-        rhs: Vec<ExprValue>,
-        combine: impl FnOnce(ExprValue, ExprValue) -> Result<ExprValue, String>,
-    ) -> Result<(), String> {
-        let left_last = lhs.pop().expect("an atom list is never empty");
-        let mut rhs = rhs.into_iter();
-        let right_first = rhs.next().expect("an atom list is never empty");
-        lhs.push(combine(left_last, right_first)?);
-        lhs.extend(rhs);
-        Ok(())
+    fn eval_data_term_atoms(&self, pair: pest::iterators::Pair<Rule>) -> Result<DataAtoms, String> {
+        self.fold_data_atoms(pair, Self::eval_data_primary_atoms, Self::apply_strong)
     }
 
     /// A `data_primary`'s atoms: one, for an ordinary value, or one per
     /// character for a string. A unary operator combines with the first
     /// atom of its operand only -- `-"ab"` is `-'a'`, `'b'`, matching
-    /// [`Self::fold_atoms`]'s treatment of a binary operator's neighbor.
+    /// [`DataAtoms::merge`]'s treatment of a binary operator's neighbor.
     fn eval_data_primary_atoms(
         &self,
         pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<ExprValue>, String> {
+    ) -> Result<DataAtoms, String> {
         let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
-        let first = parts.next().expect("data_primary has a child");
+        let first = parts
+            .next()
+            .ok_or_else(|| "data_primary has a child".to_string())?;
         match first.as_rule() {
             Rule::unary_op => {
-                let operand = parts.next().expect("unary operator needs an operand");
+                let operand = parts
+                    .next()
+                    .ok_or_else(|| "unary operator needs an operand".to_string())?;
                 let mut atoms = self.eval_data_primary_atoms(operand)?;
-                let head = atoms.first_mut().expect("an atom list is never empty");
-                *head = self.apply_unary(first.as_str(), *head, line, col)?;
+                atoms.head = self.apply_unary(first.as_str(), atoms.head, line, col)?;
                 Ok(atoms)
             }
-            Rule::string_literal => Ok(self
-                .decode_data_string_literal(&first)?
-                .into_iter()
-                .map(|byte| ExprValue::Pure(byte as u64))
-                .collect()),
-            _ => Ok(vec![self.eval_expr(first)?]),
+            Rule::string_literal => {
+                let (first_byte, rest) = self.decode_data_string_literal(&first)?;
+                Ok(DataAtoms::from_bytes(first_byte, rest))
+            }
+            _ => Ok(DataAtoms::one(self.eval_expr(first)?)),
         }
     }
 
@@ -5187,10 +5252,9 @@ impl MMixAssembler {
         let value = match pair.as_rule() {
             Rule::char_literal => {
                 let inner = &text[1..text.len() - 1];
-                let ch = inner
-                    .chars()
-                    .next()
-                    .expect("grammar admits exactly one character between the quotes");
+                let ch = inner.chars().next().ok_or_else(|| {
+                    "grammar admits exactly one character between the quotes".to_string()
+                })?;
 
                 if !ch.is_ascii() {
                     return Err(format!(
@@ -5214,15 +5278,19 @@ impl MMixAssembler {
                 } else {
                     text
                 };
-                hex_str.chars().fold(0u64, |acc, c| {
-                    let digit = c.to_digit(16).expect("grammar admits only hex digits") as u64;
-                    acc.wrapping_shl(4).wrapping_add(digit)
-                })
+                hex_str.chars().try_fold(0u64, |acc, c| {
+                    let digit = c
+                        .to_digit(16)
+                        .ok_or_else(|| "grammar admits only hex digits".to_string())?;
+                    Ok::<u64, String>(acc.wrapping_shl(4).wrapping_add(digit as u64))
+                })?
             }
-            Rule::dec_literal => text.chars().fold(0u64, |acc, c| {
-                let digit = c.to_digit(10).expect("grammar admits only decimal digits") as u64;
-                acc.wrapping_mul(10).wrapping_add(digit)
-            }),
+            Rule::dec_literal => text.chars().try_fold(0u64, |acc, c| {
+                let digit = c
+                    .to_digit(10)
+                    .ok_or_else(|| "grammar admits only decimal digits".to_string())?;
+                Ok::<u64, String>(acc.wrapping_mul(10).wrapping_add(digit as u64))
+            })?,
             other => {
                 return Err(format!(
                     "Line {}:{}: Expected a literal, got: {:?}",
@@ -6365,8 +6433,8 @@ mod tests {
     #[test]
     fn test_char_literal_two_characters_reports_expected_primary() {
         assert_eq!(
-            assemble_err("Main\tANDI\t$1,$2,'AB'\n\tTRAP\t0,Halt,0"),
-            "<test>:1:17: syntax error: expected primary"
+            assemble_err("Main\tAND\t$1,$2,'AB'\n\tTRAP\t0,Halt,0"),
+            "<test>:1:16: syntax error: expected primary"
         );
     }
 
@@ -11320,6 +11388,20 @@ Main    SETI    $1,7
         assert_eq!(
             assemble_err("BYTE -\"\""),
             "<test>:1:7: an empty string is not a value inside an expression"
+        );
+    }
+
+    #[test]
+    fn test_byte_list_parenthesized_empty_string_is_an_error() {
+        // An empty string inside parentheses gives the same message as one
+        // beside any operator, whatever surrounds it.
+        assert_eq!(
+            assemble_err("BYTE (\"\")"),
+            "<test>:1:7: an empty string is not a value inside an expression"
+        );
+        assert_eq!(
+            assemble_err("BYTE (2*\"\")"),
+            "<test>:1:9: an empty string is not a value inside an expression"
         );
     }
 
