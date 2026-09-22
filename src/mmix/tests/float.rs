@@ -1721,13 +1721,13 @@ fn test_overflow_round_down_negative_keeps_neg_inf() {
     assert!(r.is_infinite() && r.is_sign_negative());
 }
 
-// ==================== C11.1 contract table (fascicle-2026-09-21) ====================
+// ==================== FLOT/FIX/NaN/flag behaviour ====================
 //
-// One test per row of the C11.1 prompt's contract table. Each cites the
-// row it pins; "guard" rows already passed before this unit and pin
-// behaviour the fix must keep.
+// One block per rule a floating-point instruction follows: how it reads
+// an immediate operand, FIX's wraparound and range, NaN propagation and
+// quieting, and which flag bits an operation raises.
 
-// ---- IMM-2: immediate FLOT/SFLOT read Z as an unsigned byte ----
+// ---- immediate FLOT/SFLOT read Z as an unsigned byte ----
 
 #[test]
 fn test_floti_immediate_200() {
@@ -1756,7 +1756,7 @@ fn test_floti_round_up_255() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- FIX-1: FIX wraps mod 2^64 and raises W outside the signed range ----
+// ---- FIX wraps mod 2^64 and raises W outside the signed range ----
 
 #[test]
 fn test_fix_1e20_wraps_and_raises_w() {
@@ -1788,7 +1788,7 @@ fn test_fix_1e300_wraps_to_zero() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_W);
 }
 
-// ---- FIX-2: the signed range's own boundary ----
+// ---- the signed range's own boundary ----
 
 #[test]
 fn test_fix_two_to_the_63_is_out_of_range() {
@@ -1810,7 +1810,7 @@ fn test_fix_negative_two_to_the_63_is_in_range() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- FIX-3: an infinite or NaN operand copies through with I alone ----
+// ---- an infinite or NaN operand copies through with I alone ----
 
 #[test]
 fn test_fix_infinity_copies_through_with_i_alone() {
@@ -1852,7 +1852,7 @@ fn test_fix_signaling_nan_copies_through_unquieted() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
 }
 
-// ---- NAN-1: FADD/FMUL/FDIV/FSUB's standard-conventions NaN pick ----
+// ---- FADD/FMUL/FDIV/FSUB's standard-conventions NaN pick ----
 
 #[test]
 fn test_fadd_two_quiet_nans_picks_z() {
@@ -1942,7 +1942,7 @@ fn test_fsub_negative_nan_z_stays_unnegated() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- NAN-2: FREM's standard-conventions NaN pick ----
+// ---- FREM's standard-conventions NaN pick ----
 
 #[test]
 fn test_frem_quiet_nan_y_picks_y() {
@@ -1966,7 +1966,7 @@ fn test_frem_signaling_z_quiets_and_raises_i() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
 }
 
-// ---- NAN-3: the invalid operations and their signs ----
+// ---- the invalid operations and their signs ----
 
 #[test]
 fn test_fadd_opposite_infinities_is_invalid_signed_by_z() {
@@ -2055,7 +2055,7 @@ fn test_fsqrt_of_negative_is_invalid() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
 }
 
-// ---- NAN-4: FINT's NaN passthrough ----
+// ---- FINT's NaN passthrough ----
 
 #[test]
 fn test_fint_quiet_nan_passes_through() {
@@ -2077,7 +2077,7 @@ fn test_fint_signaling_nan_quiets_and_raises_i() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_I);
 }
 
-// ---- NAN-5: LDSF widens a short float's bits exactly ----
+// ---- LDSF widens a short float's bits exactly ----
 
 #[test]
 fn test_ldsf_signaling_nan_widens_bit_for_bit() {
@@ -2103,7 +2103,7 @@ fn test_ldsf_quiet_nan_widens_bit_for_bit() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- NAN-6 and the owner-added STSF row: signaling and subnormal narrowing ----
+// ---- STSF quiets a signaling NaN and narrows a subnormal on store ----
 
 #[test]
 fn test_stsf_signaling_nan_quiets_on_store() {
@@ -2141,7 +2141,7 @@ fn test_stsf_exact_short_subnormal_raises_nothing() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- FLAG-1: an exact subnormal result raises nothing ----
+// ---- an exact subnormal result raises nothing ----
 
 #[test]
 fn test_fadd_smallest_subnormals_sum_exactly() {
@@ -2200,7 +2200,7 @@ fn test_fmul_exact_subnormal_still_trips_when_u_enabled() {
     assert_eq!(mmix.get_pc(), 0x60);
 }
 
-// ---- FLAG-2: an inexact underflow raises U and X together ----
+// ---- an inexact underflow raises U and X together ----
 
 #[test]
 fn test_fmul_inexact_underflow_raises_u_and_x() {
@@ -2281,7 +2281,7 @@ fn test_fsqrt_of_a_subnormal_rounds_to_a_normal_result() {
     assert_eq!(mmix.get_special(SpecialReg::RA), RA_X);
 }
 
-// ---- FLAG-3: ±∞/±0 raises nothing ----
+// ---- ±∞/±0 raises nothing ----
 
 #[test]
 fn test_fdiv_infinity_over_zero_raises_nothing() {
@@ -2294,7 +2294,7 @@ fn test_fdiv_infinity_over_zero_raises_nothing() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0);
 }
 
-// ---- FLAG-4: a finite nonzero dividend over zero raises Z alone ----
+// ---- a finite nonzero dividend over zero raises Z alone ----
 
 #[test]
 fn test_fdiv_by_zero_raises_z_alone() {
@@ -2341,7 +2341,7 @@ fn test_fdiv_by_zero_is_exact_in_round_off_too() {
     assert_eq!(mmix.get_special(SpecialReg::RA), 0x10002);
 }
 
-// ---- FLAG-5: ROUND_DOWN's exact-zero sign ----
+// ---- ROUND_DOWN's exact-zero sign ----
 
 #[test]
 fn test_fadd_round_down_mixed_zero_is_negative() {

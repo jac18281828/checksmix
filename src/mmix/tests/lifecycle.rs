@@ -15,7 +15,7 @@ fn test_mmix_new() {
 /// (p. 90) gives before any program runs, and `reset` restores them after
 /// they are overwritten.
 #[test]
-fn fresh_and_reset_machines_hold_the_boot3_start_values() {
+fn fresh_and_reset_machines_hold_rk_rt_rtt_and_rv_at_their_start_values() {
     let expected = [
         (SpecialReg::RK, 0xFFFFFFFFFFFFFFFFu64),
         (SpecialReg::RT, 0x8000000500000000),
