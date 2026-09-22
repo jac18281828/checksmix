@@ -235,6 +235,30 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
     );
 }
 
+// ── run greg_base_address.mms: the two-operand base-address form ─────────────
+//
+// The one operand form AGENTS.md's corpus rule excuses from
+// examples/all_instructions_test.mms (see its "Intentional coverage
+// exceptions" block): it needs a GREG holding a base address, which that
+// file's harness cannot admit without a register-numbering rework. `run`
+// exits 0 even when the machine halts on an error, so both the printed
+// message and the exit status must be checked.
+
+#[test]
+fn run_greg_base_address_fixture_passes() {
+    let out = checksmix()
+        .args(["run"])
+        .arg(fixture("greg_base_address.mms"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("All tests passed!"),
+        "stdout should report success; stdout: {stdout}"
+    );
+    assert_eq!(out.status.code(), Some(0), "the fixture halts with $255=0");
+}
+
 // ── an input contributing no source: diagnostic, not a panic ─────────────────
 //
 // resolve_includes trims away a blank segment; an input made entirely of

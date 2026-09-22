@@ -947,6 +947,12 @@ pub struct MMixAssembler {
     current_addr: u64,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
     pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
+    /// How many of `greg_inits`' entries pass 2 has walked past so far --
+    /// the two-operand memory form's base-address search bounds itself to
+    /// `greg_inits[..greg_inits_seen]`, the `GREG`s the reference would have
+    /// seen by this point in source order. Reset to 0 before pass 2; pass 1
+    /// never reads it.
+    greg_inits_seen: usize,
     /// Index into `sources` of the translation unit currently being walked
     /// (command-line order), set at the start of each unit in both passes.
     /// Used, rather than `current_filename` alone, to disambiguate two
@@ -1311,6 +1317,7 @@ impl MMixAssembler {
             current_addr: 0,
             next_greg: 254, // Start allocating from $254, count down
             greg_inits: Vec::new(),
+            greg_inits_seen: 0,
             current_unit_index: 0,
             debug_info: BTreeMap::new(),
             debug_strings,
@@ -1852,6 +1859,134 @@ impl MMixAssembler {
         matches!(inner.next().map(|p| p.as_rule()), Some(Rule::label_def)) && inner.next().is_none()
     }
 
+    /// LEX-2: whether the physical line numbered `line_number` in `source`
+    /// opens with a blank or a tab. Independent of what pest's own implicit
+    /// whitespace already skipped before handing a `Rule::line` pair its
+    /// span -- that span starts past any leading blank, so indentation is
+    /// only visible by reading the raw line back out of the source.
+    fn line_opens_indented(source: &str, line_number: usize) -> bool {
+        source
+            .split('\n')
+            .nth(line_number - 1)
+            .and_then(|line| line.chars().next())
+            .is_some_and(|c| c == ' ' || c == '\t')
+    }
+
+    /// The label-shaped pair that opens `stmt_pair`'s match, if any:
+    /// `label_def` or `local_label_def` from `statement`'s own label
+    /// alternatives, or the local label / global id `is_directive` reads
+    /// ahead of its own `IS` keyword -- the one directive whose grammar
+    /// folds a label into itself. `None` when `stmt_pair` matched via
+    /// `instruction` or a directive that carries no label.
+    fn statement_label_pair<'i>(
+        stmt_pair: &pest::iterators::Pair<'i, Rule>,
+    ) -> Option<pest::iterators::Pair<'i, Rule>> {
+        let first = stmt_pair.clone().into_inner().next()?;
+        match first.as_rule() {
+            Rule::label_def | Rule::local_label_def => Some(first),
+            Rule::directive => {
+                let d = first.into_inner().next()?;
+                if d.as_rule() == Rule::is_directive {
+                    d.into_inner().next()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The pair right after `stmt_pair`'s opening label, if the label was
+    /// not the whole match: the instruction or directive that followed it
+    /// in `statement`'s label alternatives, or `IS`'s own keyword pair in
+    /// `is_directive`.
+    fn statement_after_label<'i>(
+        stmt_pair: &pest::iterators::Pair<'i, Rule>,
+    ) -> Option<pest::iterators::Pair<'i, Rule>> {
+        let mut inner = stmt_pair.clone().into_inner();
+        let first = inner.next()?;
+        match first.as_rule() {
+            Rule::label_def | Rule::local_label_def => inner.next(),
+            Rule::directive => {
+                let d = first.into_inner().next()?;
+                if d.as_rule() == Rule::is_directive {
+                    let mut is_inner = d.into_inner();
+                    let _label_tok = is_inner.next();
+                    is_inner.next()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// LEX-2, case 1: an indented line has no label field, so a statement
+    /// that opened by reading one is an unknown operation even when a real
+    /// instruction or directive followed it (`\tFoo SET $2,9`,
+    /// `\t2H JMP 2F`, an indented `Foo IS 5`). `{col}` lands on whatever
+    /// followed the label -- the instruction, the directive, or `IS`'s own
+    /// keyword -- matching where the same diagnostic already lands for a
+    /// bare word followed by trailing text.
+    fn indented_label_statement_error(
+        stmt_pair: &pest::iterators::Pair<Rule>,
+        label_pair: &pest::iterators::Pair<Rule>,
+        source: &str,
+        filename: &str,
+        segment_start: usize,
+    ) -> String {
+        let segment = &source[segment_start..stmt_pair.as_span().end()];
+        let (line, col) = Self::statement_after_label(stmt_pair)
+            .map(|p| p.line_col())
+            .unwrap_or_else(|| label_pair.line_col());
+        Self::unknown_operation_error(segment, filename, line, col)
+    }
+
+    /// LEX-2, case 2: an indented line's lone word, with nothing at all
+    /// following it, is an unknown operation rather than a silently defined
+    /// label. `{col}` is the word itself, since nothing follows it to point
+    /// at.
+    fn indented_bare_label_error(
+        label_pair: &pest::iterators::Pair<Rule>,
+        filename: &str,
+    ) -> String {
+        let (line, col) = label_pair.line_col();
+        format!(
+            "{filename}:{line}:{col}: syntax error: unknown operation: {}",
+            label_pair.as_str()
+        )
+    }
+
+    /// `SAVE` and `UNSAVE` are the two of the seven bare mnemonics the
+    /// reference's empty-field-is-0 rule does not cover: `SAVE` takes
+    /// exactly two operands, so the one implicit operand an empty field
+    /// gives is not enough to assemble it, and `UNSAVE`'s new one-operand
+    /// form reads that implicit operand as a register, which 0 is not.
+    /// Owner-approved: both are errors in every position a bare word can
+    /// appear -- indented, column 1, or after `;` -- never a silently
+    /// defined label. `None` when `label_pair`'s name is neither.
+    fn bare_reserved_mnemonic_error(
+        label_pair: &pest::iterators::Pair<Rule>,
+        filename: &str,
+    ) -> Option<String> {
+        let name = label_pair
+            .clone()
+            .into_inner()
+            .next()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_default();
+        let (line, col) = label_pair.line_col();
+        match name.as_str() {
+            "SAVE" => Some(format!(
+                "{filename}:{line}:{col}: syntax error: unknown operation: SAVE"
+            )),
+            "UNSAVE" => Some(format!(
+                "{filename}:{line}:{col}: pure value 0 cannot be used where a register is required"
+            )),
+            _ => None,
+        }
+    }
+
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
         if let Some((file, line)) = &self.debug_directive_overflow {
@@ -1909,18 +2044,63 @@ impl MMixAssembler {
                             // and whether it had a statement at all, so a
                             // segment's candidate remark is diagnosed by the
                             // matching function and never blamed on a
-                            // sibling's parens.
+                            // sibling's parens. LEX-2 (an indented line has
+                            // no label field) applies only to a line's own
+                            // first segment -- a statement after `;` keeps
+                            // reading a label, wherever the physical line
+                            // started.
+                            let (line_number, _) = line_pair.line_col();
+                            let line_indented =
+                                Self::line_opens_indented(&unit.preprocessed, line_number);
                             let mut segment_start = line_pair.as_span().start();
+                            let mut is_first_segment = true;
                             let mut label_only = false;
                             let mut has_statement = false;
+                            let mut bare_label_pair: Option<pest::iterators::Pair<Rule>> = None;
                             for stmt_pair in line_pair.into_inner() {
                                 match stmt_pair.as_rule() {
                                     Rule::statement => {
                                         label_only = Self::statement_is_label_only(&stmt_pair);
                                         has_statement = true;
+                                        bare_label_pair = None;
+                                        if is_first_segment
+                                            && line_indented
+                                            && let Some(label_pair) =
+                                                Self::statement_label_pair(&stmt_pair)
+                                            && stmt_pair.as_span().end()
+                                                > label_pair.as_span().end()
+                                        {
+                                            return Err(Self::indented_label_statement_error(
+                                                &stmt_pair,
+                                                &label_pair,
+                                                &unit.preprocessed,
+                                                &unit.filename,
+                                                segment_start,
+                                            ));
+                                        }
+                                        if label_only {
+                                            bare_label_pair = stmt_pair.clone().into_inner().next();
+                                        }
                                         self.first_pass_statement(stmt_pair)?;
                                     }
                                     Rule::remark => {
+                                        if label_only && stmt_pair.as_str().is_empty() {
+                                            let label_pair = bare_label_pair
+                                                .as_ref()
+                                                .expect("label_only implies a label pair");
+                                            if let Some(err) = Self::bare_reserved_mnemonic_error(
+                                                label_pair,
+                                                &unit.filename,
+                                            ) {
+                                                return Err(err);
+                                            }
+                                            if is_first_segment && line_indented {
+                                                return Err(Self::indented_bare_label_error(
+                                                    label_pair,
+                                                    &unit.filename,
+                                                ));
+                                            }
+                                        }
                                         if label_only {
                                             Self::diagnose_unrecognized_opcode(
                                                 &stmt_pair,
@@ -1940,8 +2120,10 @@ impl MMixAssembler {
                                         // Skip the `;` that follows, if any,
                                         // so the next segment starts clean.
                                         segment_start = stmt_pair.as_span().end() + 1;
+                                        is_first_segment = false;
                                         label_only = false;
                                         has_statement = false;
+                                        bare_label_pair = None;
                                     }
                                     _ => {}
                                 }
@@ -1982,6 +2164,7 @@ impl MMixAssembler {
         self.current_prefix.clear();
         self.local_occurrence = [0; 10];
         self.in_special_mode = false;
+        self.greg_inits_seen = 0;
 
         debug!("Pass 2: Generating instructions");
 
@@ -2133,11 +2316,19 @@ impl MMixAssembler {
                                 reg
                             };
 
+                            // A GREG with no operand -- the empty field is
+                            // 0 -- holds a global register at 0, per the
+                            // reference's own reading of an empty operand
+                            // field.
                             let mut greg_parts = directive_pair.clone().into_inner();
                             let _directive = greg_parts.next();
-                            let operand = greg_parts.next().unwrap();
-                            self.scan_uses_for_redefinition(&operand);
-                            let value = self.parse_number(operand)?;
+                            let value = match greg_parts.next() {
+                                Some(operand) => {
+                                    self.scan_uses_for_redefinition(&operand);
+                                    self.parse_number(operand)?
+                                }
+                                None => 0,
+                            };
                             self.greg_inits.push((allocated_reg, value));
 
                             if let Some((raw, line)) = pending_label.take() {
@@ -2376,7 +2567,11 @@ impl MMixAssembler {
                             }
                         }
                         Rule::greg_directive => {
-                            // GREG was already processed in first pass.
+                            // GREG was already processed in first pass. The
+                            // two-operand memory form's base-address search
+                            // bounds itself to the GREGs seen by this point
+                            // in source order, so pass 2 replays the count.
+                            self.greg_inits_seen += 1;
                             if let Some(raw) = label_name.take() {
                                 let qualified = self.qualify_name(&raw);
                                 if !self.symbols.contains_key(&qualified) {
@@ -2918,11 +3113,25 @@ impl MMixAssembler {
         let mnem_pair = parts.next().unwrap();
         let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z_pair = ops.next().unwrap();
-        let z = self.lower_z_operand(z_pair, &mnem)?;
+        let (x, y, z) = match operands.as_rule() {
+            Rule::operand_list_three => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_register(ops.next().unwrap())?;
+                let y = self.parse_register(ops.next().unwrap())?;
+                let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+                (x, y, z)
+            }
+            Rule::operand_list_two => {
+                // The two-operand memory form: the second operand is a
+                // register (an offset of zero) or a base address resolved
+                // against a preceding GREG.
+                let mut ops = operands.into_inner();
+                let x = self.parse_register(ops.next().unwrap())?;
+                let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+                (x, y, ZForm::Imm(offset))
+            }
+            _ => unreachable!("memory auto instructions take two or three operands"),
+        };
 
         match (mnem.as_str(), z) {
             ("LDB", ZForm::Reg(z)) => Ok(MMixInstruction::LDB(x, y, z)),
@@ -3155,10 +3364,24 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap().as_str().to_uppercase();
-        // No operand wrapper for inst_neg_auto - operands are directly in the rule
-        let x = self.parse_register(parts.next().unwrap())?;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.lower_z_operand(parts.next().unwrap(), &mnem)?;
+        let operands = parts.next().unwrap();
+        let (x, y, z) = match operands.as_rule() {
+            Rule::operand_list_three => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_register(ops.next().unwrap())?;
+                let y = self.parse_number(ops.next().unwrap())? as u8;
+                let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+                (x, y, z)
+            }
+            Rule::operand_list_two => {
+                // Y omitted: NEG $X,z is NEG $X,0,z.
+                let mut ops = operands.into_inner();
+                let x = self.parse_register(ops.next().unwrap())?;
+                let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+                (x, 0, z)
+            }
+            _ => unreachable!("NEG/NEGU take two or three operands"),
+        };
 
         match (mnem.as_str(), z) {
             ("NEG", ZForm::Reg(z)) => Ok(MMixInstruction::NEG(x, y, z)),
@@ -3176,10 +3399,10 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
         let name = mnem.as_str().to_uppercase();
-        // No operand wrapper for inst_neg_rri - operands are directly in the rule
-        let x = self.parse_register(parts.next().unwrap())?;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z_operand = parts.next().unwrap();
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z_operand = ops.next().unwrap();
         let (line, col) = z_operand.line_col();
         let z = self.imm_byte(self.parse_number(z_operand)?, &name, line, col)?;
 
@@ -3231,9 +3454,10 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
-        let x = self.parse_register(parts.next().unwrap())?;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_register(parts.next().unwrap())?;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
@@ -3280,9 +3504,10 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let x = self.parse_register(parts.next().unwrap())?;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.lower_z_operand(parts.next().unwrap(), &mnem)?;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
 
         match (mnem.as_str(), z) {
             ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, y, z)),
@@ -3330,9 +3555,10 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap();
-        let x = self.parse_register(parts.next().unwrap())?;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
@@ -3895,15 +4121,52 @@ impl MMixAssembler {
         Ok(MMixInstruction::GETAB(x, y, z))
     }
 
+    /// `TRAP`/`TRIP`/`SWYM`'s shared operand shapes: three fields (each a
+    /// register or a pure byte), two fields (X alone that way, YZ a pure
+    /// 16-bit value split into Y and Z), one field (a pure 24-bit value
+    /// split into X, Y and Z), or none (every field 0).
+    fn parse_trap_family_operands(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+    ) -> Result<(u8, u8, u8), String> {
+        let mut parts = pair.into_inner();
+        let _mnem = parts.next();
+        let Some(operands) = parts.next() else {
+            return Ok((0, 0, 0));
+        };
+        match operands.as_rule() {
+            Rule::operand_list_three => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
+                let y = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
+                let z = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
+                Ok((x, y, z))
+            }
+            Rule::operand_list_two => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
+                let yz = self.parse_number(ops.next().unwrap())? as u16;
+                Ok((x, (yz >> 8) as u8, (yz & 0xFF) as u8))
+            }
+            Rule::operand_list_one => {
+                let mut ops = operands.into_inner();
+                let xyz = self.parse_number(ops.next().unwrap())? as u32;
+                Ok((
+                    (xyz >> 16) as u8,
+                    ((xyz >> 8) & 0xFF) as u8,
+                    (xyz & 0xFF) as u8,
+                ))
+            }
+            _ => unreachable!("TRAP/TRIP/SWYM take zero, one, two or three operands"),
+        }
+    }
+
     fn parse_inst_trap(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let (x, y, z) = self.parse_trap_family_operands(pair, "TRAP")?;
         Ok(MMixInstruction::TRAP(x, y, z))
     }
 
@@ -3926,7 +4189,7 @@ impl MMixAssembler {
         Ok(f(x, y, z))
     }
 
-    // PUSHJ/PUSHJB: format (reg, imm) where imm is 16-bit offset
+    // PUSHJ/PUSHJB: format (reg-or-byte, imm) where imm is 16-bit offset
     fn parse_inst_pushj(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -3936,7 +4199,7 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
         let mut ops = operand.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
+        let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJ")?;
         let addr = self.parse_number(ops.next().unwrap())?;
         let resolved = self.relative_field("PUSHJ", addr, 16, (line, col), "")?;
         let y = (resolved.field >> 8) as u8;
@@ -3957,7 +4220,7 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let operand = parts.next().unwrap();
         let mut ops = operand.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
+        let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJB")?;
         let addr = self.parse_number(ops.next().unwrap())?;
         let resolved = self.relative_field("PUSHJB", addr, 16, (line, col), "")?;
         let y = (resolved.field >> 8) as u8;
@@ -3965,6 +4228,8 @@ impl MMixAssembler {
         Ok(MMixInstruction::PUSHJB(x, y, z))
     }
 
+    /// `GO`'s X stays a register; `PUSHGO`'s X is also a pure byte, the
+    /// same bytes as the register spelling.
     fn parse_inst_go_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -3972,10 +4237,25 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap().as_str().to_uppercase();
         let operands = parts.next().unwrap();
+        let is_three = operands.as_rule() == Rule::operand_list_three;
         let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+        let x_pair = ops.next().unwrap();
+        let x = if mnem == "PUSHGO" {
+            self.parse_reg_or_byte(x_pair, &mnem)?
+        } else {
+            self.parse_register(x_pair)?
+        };
+        let (y, z) = if is_three {
+            let y = self.parse_register(ops.next().unwrap())?;
+            let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+            (y, z)
+        } else {
+            // The two-operand memory form: the second operand is a register
+            // (an offset of zero) or a base address resolved against a
+            // preceding GREG.
+            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            (y, ZForm::Imm(offset))
+        };
 
         match (mnem.as_str(), z) {
             ("GO", ZForm::Reg(z)) => Ok(MMixInstruction::GO(x, y, z)),
@@ -3993,14 +4273,32 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::PUSHGOI)
     }
 
+    /// `POP p,yz`: X=p, YZ=yz. `POP xyz`: XYZ=xyz, so `POP 1` is
+    /// `POP(0,0,1)`. Bare `POP`: every field 0.
     fn parse_inst_pop(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        let yz = self.parse_number(parts.next().unwrap())? as u16;
-        let y = ((yz >> 8) & 0xFF) as u8;
-        let z = (yz & 0xFF) as u8;
-        Ok(MMixInstruction::POP(x, y, z))
+        let Some(operands) = parts.next() else {
+            return Ok(MMixInstruction::POP(0, 0, 0));
+        };
+        match operands.as_rule() {
+            Rule::operand_list_two => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_number(ops.next().unwrap())? as u8;
+                let yz = self.parse_number(ops.next().unwrap())? as u16;
+                Ok(MMixInstruction::POP(x, (yz >> 8) as u8, (yz & 0xFF) as u8))
+            }
+            Rule::operand_list_one => {
+                let mut ops = operands.into_inner();
+                let xyz = self.parse_number(ops.next().unwrap())? as u32;
+                Ok(MMixInstruction::POP(
+                    (xyz >> 16) as u8,
+                    ((xyz >> 8) & 0xFF) as u8,
+                    (xyz & 0xFF) as u8,
+                ))
+            }
+            _ => unreachable!("POP takes zero, one or two operands"),
+        }
     }
 
     fn parse_inst_go_rri(
@@ -4013,9 +4311,9 @@ impl MMixAssembler {
     fn parse_inst_get(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_register(parts.next().unwrap())?;
-        // comma is silent in grammar, not in parts
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
         Ok(MMixInstruction::GET(x, z))
     }
 
@@ -4025,9 +4323,9 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        // comma is silent in grammar, not in parts
-        match self.lower_z_operand(parts.next().unwrap(), "PUT")? {
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_number(ops.next().unwrap())? as u8;
+        match self.lower_z_operand(ops.next().unwrap(), "PUT")? {
             ZForm::Reg(z) => Ok(MMixInstruction::PUT(x, z)),
             ZForm::Imm(z) => Ok(MMixInstruction::PUTI(x, z)),
         }
@@ -4039,9 +4337,9 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        // comma is silent in grammar, not in parts
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
         Ok(MMixInstruction::PUTI(x, z))
     }
 
@@ -4051,24 +4349,35 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x_pair = parts.next().ok_or("Missing X register in SAVE")?;
-        let x = self.parse_register(x_pair)?;
-        let z_pair = parts.next().ok_or("Missing Z value in SAVE")?;
-        let z = self.parse_number(z_pair)? as u8;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
         Ok(MMixInstruction::SAVE(x, z))
     }
 
+    /// `UNSAVE X,Z`: `X` must be 0 (checked by the emulator, not here).
+    /// `UNSAVE $Z` is the one-operand spelling of `UNSAVE 0,$Z`.
     fn parse_inst_unsave(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x_pair = parts.next().ok_or("Missing X value in UNSAVE")?;
-        let x = self.parse_number(x_pair)? as u8;
-        let z_pair = parts.next().ok_or("Missing Z register in UNSAVE")?;
-        let z = self.parse_register(z_pair)?;
-        Ok(MMixInstruction::UNSAVE(x, z))
+        let operands = parts.next().unwrap();
+        match operands.as_rule() {
+            Rule::operand_list_two => {
+                let mut ops = operands.into_inner();
+                let x = self.parse_number(ops.next().unwrap())? as u8;
+                let z = self.parse_register(ops.next().unwrap())?;
+                Ok(MMixInstruction::UNSAVE(x, z))
+            }
+            Rule::operand_list_one => {
+                let mut ops = operands.into_inner();
+                let z = self.parse_register(ops.next().unwrap())?;
+                Ok(MMixInstruction::UNSAVE(0, z))
+            }
+            _ => unreachable!("UNSAVE takes one or two operands"),
+        }
     }
 
     fn parse_inst_ldunc_rri(
@@ -4127,16 +4436,27 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::CSWAPI)
     }
 
+    /// STCO's X is a pure byte or a register, the same bytes; only Z
+    /// auto-selects register or immediate.
     fn parse_inst_stco_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        // comma is silent in grammar, not in parts
-        let y = self.parse_register(parts.next().unwrap())?;
-        match self.lower_z_operand(parts.next().unwrap(), "STCO")? {
+        let operands = parts.next().unwrap();
+        let is_three = operands.as_rule() == Rule::operand_list_three;
+        let mut ops = operands.into_inner();
+        let x = self.parse_reg_or_byte(ops.next().unwrap(), "STCO")?;
+        let (y, z) = if is_three {
+            let y = self.parse_register(ops.next().unwrap())?;
+            let z = self.lower_z_operand(ops.next().unwrap(), "STCO")?;
+            (y, z)
+        } else {
+            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            (y, ZForm::Imm(offset))
+        };
+        match z {
             ZForm::Reg(z) => Ok(MMixInstruction::STCO(x, y, z)),
             ZForm::Imm(z) => Ok(MMixInstruction::STCOI(x, y, z)),
         }
@@ -4148,13 +4468,15 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        // comma is silent in grammar, not in parts
-        let y = self.parse_register(parts.next().unwrap())?;
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let mut ops = parts.next().unwrap().into_inner();
+        let x = self.parse_number(ops.next().unwrap())? as u8;
+        let y = self.parse_register(ops.next().unwrap())?;
+        let z = self.parse_number(ops.next().unwrap())? as u8;
         Ok(MMixInstruction::STCOI(x, y, z))
     }
 
+    /// `PRELD`/`PREGO`/`PREST`/`SYNCD`/`SYNCID`'s X is a pure byte or a
+    /// register, the same bytes; only Z auto-selects register or immediate.
     fn parse_inst_cache_auto(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -4162,10 +4484,17 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let mnem = parts.next().unwrap().as_str().to_uppercase();
         let operands = parts.next().unwrap();
+        let is_three = operands.as_rule() == Rule::operand_list_three;
         let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+        let x = self.parse_reg_or_byte(ops.next().unwrap(), &mnem)?;
+        let (y, z) = if is_three {
+            let y = self.parse_register(ops.next().unwrap())?;
+            let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+            (y, z)
+        } else {
+            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            (y, ZForm::Imm(offset))
+        };
 
         match (mnem.as_str(), z) {
             ("PRELD", ZForm::Reg(z)) => Ok(MMixInstruction::PRELD(x, y, z)),
@@ -4217,13 +4546,17 @@ impl MMixAssembler {
         self.parse_rri(pair, MMixInstruction::SYNCIDI)
     }
 
+    /// Bare `RESUME`: XYZ=0. The one-operand form is unchanged.
     fn parse_inst_resume(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let xyz = self.parse_number(parts.next().unwrap())? as u8;
+        let xyz = match parts.next() {
+            Some(op) => self.parse_number(op.into_inner().next().unwrap())? as u8,
+            None => 0,
+        };
         Ok(MMixInstruction::RESUME(xyz))
     }
 
@@ -4231,39 +4564,29 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let x = self.parse_number(parts.next().unwrap())? as u8;
-        let y = self.parse_number(parts.next().unwrap())? as u8;
-        let z = self.parse_number(parts.next().unwrap())? as u8;
+        let (x, y, z) = self.parse_trap_family_operands(pair, "TRIP")?;
         Ok(MMixInstruction::TRIP(x, y, z))
     }
 
-    /// The operand group is all or nothing; a bare `SWYM` carries 0,0,0.
     fn parse_inst_swym(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let _mnem = parts.next();
-        let (x, y, z) = match parts.next() {
-            Some(first) => (
-                self.parse_number(first)? as u8,
-                self.parse_number(parts.next().unwrap())? as u8,
-                self.parse_number(parts.next().unwrap())? as u8,
-            ),
-            None => (0, 0, 0),
-        };
+        let (x, y, z) = self.parse_trap_family_operands(pair, "SWYM")?;
         Ok(MMixInstruction::SWYM(x, y, z))
     }
 
+    /// Bare `SYNC`: XYZ=0. The one-operand form is unchanged.
     fn parse_inst_sync(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
-        let xyz = self.parse_number(parts.next().unwrap())? as u8;
+        let xyz = match parts.next() {
+            Some(op) => self.parse_number(op.into_inner().next().unwrap())? as u8,
+            None => 0,
+        };
         Ok(MMixInstruction::SYNC(xyz))
     }
 
@@ -4396,6 +4719,67 @@ impl MMixAssembler {
         self.imm_byte(v, mnem, line, col).map(ZForm::Imm)
     }
 
+    /// Evaluate `pair` and accept either a register or a pure value as an
+    /// 8-bit field: a register contributes its own number, range-checked
+    /// the same as any other register operand; a pure value contributes its
+    /// own magnitude, range-checked as an immediate. `TRAP`, `TRIP` and
+    /// `SWYM`'s X, Y and Z read this way, as does the X byte `PUSHJ`,
+    /// `PUSHGO`, the `PRELD` family and `STCO` take.
+    fn parse_reg_or_byte(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+    ) -> Result<u8, String> {
+        let (line, col) = pair.line_col();
+        match self.eval_expr(pair)? {
+            ExprValue::Register(r) => self.require_register_in_range(r, line, col),
+            ExprValue::Pure(v) => self.imm_byte(v, mnem, line, col),
+        }
+    }
+
+    /// The two-operand memory form's base-address search: among every
+    /// `GREG` seen so far (in source order) whose initial value is nonzero,
+    /// choose the largest value `b` with `b <= addr` and `addr - b < 256`,
+    /// the earliest allocated on a tie between registers holding the same
+    /// value. Returns the matched register and `addr - b`.
+    fn resolve_base_address(&self, addr: u64, line: usize, col: usize) -> Result<(u8, u8), String> {
+        let mut best: Option<(u8, u64)> = None;
+        for &(reg, value) in &self.greg_inits[..self.greg_inits_seen] {
+            if value == 0 || value > addr || addr - value >= 256 {
+                continue;
+            }
+            if best.is_none_or(|(_, best_value)| value > best_value) {
+                best = Some((reg, value));
+            }
+        }
+        match best {
+            Some((reg, value)) => Ok((reg, (addr - value) as u8)),
+            None => Err(format!(
+                "{}:{}:{}: no GREG before this instruction holds a base address 0 to 255 \
+                 bytes below {addr:#x}",
+                self.current_filename, line, col
+            )),
+        }
+    }
+
+    /// The two-operand memory form's second operand: a register operand is
+    /// an offset of zero, following its value, not its spelling; a pure
+    /// operand is a base address, resolved by [`Self::resolve_base_address`].
+    /// Returns the register to place in Y and the offset to place in Z.
+    fn resolve_memory_base_operand(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(u8, u8), String> {
+        let (line, col) = pair.line_col();
+        match self.eval_expr(pair)? {
+            ExprValue::Register(r) => {
+                let reg = self.require_register_in_range(r, line, col)?;
+                Ok((reg, 0))
+            }
+            ExprValue::Pure(addr) => self.resolve_base_address(addr, line, col),
+        }
+    }
+
     /// Evaluate `pair` (an `expr`, or one of the rules it nests) under the
     /// register/pure-value rules in `MMIX.md`'s Expressions section: `+ - *`
     /// wrap mod 2^64, `/` `//` `%` `<<` `>>` follow the reference's
@@ -4407,9 +4791,9 @@ impl MMixAssembler {
     /// every non-`+` unary operator.
     fn eval_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
         match pair.as_rule() {
-            // Both wrap exactly one `expr`; some call sites hand these
-            // container pairs straight to the evaluator unwrapped.
-            Rule::operand_imm | Rule::operand_reg => self.eval_expr(
+            // Wraps exactly one `expr`; some call sites hand this container
+            // pair straight to the evaluator unwrapped.
+            Rule::operand_list_one => self.eval_expr(
                 pair.into_inner()
                     .next()
                     .expect("operand wraps exactly one expr"),
@@ -5010,11 +5394,11 @@ impl MMixAssembler {
     }
 
     /// If `line`, after stripping a trailing `%` comment and trimming
-    /// whitespace, is an `INCLUDE` directive (case-insensitive), returns its
-    /// operand (unquoted if wrapped in matching double quotes). `;` is not
-    /// a comment character here: it lands inside the operand and fails as
-    /// an unreadable file naming the whole text, since `INCLUDE` occupies
-    /// its own line.
+    /// whitespace, is an `INCLUDE` directive matched in upper case only,
+    /// returns its operand (unquoted if wrapped in matching double quotes).
+    /// `;` is not a comment character here: it lands inside the operand and
+    /// fails as an unreadable file naming the whole text, since `INCLUDE`
+    /// occupies its own line.
     fn parse_include_operand(line: &str) -> Option<String> {
         let without_comment = match line.find('%') {
             Some(idx) => &line[..idx],
@@ -5023,7 +5407,7 @@ impl MMixAssembler {
         let trimmed = without_comment.trim();
         let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
         let keyword = parts.next()?;
-        if !keyword.eq_ignore_ascii_case("include") {
+        if keyword != "INCLUDE" {
             return None;
         }
         let operand = parts.next().unwrap_or("").trim();
@@ -5195,16 +5579,16 @@ mod tests {
 
     #[test]
     fn test_swym_rejects_a_partial_operand_list() {
-        // SWYM takes zero or three operands, never two: the three-operand
-        // group requires all three or none, so "1,2" never matches it and
-        // SWYM falls back to its zero-operand form. A leading digit in
-        // what is left ("1,2") reads as a dropped operand, not commentary,
-        // so this stays a syntax error rather than silently becoming a
-        // bare SWYM.
-        let mut asm = MMixAssembler::new("SWYM 1,2", "<test>");
+        // SWYM 1,2 is now the two-operand form, SWYM(1,0,2). A trailing
+        // comma with nothing after it stays a partial list: no operand
+        // count SWYM takes matches "1,2,", so it falls back to the
+        // one-operand form on "1", leaving ",2," -- a leading comma reads
+        // as a dropped operand, not commentary, so this stays a syntax
+        // error rather than silently becoming SWYM 1.
+        let mut asm = MMixAssembler::new("SWYM 1,2,", "<test>");
         assert!(
             asm.parse().is_err(),
-            "SWYM takes zero or three operands, never two"
+            "a trailing comma leaves a partial list"
         );
     }
 
@@ -6517,18 +6901,6 @@ ZSEVI $7,$8,128
         );
     }
 
-    fn assert_parse_error_contains(src: &str, needle: &str) {
-        let mut asm = MMixAssembler::new(src, "<test>");
-        let err = asm
-            .parse()
-            .err()
-            .unwrap_or_else(|| panic!("expected error for {src:?}, but parse succeeded"));
-        assert!(
-            err.contains(needle),
-            "error for {src:?} missing {needle:?}: got {err}"
-        );
-    }
-
     // ---- Family-wide auto-immediate coverage ------------------------
 
     #[test]
@@ -6988,10 +7360,10 @@ ZSEVI $7,$8,128
     }
 
     #[test]
-    fn test_stco_rejects_a_register_x_operand() {
-        // STCO stores an immediate byte; X is that byte, never a register.
-        let mut asm = MMixAssembler::new("STCO $1,$2,$3", "<test>");
-        assert!(asm.parse().is_err(), "STCO's X operand is not a register");
+    fn test_stco_accepts_a_register_x_operand() {
+        // The reference warns on a register X but assembles its number;
+        // refusing it here would narrow an accepted form.
+        assert_first_instruction("STCO $1,$2,$3", MMixInstruction::STCO(1, 2, 3));
     }
 
     #[test]
@@ -7439,22 +7811,22 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_immediate_boundary_overflow_decimal_256() {
-        assert_parse_error_contains("ADD $1,$2,256", "out of range 0..255");
-        assert_parse_error_contains("AND $1,$2,256", "out of range 0..255");
-        assert_parse_error_contains("SRU $1,$2,256", "out of range 0..255");
+        assert!(assemble_err("ADD $1,$2,256").contains("out of range 0..255"));
+        assert!(assemble_err("AND $1,$2,256").contains("out of range 0..255"));
+        assert!(assemble_err("SRU $1,$2,256").contains("out of range 0..255"));
     }
 
     #[test]
     fn test_immediate_boundary_overflow_hex_100() {
-        assert_parse_error_contains("ADD $1,$2,#100", "out of range 0..255");
+        assert!(assemble_err("ADD $1,$2,#100").contains("out of range 0..255"));
     }
 
     #[test]
     fn test_immediate_boundary_overflow_large_value() {
         // A genuinely large value must not silently truncate; it must
         // be rejected by the auto-immediate range check.
-        assert_parse_error_contains("ADD $1,$2,#10000", "out of range 0..255");
-        assert_parse_error_contains("ADD $1,$2,1000000", "out of range 0..255");
+        assert!(assemble_err("ADD $1,$2,#10000").contains("out of range 0..255"));
+        assert!(assemble_err("ADD $1,$2,1000000").contains("out of range 0..255"));
     }
 
     #[test]
@@ -7463,8 +7835,8 @@ ZSEVI $7,$8,128
         // wrap to large u64s) must be rejected. The explicit *I path
         // keeps its silent-wrap behavior — see
         // `test_parse_negative_literal_8bit_wrap`.
-        assert_parse_error_contains("ADD $1,$2,-1", "out of range 0..255");
-        assert_parse_error_contains("AND $1,$2,-128", "out of range 0..255");
+        assert!(assemble_err("ADD $1,$2,-1").contains("out of range 0..255"));
+        assert!(assemble_err("AND $1,$2,-128").contains("out of range 0..255"));
     }
 
     #[test]
@@ -7493,8 +7865,8 @@ ZSEVI $7,$8,128
 
     #[test]
     fn test_symbol_z_constant_out_of_range() {
-        assert_parse_error_contains("K IS 256\nADD $1,$2,K", "out of range 0..255");
-        assert_parse_error_contains("K IS 1000\nAND $1,$2,K", "out of range 0..255");
+        assert!(assemble_err("K IS 256\nADD $1,$2,K").contains("out of range 0..255"));
+        assert!(assemble_err("K IS 1000\nAND $1,$2,K").contains("out of range 0..255"));
     }
 
     #[test]
@@ -7502,12 +7874,12 @@ ZSEVI $7,$8,128
     // 255 is an error rather than a silent truncation, whether it is written
     // as a literal or resolved from a symbol.
     fn test_neg_immediate_spelling_range_checks_its_z() {
-        assert_parse_error_contains("NEGI $1,0,#300", "out of range 0..255");
-        assert_parse_error_contains("NEGUI $1,0,#300", "out of range 0..255");
-        assert_parse_error_contains("BigC IS #300\nNEGI $1,0,BigC", "out of range 0..255");
-        assert_parse_error_contains("BigC IS #300\nNEGUI $1,0,BigC", "out of range 0..255");
-        assert_parse_error_contains("NEGI $1,0,-1", "out of range 0..255");
-        assert_parse_error_contains("NEGUI $1,0,-1", "out of range 0..255");
+        assert!(assemble_err("NEGI $1,0,#300").contains("out of range 0..255"));
+        assert!(assemble_err("NEGUI $1,0,#300").contains("out of range 0..255"));
+        assert!(assemble_err("BigC IS #300\nNEGI $1,0,BigC").contains("out of range 0..255"));
+        assert!(assemble_err("BigC IS #300\nNEGUI $1,0,BigC").contains("out of range 0..255"));
+        assert!(assemble_err("NEGI $1,0,-1").contains("out of range 0..255"));
+        assert!(assemble_err("NEGUI $1,0,-1").contains("out of range 0..255"));
         assert_first_instruction("NEGI $1,0,5", MMixInstruction::NEGI(1, 0, 5));
         assert_first_instruction("NEGUI $1,0,5", MMixInstruction::NEGUI(1, 0, 5));
         assert_first_instruction(
@@ -7536,13 +7908,13 @@ LOC #200
 Foo  OCTA 0
 Main ADD $1,$2,Foo
 ";
-        assert_parse_error_contains(src, "out of range 0..255");
+        assert!(assemble_err(src).contains("out of range 0..255"));
     }
 
     #[test]
     fn test_symbol_z_undefined_errors() {
-        assert_parse_error_contains("ADD $1,$2,Nope", "Undefined symbol");
-        assert_parse_error_contains("AND $1,$2,Nope", "Undefined symbol");
+        assert!(assemble_err("ADD $1,$2,Nope").contains("Undefined symbol"));
+        assert!(assemble_err("AND $1,$2,Nope").contains("Undefined symbol"));
     }
 
     // ---- Cross-family non-interference ------------------------------
@@ -7716,7 +8088,7 @@ ZSP  $3,$4,2
         assert_first_instruction("ANDI $1,$2,-1", MMixInstruction::ANDI(1, 2, 0xFF));
         assert_first_instruction("SLUI $1,$2,-1", MMixInstruction::SLUI(1, 2, 0xFF));
         // Auto path rejects:
-        assert_parse_error_contains("ADD $1,$2,-1", "out of range 0..255");
+        assert!(assemble_err("ADD $1,$2,-1").contains("out of range 0..255"));
     }
 
     // ---- Source-level debug info (SourceLoc / source_loc / addr_for_line /
@@ -8100,6 +8472,8 @@ Main    SETI    $1,7
 
     #[test]
     fn resolve_includes_recognizes_comment_case() {
+        // INCLUDE matches in upper case only (LEX-1); a lower-case
+        // `include` is ordinary source text, never expanded.
         let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
 
         let lower_with_comment = MMixAssembler::resolve_includes(
@@ -8118,19 +8492,13 @@ Main    SETI    $1,7
         .unwrap();
 
         assert_eq!(lower_with_comment.len(), 1);
+        assert_eq!(lower_with_comment[0].1, "include lib.mms  % pull it in\n");
         assert_eq!(quoted.len(), 1);
-        assert_eq!(lower_with_comment[0].1, quoted[0].1);
+        assert_eq!(quoted[0].1, "OCTA 1\n");
         assert!(quoted[0].1.contains("OCTA 1"));
     }
 
     // ---- Expressions (C9.1) -------------------------------------------
-
-    fn assemble_one(source: &str) -> MMixInstruction {
-        let mut asm = MMixAssembler::new(source, "<test>");
-        asm.parse()
-            .unwrap_or_else(|e| panic!("failed to parse {source:?}: {e}"));
-        asm.instructions[0].1.clone()
-    }
 
     fn assemble_err(source: &str) -> String {
         let mut asm = MMixAssembler::new(source, "<test>");
@@ -8141,12 +8509,12 @@ Main    SETI    $1,7
     #[test]
     fn test_expr_left_associative_weak_chain() {
         // a-b-c is (a-b)-c, not a-(b-c).
-        assert_eq!(assemble_one("OCTA 10-3-2"), MMixInstruction::OCTA(5));
+        assert_first_instruction("OCTA 10-3-2", MMixInstruction::OCTA(5));
     }
 
     #[test]
     fn test_expr_strong_binds_tighter_than_weak() {
-        assert_eq!(assemble_one("OCTA 2+3*4"), MMixInstruction::OCTA(14));
+        assert_first_instruction("OCTA 2+3*4", MMixInstruction::OCTA(14));
     }
 
     #[test]
@@ -8166,27 +8534,24 @@ Main    SETI    $1,7
 
     #[test]
     fn test_expr_wraps_subtraction_below_zero() {
-        assert_eq!(assemble_one("OCTA 0-1"), MMixInstruction::OCTA(u64::MAX));
+        assert_first_instruction("OCTA 0-1", MMixInstruction::OCTA(u64::MAX));
     }
 
     #[test]
     fn test_expr_wraps_addition_above_max() {
-        assert_eq!(
-            assemble_one("OCTA #FFFFFFFFFFFFFFFF+1"),
-            MMixInstruction::OCTA(0)
-        );
+        assert_first_instruction("OCTA #FFFFFFFFFFFFFFFF+1", MMixInstruction::OCTA(0));
     }
 
     #[test]
     fn test_expr_floor_fraction_operator() {
         // 1//2 is floor(2^64 * 1/2) = 2^63.
-        assert_eq!(assemble_one("OCTA 1//2"), MMixInstruction::OCTA(1u64 << 63));
+        assert_first_instruction("OCTA 1//2", MMixInstruction::OCTA(1u64 << 63));
     }
 
     #[test]
     fn test_expr_shift_by_64_or_more_is_zero() {
-        assert_eq!(assemble_one("OCTA 1<<64"), MMixInstruction::OCTA(0));
-        assert_eq!(assemble_one("OCTA 1>>64"), MMixInstruction::OCTA(0));
+        assert_first_instruction("OCTA 1<<64", MMixInstruction::OCTA(0));
+        assert_first_instruction("OCTA 1>>64", MMixInstruction::OCTA(0));
     }
 
     #[test]
@@ -8218,109 +8583,120 @@ Main    SETI    $1,7
     fn test_expr_set_register_arithmetic_copies() {
         // SET $1,$2+1 copies register $3 (the register NAMED $2+1),
         // never an arithmetic add on $2's runtime value.
-        assert_eq!(assemble_one("SET $1,$2+1"), MMixInstruction::SETRR(1, 3));
+        assert_first_instruction("SET $1,$2+1", MMixInstruction::SETRR(1, 3));
     }
 
     #[test]
     fn test_expr_register_plus_register_is_error() {
-        assemble_err("x IS $1\ny IS $2\nADD $1,$2,x+y");
+        assert!(
+            assemble_err("x IS $1\ny IS $2\nADD $1,$2,x+y")
+                .contains("+ cannot apply to a register operand")
+        );
     }
 
     #[test]
     fn test_expr_pure_minus_register_is_error() {
-        assemble_err("x IS $1\nOCTA 3-x");
+        assert!(assemble_err("x IS $1\nOCTA 3-x").contains("- cannot apply to a register operand"));
     }
 
     #[test]
     fn test_expr_strong_operator_on_register_is_error() {
-        assemble_err("x IS $1\nOCTA x*2");
+        assert!(assemble_err("x IS $1\nOCTA x*2").contains("* cannot apply to a register operand"));
     }
 
     #[test]
     fn test_expr_unary_minus_on_register_is_error() {
-        assemble_err("x IS $1\nSET $2,-x");
+        assert!(assemble_err("x IS $1\nSET $2,-x").contains("unary - cannot apply to a register"));
     }
 
     #[test]
     fn test_expr_unary_tilde_on_register_is_error() {
-        assemble_err("x IS $1\nSET $2,~x");
+        assert!(assemble_err("x IS $1\nSET $2,~x").contains("unary ~ cannot apply to a register"));
     }
 
     #[test]
     fn test_expr_unary_dollar_on_register_is_error() {
-        assemble_err("x IS $1\nSET $2,$x");
+        assert!(assemble_err("x IS $1\nSET $2,$x").contains("unary $ cannot apply to a register"));
     }
 
     #[test]
     fn test_expr_register_in_pure_site_is_error() {
-        assemble_err("x IS $1\nLOC x");
+        assert!(
+            assemble_err("x IS $1\nLOC x")
+                .contains("cannot be used where a pure value is required")
+        );
     }
 
     #[test]
     fn test_expr_pure_value_in_register_site_is_error() {
-        assemble_err("ADD 3,$1,$2");
+        assert!(
+            assemble_err("ADD 3,$1,$2").contains("cannot be used where a register is required")
+        );
     }
 
     #[test]
     fn test_expr_final_register_above_255_is_error() {
-        assemble_err("SET $1,$260");
+        assert!(assemble_err("SET $1,$260").contains("out of range 0..255"));
     }
 
     #[test]
     fn test_expr_division_by_zero_is_error() {
-        assemble_err("OCTA 5/0");
+        assert!(assemble_err("OCTA 5/0").contains("division by zero"));
     }
 
     #[test]
     fn test_expr_percent_by_zero_is_error() {
         // `%` shares `/`'s zero-divisor check: it computes the remainder of
         // the same division, which is illegal at y=0.
-        assemble_err("OCTA 5%0");
+        assert!(assemble_err("OCTA 5%0").contains("division by zero"));
     }
 
     #[test]
     fn test_expr_illegal_fraction_is_error() {
-        assemble_err("OCTA 2//1");
+        assert!(assemble_err("OCTA 2//1").contains("illegal fraction"));
     }
 
     #[test]
     fn test_expr_unary_ampersand_is_unsupported() {
-        assemble_err("Foo IS 1\nOCTA &Foo");
+        assert!(
+            assemble_err("Foo IS 1\nOCTA &Foo")
+                .contains("unary & (a symbol's serial number) is unsupported")
+        );
     }
 
     #[test]
     fn test_expr_dangling_operator_is_syntax_error() {
-        assemble_err("SETL $1,5+");
+        assert!(
+            assemble_err("SETL $1,5+")
+                .contains("a remark must be separated from the statement by a blank")
+        );
     }
 
     #[test]
     fn test_percent_inside_bare_expression_is_remainder() {
-        assert_eq!(assemble_one("SET $1,5%3"), MMixInstruction::SETL(1, 2));
+        assert_first_instruction("SET $1,5%3", MMixInstruction::SETL(1, 2));
     }
 
     #[test]
     fn test_percent_after_space_opens_a_comment() {
-        assert_eq!(assemble_one("SET $1,5 % 3"), MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SET $1,5 % 3", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
     fn test_percent_before_space_still_opens_a_comment() {
-        assert_eq!(assemble_one("SET $1,5% 3"), MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SET $1,5% 3", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
     fn test_percent_inside_a_group_is_remainder() {
-        assert_eq!(assemble_one("SET $1,(5 % 3)"), MMixInstruction::SETL(1, 2));
+        assert_first_instruction("SET $1,(5 % 3)", MMixInstruction::SETL(1, 2));
     }
 
     #[test]
     fn test_percent_after_a_closed_group_opens_a_comment() {
         // `sum` is undefined; if this parsed as an operator the undefined
         // symbol would fail, so success proves the comment.
-        assert_eq!(
-            assemble_one("SET $1,(2 + 3) % sum"),
-            MMixInstruction::SETL(1, 5)
-        );
+        assert_first_instruction("SET $1,(2 + 3) % sum", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
@@ -8336,40 +8712,34 @@ Main    SETI    $1,7
 
     #[test]
     fn test_whitespace_after_a_weak_operator_is_a_syntax_error() {
-        assemble_err("SETL $1,2 + 3");
+        assert!(assemble_err("SETL $1,2 + 3").contains("a remark cannot begin with"));
     }
 
     #[test]
     fn test_whitespace_after_unary_minus_is_a_syntax_error() {
-        assemble_err("SET $1,- 5");
+        assert!(assemble_err("SET $1,- 5").contains("unknown operation"));
     }
 
     #[test]
     fn test_bare_expression_closed_up_assembles() {
-        assert_eq!(assemble_one("SETL $1,2+3"), MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SETL $1,2+3", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
     fn test_parenthesized_group_may_hold_whitespace() {
-        assert_eq!(assemble_one("SETL $1,(2 + 3)"), MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SETL $1,(2 + 3)", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
     fn test_nested_groups_evaluate_innermost_first() {
-        assert_eq!(
-            assemble_one("SETL $1,((2 + 3) * 4)"),
-            MMixInstruction::SETL(1, 20)
-        );
+        assert_first_instruction("SETL $1,((2 + 3) * 4)", MMixInstruction::SETL(1, 20));
     }
 
     #[test]
     fn test_group_and_bare_operators_left_associate() {
         // Strong binds tighter than weak, and both are left-associative:
         // 2+(3*4)+5 is (2+(3*4))+5 = 2+12+5 = 19.
-        assert_eq!(
-            assemble_one("SETL $1,2+(3 * 4)+5"),
-            MMixInstruction::SETL(1, 19)
-        );
+        assert_first_instruction("SETL $1,2+(3 * 4)+5", MMixInstruction::SETL(1, 19));
     }
 
     #[test]
@@ -8383,22 +8753,19 @@ Main    SETI    $1,7
 
     #[test]
     fn test_comma_inside_an_open_group_is_an_error() {
-        assemble_err("SETL $1,(1 , 2)");
+        assert!(assemble_err("SETL $1,(1 , 2)").contains("unknown operation"));
     }
 
     #[test]
     fn test_newline_inside_an_open_group_is_an_error() {
-        assemble_err("SETL $1,(1\n2)");
+        assert!(assemble_err("SETL $1,(1\n2)").contains("unterminated group"));
     }
 
     #[test]
     fn test_set_negative_literal_wrap_covers_decimal_and_hex() {
-        assert_eq!(assemble_one("SET $1,-1"), MMixInstruction::SETL(1, 0xFFFF));
-        assert_eq!(assemble_one("SET $1,-5"), MMixInstruction::SETL(1, 0xFFFB));
-        assert_eq!(
-            assemble_one("SET $1,-#10"),
-            MMixInstruction::SETL(1, 0xFFF0)
-        );
+        assert_first_instruction("SET $1,-1", MMixInstruction::SETL(1, 0xFFFF));
+        assert_first_instruction("SET $1,-5", MMixInstruction::SETL(1, 0xFFFB));
+        assert_first_instruction("SET $1,-#10", MMixInstruction::SETL(1, 0xFFF0));
     }
 
     #[test]
@@ -8429,17 +8796,17 @@ Main    SETI    $1,7
 
     #[test]
     fn test_loc_forward_reference_fails_like_today() {
-        assemble_err("LOC Later+4\nLater IS 100");
+        assert!(assemble_err("LOC Later+4\nLater IS 100").contains("Undefined symbol: Later"));
     }
 
     #[test]
     fn test_is_forward_reference_fails_like_today() {
-        assemble_err("Foo IS Later+1\nLater IS 100");
+        assert!(assemble_err("Foo IS Later+1\nLater IS 100").contains("Undefined symbol: Later"));
     }
 
     #[test]
     fn test_greg_forward_reference_fails_like_today() {
-        assemble_err("GREG Later+1\nLater IS 100");
+        assert!(assemble_err("GREG Later+1\nLater IS 100").contains("Undefined symbol: Later"));
     }
 
     #[test]
@@ -8548,13 +8915,13 @@ Main    SETI    $1,7
 
     #[test]
     fn test_expr_weak_bitwise_or_and_xor() {
-        assert_eq!(assemble_one("OCTA 0xF0|0x0F"), MMixInstruction::OCTA(0xFF));
-        assert_eq!(assemble_one("OCTA 0xFF^0x0F"), MMixInstruction::OCTA(0xF0));
+        assert_first_instruction("OCTA 0xF0|0x0F", MMixInstruction::OCTA(0xFF));
+        assert_first_instruction("OCTA 0xFF^0x0F", MMixInstruction::OCTA(0xF0));
     }
 
     #[test]
     fn test_expr_strong_bitwise_and() {
-        assert_eq!(assemble_one("OCTA 0xFF&0x0F"), MMixInstruction::OCTA(0x0F));
+        assert_first_instruction("OCTA 0xFF&0x0F", MMixInstruction::OCTA(0x0F));
     }
 
     // ---- Lexical conformance (C9.2) ------------------------------------
@@ -8656,7 +9023,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_semicolon_inside_a_char_literal_is_ordinary_text() {
-        assert_eq!(assemble_one("SET $1,';'"), MMixInstruction::SETL(1, 0x3B));
+        assert_first_instruction("SET $1,';'", MMixInstruction::SETL(1, 0x3B));
     }
 
     #[test]
@@ -8684,10 +9051,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_line_starting_with_a_digit_still_parses() {
-        assert_eq!(
-            assemble_one("16ADDU $1,$2,$3"),
-            MMixInstruction::ADDU16(1, 2, 3)
-        );
+        assert_first_instruction("16ADDU $1,$2,$3", MMixInstruction::ADDU16(1, 2, 3));
     }
 
     #[test]
@@ -8700,47 +9064,38 @@ Main    SETI    $1,7
 
     #[test]
     fn test_leading_zero_literal_is_decimal_not_octal() {
-        assert_eq!(assemble_one("SETL $1,0100"), MMixInstruction::SETL(1, 100));
+        assert_first_instruction("SETL $1,0100", MMixInstruction::SETL(1, 100));
     }
 
     #[test]
     fn test_negative_leading_zero_literal_wraps_as_decimal() {
-        assert_eq!(
-            assemble_one("SET $1,-010"),
-            MMixInstruction::SETL(1, 0xFFF6)
-        );
+        assert_first_instruction("SET $1,-010", MMixInstruction::SETL(1, 0xFFF6));
     }
 
     #[test]
     fn test_hex_literal_forms_unaffected_by_octal_removal() {
-        assert_eq!(assemble_one("SET $1,0x10"), MMixInstruction::SETL(1, 16));
-        assert_eq!(assemble_one("SET $1,#10"), MMixInstruction::SETL(1, 16));
+        assert_first_instruction("SET $1,0x10", MMixInstruction::SETL(1, 16));
+        assert_first_instruction("SET $1,#10", MMixInstruction::SETL(1, 16));
     }
 
     #[test]
     fn test_leading_zero_literal_with_a_single_trailing_digit() {
-        assert_eq!(assemble_one("SETL $1,08"), MMixInstruction::SETL(1, 8));
+        assert_first_instruction("SETL $1,08", MMixInstruction::SETL(1, 8));
     }
 
     #[test]
     fn test_remark_after_an_operand_is_ignored() {
-        assert_eq!(
-            assemble_one("ADD $1,$2,$3 sum of the parts"),
-            MMixInstruction::ADD(1, 2, 3)
+        assert_first_instruction(
+            "ADD $1,$2,$3 sum of the parts",
+            MMixInstruction::ADD(1, 2, 3),
         );
-        assert_eq!(
-            assemble_one("SET $1,5 the answer"),
-            MMixInstruction::SETL(1, 5)
-        );
-        assert_eq!(
-            assemble_one("SET $1,(2 + 3) ) stray"),
-            MMixInstruction::SETL(1, 5)
-        );
+        assert_first_instruction("SET $1,5 the answer", MMixInstruction::SETL(1, 5));
+        assert_first_instruction("SET $1,(2 + 3) ) stray", MMixInstruction::SETL(1, 5));
     }
 
     #[test]
     fn test_remark_after_an_empty_operand_list_is_ignored() {
-        assert_eq!(assemble_one("HALT exit here"), MMixInstruction::HALT);
+        assert_first_instruction("HALT exit here", MMixInstruction::HALT);
     }
 
     #[test]
@@ -8753,7 +9108,7 @@ Main    SETI    $1,7
             "SET $1,$2 $3",
             "SET $1,2 / 3",
         ] {
-            assert_parse_error_contains(source, "a remark cannot begin with");
+            assert!(assemble_err(source).contains("a remark cannot begin with"));
         }
     }
 
@@ -8766,9 +9121,9 @@ Main    SETI    $1,7
 
     #[test]
     fn test_division_inside_an_expression_or_group_is_untouched() {
-        assert_eq!(assemble_one("SET $1,3/4"), MMixInstruction::SETL(1, 0));
-        assert_eq!(assemble_one("SET $1,(3 / 4)"), MMixInstruction::SETL(1, 0));
-        assert_eq!(assemble_one("SET $1,8/4"), MMixInstruction::SETL(1, 2));
+        assert_first_instruction("SET $1,3/4", MMixInstruction::SETL(1, 0));
+        assert_first_instruction("SET $1,(3 / 4)", MMixInstruction::SETL(1, 0));
+        assert_first_instruction("SET $1,8/4", MMixInstruction::SETL(1, 2));
     }
 
     #[test]
@@ -8776,7 +9131,7 @@ Main    SETI    $1,7
         assert_first_instruction_matches("TRAP 0, Time, 2", |inst| {
             matches!(inst, MMixInstruction::TRAP(0, _, 2))
         });
-        assert_eq!(assemble_one("SETI $2, 10"), MMixInstruction::SET(2, 10));
+        assert_first_instruction("SETI $2, 10", MMixInstruction::SET(2, 10));
     }
 
     #[test]
@@ -8789,17 +9144,19 @@ Main    SETI    $1,7
         // `ADDx`, so the diagnostic prints the whole statement and leaves
         // the reader to place the fault, rather than guess a single word.
         let source = "a IS $1\nb IS $2\nADDx a,b,1";
-        assert_parse_error_contains(source, "unknown operation: ADDx a,b,1");
+        assert!(assemble_err(source).contains("unknown operation: ADDx a,b,1"));
     }
 
     #[test]
     fn test_known_directive_missing_its_operand_is_not_unknown_operation() {
-        // `IS`, `GREG` and `SET` are all real keywords; each is just
+        // `IS`, `LOC` and `SET` are all real keywords; each is just
         // missing what must follow it. The branch that rejects a truly
         // unrecognized opcode must not fire here -- these are malformed,
         // not unknown -- so pest's own "expected ..." diagnostic surfaces
-        // instead, the same shape base reports.
-        for source in ["Foo IS", "Foo GREG", "Foo SET"] {
+        // instead, the same shape base reports. `GREG`'s operand is now
+        // optional (an empty field holds 0), so `Foo GREG` assembles and
+        // no longer belongs in this list.
+        for source in ["Foo IS", "Foo LOC", "Foo SET"] {
             let err = assemble_err(source);
             assert!(
                 !err.contains("unknown operation"),
@@ -8816,7 +9173,7 @@ Main    SETI    $1,7
         // unrecognized `debug "hi"` -- is printed whole rather than
         // silently dropped.
         let source = "\tLOC\t#100\nMain\tdebug \"hi\" ; HALT\n";
-        assert_parse_error_contains(source, "unknown operation: Main\tdebug \"hi\"");
+        assert!(assemble_err(source).contains("unknown operation: Main\tdebug \"hi\""));
     }
 
     #[test]
@@ -9093,17 +9450,17 @@ Main    SETI    $1,7
     fn test_asterisk_indented_alone_is_rejected_as_a_dropped_operator() {
         // No statement precedes this line's candidate remark, so a failed
         // remark reports an unknown operation, not a remark diagnostic.
-        assert_parse_error_contains(
-            "SETL $1,1\n    * note text\nSETL $3,3",
-            "unknown operation: * note text",
+        assert!(
+            assemble_err("SETL $1,1\n    * note text\nSETL $3,3")
+                .contains("unknown operation: * note text",)
         );
     }
 
     #[test]
     fn test_slash_indented_alone_is_rejected_as_a_dropped_operator() {
-        assert_parse_error_contains(
-            "SETL $1,1\n    / note text\nSETL $3,3",
-            "unknown operation: / note text",
+        assert!(
+            assemble_err("SETL $1,1\n    / note text\nSETL $3,3")
+                .contains("unknown operation: / note text",)
         );
     }
 
@@ -9112,9 +9469,9 @@ Main    SETI    $1,7
         // No marker at all: the indented prose's first word reads as a
         // label, and the second word is text a label statement cannot
         // carry, so together they are an unknown operation.
-        assert_parse_error_contains(
-            "SETL $1,1\n    note text\nSETL $3,3",
-            "unknown operation: note text",
+        assert!(
+            assemble_err("SETL $1,1\n    note text\nSETL $3,3")
+                .contains("unknown operation: note text",)
         );
     }
 
@@ -9167,51 +9524,47 @@ Main    SETI    $1,7
 
     #[test]
     fn test_asterisk_trailing_is_rejected_as_a_dropped_operator() {
-        assert_parse_error_contains("SETL $1,1 * note", "a remark cannot begin with");
+        assert!(assemble_err("SETL $1,1 * note").contains("a remark cannot begin with"));
     }
 
     #[test]
     fn test_slash_trailing_is_rejected_as_a_dropped_operator() {
-        assert_parse_error_contains("SETL $1,1 / note", "a remark cannot begin with");
+        assert!(assemble_err("SETL $1,1 / note").contains("a remark cannot begin with"));
     }
 
     // -- The three ambiguities that disqualify a remark --------------------
 
     #[test]
     fn test_abutting_remark_must_be_separated_by_a_blank() {
-        assert_parse_error_contains("SETL $1,2abc", "separated from the statement by a blank");
+        assert!(assemble_err("SETL $1,2abc").contains("separated from the statement by a blank"));
     }
 
     #[test]
     fn test_operator_led_remark_errors_for_every_operator_char() {
         for c in [',', '+', '-', '*', '/', '~', '&', '|', '^', '<', '>', '$'] {
-            assert_parse_error_contains(&format!("SETL $1,2 {c} 3"), "a remark cannot begin with");
+            assert!(
+                assemble_err(&format!("SETL $1,2 {c} 3")).contains("a remark cannot begin with")
+            );
         }
     }
 
     #[test]
     fn test_digit_led_remark_errors_as_a_dropped_separator() {
-        assert_parse_error_contains("HALT 2 apples", "a remark cannot begin with");
+        assert!(assemble_err("HALT 2 apples").contains("a remark cannot begin with"));
     }
 
     #[test]
     fn test_remark_opening_with_a_letter_is_ignored() {
-        assert_eq!(
-            assemble_one("ADD $1,$2,$3 sum of the parts"),
-            MMixInstruction::ADD(1, 2, 3)
+        assert_first_instruction(
+            "ADD $1,$2,$3 sum of the parts",
+            MMixInstruction::ADD(1, 2, 3),
         );
     }
 
     #[test]
     fn test_remark_opening_with_underscore_or_colon_is_ignored_too() {
-        assert_eq!(
-            assemble_one("ADD $1,$2,$3 _underscore"),
-            MMixInstruction::ADD(1, 2, 3)
-        );
-        assert_eq!(
-            assemble_one("ADD $1,$2,$3 :colon"),
-            MMixInstruction::ADD(1, 2, 3)
-        );
+        assert_first_instruction("ADD $1,$2,$3 _underscore", MMixInstruction::ADD(1, 2, 3));
+        assert_first_instruction("ADD $1,$2,$3 :colon", MMixInstruction::ADD(1, 2, 3));
     }
 
     // -- The trailing `;`: four outcomes -----------------------------------
@@ -9226,36 +9579,39 @@ Main    SETI    $1,7
         assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 4));
 
         // Control: behind a real comment, `counter` is never defined.
-        assert_parse_error_contains(
-            "SET $1,0 % counter\nSET $2,counter",
-            "Undefined symbol: counter",
+        assert!(
+            assemble_err("SET $1,0 % counter\nSET $2,counter")
+                .contains("Undefined symbol: counter",)
         );
     }
 
     #[test]
     fn test_trailing_semicolon_lone_word_defines_an_is_constant() {
-        let mut asm = MMixAssembler::new("SET $1,0 ; offset is 8\nSET $2,offset", "<test>");
+        // IS matches in upper case only (LEX-1); lower-case `is` is not the
+        // directive.
+        let mut asm = MMixAssembler::new("SET $1,0 ; offset IS 8\nSET $2,offset", "<test>");
         asm.parse()
             .unwrap_or_else(|e| panic!("failed to parse: {e}"));
         assert_eq!(asm.instructions[1].1, MMixInstruction::SETL(2, 8));
 
         // Control: behind a real comment, `offset` is never defined.
-        assert_parse_error_contains(
-            "SET $1,0 % offset is 8\nSET $2,offset",
-            "Undefined symbol: offset",
+        assert!(
+            assemble_err("SET $1,0 % offset IS 8\nSET $2,offset")
+                .contains("Undefined symbol: offset",)
         );
     }
 
     #[test]
     fn test_trailing_semicolon_prose_that_reads_as_a_bad_expression_is_an_error() {
-        assert_parse_error_contains("SET $1,0 ; this is invalid", "Undefined symbol: invalid");
+        // IS matches in upper case only (LEX-1).
+        assert!(assemble_err("SET $1,0 ; this IS invalid").contains("Undefined symbol: invalid"));
     }
 
     #[test]
     fn test_trailing_semicolon_prose_that_reads_as_an_unknown_operation_is_an_error() {
-        assert_parse_error_contains(
-            "SET $1,0 ; set the counter",
-            "unknown operation: set the counter",
+        assert!(
+            assemble_err("SET $1,0 ; set the counter")
+                .contains("unknown operation: set the counter",)
         );
     }
 
@@ -9263,26 +9619,23 @@ Main    SETI    $1,7
 
     #[test]
     fn test_hash_shield_ignores_arbitrary_trailing_prose() {
-        assert_eq!(
-            assemble_one("SET $1,0 # anything at all here"),
-            MMixInstruction::SETL(1, 0)
+        assert_first_instruction(
+            "SET $1,0 # anything at all here",
+            MMixInstruction::SETL(1, 0),
         );
     }
 
     #[test]
     fn test_bare_trailing_hash_assembles_like_no_remark_at_all() {
-        assert_eq!(assemble_one("SET $1,0 #"), assemble_one("SET $1,0"));
+        assert_first_instruction("SET $1,0 #", MMixInstruction::SETL(1, 0));
     }
 
     #[test]
     fn test_hash_shield_ignores_digit_led_prose_that_would_otherwise_error() {
-        assert_eq!(
-            assemble_one("SET $1,0 # 2 apples"),
-            MMixInstruction::SETL(1, 0)
-        );
+        assert_first_instruction("SET $1,0 # 2 apples", MMixInstruction::SETL(1, 0));
         // Without the shield, a digit-led run is the deliberate exception:
         // an error, not a warning.
-        assert_parse_error_contains("SET $1,0 2 apples", "a remark cannot begin with");
+        assert!(assemble_err("SET $1,0 2 apples").contains("a remark cannot begin with"));
     }
 
     // -- The three remaining pins -----------------------------------------
@@ -9306,14 +9659,14 @@ Main    SETI    $1,7
 
         // The same literal survives intact in the unknown-operation
         // diagnostic rather than truncating at the `%`.
-        assert_parse_error_contains(r#"ADDx "50%",b"#, r#"unknown operation: ADDx "50%",b"#);
+        assert!(assemble_err(r#"ADDx "50%",b"#).contains(r#"unknown operation: ADDx "50%",b"#));
     }
 
     #[test]
     fn test_at_is_a_valid_operand_but_bang_and_dot_have_no_grammar_token() {
-        assert_eq!(assemble_one("SET $1,@"), MMixInstruction::SETL(1, 0));
-        assert_parse_error_contains("SET $1,!", "unknown operation: SET $1,!");
-        assert_parse_error_contains("SET $1,.", "unknown operation: SET $1,.");
+        assert_first_instruction("SET $1,@", MMixInstruction::SETL(1, 0));
+        assert!(assemble_err("SET $1,!").contains("unknown operation: SET $1,!"));
+        assert!(assemble_err("SET $1,.").contains("unknown operation: SET $1,."));
     }
 
     // ---- Remark diagnostics: full message, every position row ----
@@ -9405,12 +9758,12 @@ Main    SETI    $1,7
     #[test]
     fn test_local_back_reference_before_any_definition_is_zero() {
         // `2B` ahead of any `2H` is `0`, never an error.
-        assert_eq!(assemble_one("OCTA 2B"), MMixInstruction::OCTA(0));
+        assert_first_instruction("OCTA 2B", MMixInstruction::OCTA(0));
     }
 
     #[test]
     fn test_local_forward_reference_with_no_later_definition_is_undefined() {
-        assert_parse_error_contains("OCTA 2F", "Undefined symbol: 2F");
+        assert!(assemble_err("OCTA 2F").contains("Undefined symbol: 2F"));
     }
 
     #[test]
@@ -9443,14 +9796,12 @@ Main    SETI    $1,7
     fn test_local_label_is_directive_counts_like_a_running_counter() {
         // The reference's own idiom: `9H IS 9B+1` twice leaves the counter
         // at 2 (0 -> 1 -> 2).
-        assert_eq!(
-            assemble_one(
-                "9H IS 0\n\
+        assert_first_instruction(
+            "9H IS 0\n\
                  9H IS 9B+1\n\
                  9H IS 9B+1\n\
-                 Main SET $1,9B\n"
-            ),
-            MMixInstruction::SETL(1, 2)
+                 Main SET $1,9B\n",
+            MMixInstruction::SETL(1, 2),
         );
     }
 
@@ -9476,8 +9827,8 @@ Main    SETI    $1,7
 
     #[test]
     fn test_lowercase_local_symbols_are_rejected() {
-        assert_parse_error_contains("2h SET $1,0", "syntax error");
-        assert_parse_error_contains("Main SET $1,2b", "syntax error");
+        assert!(assemble_err("2h SET $1,0").contains("syntax error"));
+        assert!(assemble_err("Main SET $1,2b").contains("syntax error"));
     }
 
     #[test]
@@ -9498,24 +9849,21 @@ Main    SETI    $1,7
 
     #[test]
     fn test_local_label_h_as_an_operand_is_an_error() {
-        assert_parse_error_contains("Main SET $1,2H", "syntax error");
+        assert!(assemble_err("Main SET $1,2H").contains("syntax error"));
     }
 
     #[test]
     fn test_local_ref_b_in_the_label_field_is_an_error() {
-        assert_parse_error_contains("2B JMP Main\nMain HALT\n", "unknown operation");
+        assert!(assemble_err("2B JMP Main\nMain HALT\n").contains("unknown operation"));
     }
 
     #[test]
     fn test_digit_literal_operand_forms_are_unaffected() {
-        assert_eq!(assemble_one("SET $1,2"), MMixInstruction::SETL(1, 2));
-        assert_eq!(assemble_one("SET $1,#2B"), MMixInstruction::SETL(1, 0x2B));
-        assert_eq!(assemble_one("SET $1,0x2B"), MMixInstruction::SETL(1, 0x2B));
-        assert_eq!(
-            assemble_one("16ADDU $1,$2,$3"),
-            MMixInstruction::ADDU16(1, 2, 3)
-        );
-        assert_parse_error_contains("SETL $1,2abc", "syntax error");
+        assert_first_instruction("SET $1,2", MMixInstruction::SETL(1, 2));
+        assert_first_instruction("SET $1,#2B", MMixInstruction::SETL(1, 0x2B));
+        assert_first_instruction("SET $1,0x2B", MMixInstruction::SETL(1, 0x2B));
+        assert_first_instruction("16ADDU $1,$2,$3", MMixInstruction::ADDU16(1, 2, 3));
+        assert!(assemble_err("SETL $1,2abc").contains("syntax error"));
     }
 
     #[test]
@@ -9544,10 +9892,10 @@ Main    SETI    $1,7
 
     #[test]
     fn test_local_forward_reference_as_is_loc_greg_operand_is_undefined() {
-        assert_parse_error_contains("Foo IS 2F\nMain HALT\n", "Undefined symbol: 2F");
-        assert_parse_error_contains("2H IS 2F+1\nMain HALT\n", "Undefined symbol: 2F");
-        assert_parse_error_contains("LOC 2F\nMain HALT\n", "Undefined symbol: 2F");
-        assert_parse_error_contains("G1 GREG 2F\nMain HALT\n", "Undefined symbol: 2F");
+        assert!(assemble_err("Foo IS 2F\nMain HALT\n").contains("Undefined symbol: 2F"));
+        assert!(assemble_err("2H IS 2F+1\nMain HALT\n").contains("Undefined symbol: 2F"));
+        assert!(assemble_err("LOC 2F\nMain HALT\n").contains("Undefined symbol: 2F"));
+        assert!(assemble_err("G1 GREG 2F\nMain HALT\n").contains("Undefined symbol: 2F"));
     }
 
     // ---- Qualified references -----------------------------------------
@@ -9602,7 +9950,7 @@ Main    SETI    $1,7
     fn test_label_with_trailing_colon_and_no_blank_is_now_an_error() {
         // The accepted break: interior colons make `Main:SET` one symbol,
         // so `Main:SET $1,0` no longer defines `Main`.
-        assert_parse_error_contains("Main:SET $1,0", "syntax error");
+        assert!(assemble_err("Main:SET $1,0").contains("syntax error"));
     }
 
     #[test]
@@ -9641,9 +9989,9 @@ Main    SETI    $1,7
 
     #[test]
     fn test_local_directive_bare_value_draws_the_register_required_diagnostic() {
-        assert_parse_error_contains(
-            "LOCAL 10\nMain HALT\n",
-            "pure value 10 cannot be used where a register is required",
+        assert!(
+            assemble_err("LOCAL 10\nMain HALT\n")
+                .contains("pure value 10 cannot be used where a register is required",)
         );
     }
 
@@ -9665,7 +10013,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_local_directive_with_a_label_is_an_error() {
-        assert_parse_error_contains("Foo LOCAL $10\nMain HALT\n", "takes no label");
+        assert!(assemble_err("Foo LOCAL $10\nMain HALT\n").contains("takes no label"));
     }
 
     // ---- BSPEC / ESPEC -------------------------------------------------
@@ -9716,43 +10064,41 @@ Main    SETI    $1,7
 
     #[test]
     fn test_bspec_rejects_an_instruction() {
-        assert_parse_error_contains(
-            "BSPEC 1\nSET $1,0\nESPEC\nMain HALT\n",
-            "not allowed inside BSPEC/ESPEC",
+        assert!(
+            assemble_err("BSPEC 1\nSET $1,0\nESPEC\nMain HALT\n")
+                .contains("not allowed inside BSPEC/ESPEC",)
         );
     }
 
     #[test]
     fn test_bspec_rejects_loc() {
-        assert_parse_error_contains(
-            "BSPEC 1\nLOC #200\nESPEC\nMain HALT\n",
-            "not allowed inside BSPEC/ESPEC",
+        assert!(
+            assemble_err("BSPEC 1\nLOC #200\nESPEC\nMain HALT\n")
+                .contains("not allowed inside BSPEC/ESPEC",)
         );
     }
 
     #[test]
     fn test_bspec_with_no_espec_is_an_error() {
-        assert_parse_error_contains("BSPEC 1\nFoo IS 5\n", "BSPEC");
+        assert!(assemble_err("BSPEC 1\nFoo IS 5\n").contains("BSPEC"));
     }
 
     #[test]
     fn test_espec_with_no_bspec_is_an_error() {
-        assert_parse_error_contains("ESPEC\nMain HALT\n", "ESPEC");
+        assert!(assemble_err("ESPEC\nMain HALT\n").contains("ESPEC"));
     }
 
     #[test]
     fn test_bspec_does_not_nest() {
-        assert_parse_error_contains(
-            "BSPEC 1\nBSPEC 2\nESPEC\nESPEC\nMain HALT\n",
-            "does not nest",
+        assert!(
+            assemble_err("BSPEC 1\nBSPEC 2\nESPEC\nESPEC\nMain HALT\n").contains("does not nest",)
         );
     }
 
     #[test]
     fn test_bspec_operand_wider_than_two_bytes_is_an_error() {
-        assert_parse_error_contains(
-            "BSPEC #10000\nESPEC\nMain HALT\n",
-            "does not fit in two bytes",
+        assert!(
+            assemble_err("BSPEC #10000\nESPEC\nMain HALT\n").contains("does not fit in two bytes",)
         );
     }
 
@@ -9780,24 +10126,16 @@ Main    SETI    $1,7
             ("X_Handler", 0x80),
         ];
         for (name, value) in cases {
-            assert_eq!(
-                assemble_one(&format!("OCTA {name}")),
-                MMixInstruction::OCTA(*value),
-                "for {name}"
-            );
+            assert_first_instruction(&format!("OCTA {name}"), MMixInstruction::OCTA(*value));
             // The root-colon spelling reaches the same value.
-            assert_eq!(
-                assemble_one(&format!("OCTA :{name}")),
-                MMixInstruction::OCTA(*value),
-                "for :{name}"
-            );
+            assert_first_instruction(&format!("OCTA :{name}"), MMixInstruction::OCTA(*value));
         }
     }
 
     #[test]
     fn test_text_segment_is_still_undefined() {
         // The reference's predefined-symbol table has no `Text_Segment`.
-        assert_parse_error_contains("OCTA Text_Segment", "Undefined symbol");
+        assert!(assemble_err("OCTA Text_Segment").contains("Undefined symbol"));
     }
 
     // ---- The root prefix ------------------------------------------------
@@ -9836,7 +10174,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_root_prefix_x_then_colon_x_is_the_redefinition_error() {
-        assert_parse_error_contains("x IS 1\n:x IS 2\nMain HALT\n", "redefined");
+        assert!(assemble_err("x IS 1\n:x IS 2\nMain HALT\n").contains("redefined"));
     }
 
     #[test]
@@ -9897,9 +10235,9 @@ Main    SETI    $1,7
 
     #[test]
     fn test_second_different_definition_after_a_label_is_the_ordinary_redefinition_error() {
-        assert_parse_error_contains(
-            "Fputs HALT\nFputs IS 3\nMain HALT\n",
-            "symbol 'Fputs' redefined",
+        assert!(
+            assemble_err("Fputs HALT\nFputs IS 3\nMain HALT\n")
+                .contains("symbol 'Fputs' redefined",)
         );
     }
 
@@ -9913,14 +10251,453 @@ Main    SETI    $1,7
 
     #[test]
     fn test_equal_redefinition_is_then_label_different_value_is_an_error() {
-        assert_parse_error_contains(
-            "Here IS #104\nLOC #108\nHere HALT\n",
-            "symbol 'Here' redefined",
+        assert!(
+            assemble_err("Here IS #104\nLOC #108\nHere HALT\n")
+                .contains("symbol 'Here' redefined",)
         );
     }
 
     #[test]
     fn test_equal_redefinition_register_vs_pure_value_is_an_error() {
-        assert_parse_error_contains("x IS $1\nx IS 1\nMain HALT\n", "symbol 'x' redefined");
+        assert!(assemble_err("x IS $1\nx IS 1\nMain HALT\n").contains("symbol 'x' redefined"));
+    }
+
+    // ---- C9.4: the two-operand memory form (base-address search) -------
+
+    #[test]
+    fn test_base_address_form_resolves_against_preceding_greg() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #1000\nLDO $1,Data",
+            MMixInstruction::LDOI(1, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_offset_255_is_the_widest_accepted() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #10FF\nLDO $1,Data",
+            MMixInstruction::LDOI(1, 254, 255),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_offset_256_is_an_error() {
+        assert!(
+            assemble_err("Base GREG #1000\nData IS #1100\nLDO $1,Data")
+                .contains("no GREG before this instruction holds a base address")
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_closer_greg_wins() {
+        // Far allocates $254, Near allocates $253; Near's base (#1080) is
+        // closer to Data (#1090) than Far's (#1000).
+        assert_first_instruction(
+            "Far GREG #1000\nNear GREG #1080\nData IS #1090\nLDO $1,Data",
+            MMixInstruction::LDOI(1, 253, 16),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_tie_takes_the_earliest_allocated() {
+        assert_first_instruction(
+            "A GREG #1000\nB GREG #1000\nData IS #1000\nLDO $1,Data",
+            MMixInstruction::LDOI(1, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_ignores_a_greg_after_the_instruction() {
+        assert!(
+            assemble_err("Data IS #1000\nLDO $1,Data\nLate GREG #1000")
+                .contains("no GREG before this instruction holds a base address")
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_greg_zero_never_matches() {
+        assert!(
+            assemble_err("Zero GREG 0\nData IS #10\nLDO $1,Data")
+                .contains("no GREG before this instruction holds a base address")
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_stb_takes_it() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #1000\nSTB $1,Data",
+            MMixInstruction::STBI(1, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_go_takes_it() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #1000\nGO $1,Data",
+            MMixInstruction::GOI(1, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_preld_takes_it() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #1000\nPRELD 3,Data",
+            MMixInstruction::PRELDI(3, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_stco_takes_it() {
+        assert_first_instruction(
+            "Base GREG #1000\nData IS #1000\nSTCO 5,Data",
+            MMixInstruction::STCOI(5, 254, 0),
+        );
+    }
+
+    #[test]
+    fn test_base_address_form_forward_reference_resolves_and_is_one_tetra() {
+        let mut asm = MMixAssembler::new("Base GREG #1000\nLDO $1,Data\nData IS #1000", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::LDOI(1, 254, 0));
+        assert_eq!(
+            MMixAssembler::instruction_size(&asm.instructions[0].1),
+            4,
+            "the base-address form is always one tetra"
+        );
+    }
+
+    #[test]
+    fn test_memory_two_operand_register_is_offset_zero() {
+        assert_first_instruction("LDO $1,$2", MMixInstruction::LDOI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_memory_two_operand_register_follows_value_not_spelling() {
+        assert_first_instruction("x IS $2\nLDO $1,x", MMixInstruction::LDOI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_lda_two_operand_form_never_takes_the_base_address_path() {
+        // A preceding GREG close to Data must not change LDA's own sizing:
+        // it still expands to SET when the address exceeds one byte.
+        assert_first_instruction(
+            "Base GREG #1000\nLDA $1,Data\nData IS #1000",
+            MMixInstruction::SET(1, 0x1000),
+        );
+    }
+
+    // ---- C9.4: operand counts and kinds ---------------------------------
+
+    #[test]
+    fn test_trap_two_operand_form_splits_yz() {
+        assert_first_instruction("TRAP 1,#0203", MMixInstruction::TRAP(1, 2, 3));
+    }
+
+    #[test]
+    fn test_trap_one_operand_form_splits_xyz() {
+        assert_first_instruction("TRAP #010203", MMixInstruction::TRAP(1, 2, 3));
+    }
+
+    #[test]
+    fn test_trip_two_and_one_operand_forms_split_the_same_way() {
+        assert_first_instruction("TRIP 1,#0203", MMixInstruction::TRIP(1, 2, 3));
+        assert_first_instruction("TRIP #010203", MMixInstruction::TRIP(1, 2, 3));
+    }
+
+    #[test]
+    fn test_swym_two_and_one_operand_forms_split_the_same_way() {
+        assert_first_instruction("SWYM 1,#0203", MMixInstruction::SWYM(1, 2, 3));
+        assert_first_instruction("SWYM #010203", MMixInstruction::SWYM(1, 2, 3));
+    }
+
+    #[test]
+    fn test_swym_one_operand_is_xyz() {
+        assert_first_instruction("SWYM 1", MMixInstruction::SWYM(0, 0, 1));
+    }
+
+    #[test]
+    fn test_swym_two_operands_splits_yz() {
+        assert_first_instruction("SWYM 1,2", MMixInstruction::SWYM(1, 0, 2));
+    }
+
+    #[test]
+    fn test_pop_one_operand_is_xyz() {
+        assert_first_instruction("POP 1", MMixInstruction::POP(0, 0, 1));
+    }
+
+    #[test]
+    fn test_unsave_one_operand_matches_the_two_operand_spelling() {
+        assert_first_instruction("UNSAVE $2", MMixInstruction::UNSAVE(0, 2));
+    }
+
+    #[test]
+    fn test_neg_two_operand_form_omits_y() {
+        assert_first_instruction("NEG $1,5", MMixInstruction::NEGI(1, 0, 5));
+        assert_first_instruction("NEGU $1,$0", MMixInstruction::NEGU(1, 0, 0));
+    }
+
+    #[test]
+    fn test_bare_greg_allocates_a_register_holding_zero() {
+        let mut asm = MMixAssembler::new("g GREG\nMain HALT", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.greg_inits.last(), Some(&(254, 0)));
+        assert_eq!(asm.symbols.get("g"), Some(&SymbolType::Register(254)));
+    }
+
+    #[test]
+    fn test_swym_three_registers_assembles() {
+        assert_first_instruction("SWYM $5,$6,$7", MMixInstruction::SWYM(5, 6, 7));
+    }
+
+    #[test]
+    fn test_trap_three_registers_assembles() {
+        assert_first_instruction("TRAP $1,$2,$3", MMixInstruction::TRAP(1, 2, 3));
+    }
+
+    #[test]
+    fn test_preld_and_stco_accept_a_pure_x() {
+        assert_first_instruction("PRELD 7,$2,0", MMixInstruction::PRELDI(7, 2, 0));
+        assert_first_instruction("STCO $1,$2,0", MMixInstruction::STCOI(1, 2, 0));
+    }
+
+    #[test]
+    fn test_pushj_pure_x_and_register_x_assemble_the_same_bytes() {
+        assert_first_instruction("PUSHJ 0,Sub\nSub HALT", MMixInstruction::PUSHJ(0, 0, 1));
+        let by_number = {
+            let mut asm = MMixAssembler::new("PUSHJ 2,Sub\nSub HALT", "<test>");
+            asm.parse().unwrap();
+            asm.instructions[0].1.clone()
+        };
+        let by_register = {
+            let mut asm = MMixAssembler::new("PUSHJ $2,Sub\nSub HALT", "<test>");
+            asm.parse().unwrap();
+            asm.instructions[0].1.clone()
+        };
+        assert_eq!(by_number, by_register);
+    }
+
+    #[test]
+    fn test_pushgo_pure_x_matches_register_x() {
+        // Z=0 is a pure value, which auto-selects the immediate opcode
+        // regardless of X's spelling.
+        assert_first_instruction("PUSHGO 2,$3,0", MMixInstruction::PUSHGOI(2, 3, 0));
+        assert_first_instruction("PUSHGO $2,$3,0", MMixInstruction::PUSHGOI(2, 3, 0));
+    }
+
+    #[test]
+    fn test_go_pure_x_is_still_an_error() {
+        assert!(MMixAssembler::new("GO 2,$3,0", "<test>").parse().is_err());
+    }
+
+    // ---- C9.4: no bare mnemonic is a silent label -----------------------
+
+    #[test]
+    fn test_bare_pop_between_instructions_is_the_zero_form() {
+        let mut asm = MMixAssembler::new("SET $1,0\n\tPOP\nSET $2,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::POP(0, 0, 0));
+        assert!(!asm.labels.contains_key("POP"));
+    }
+
+    #[test]
+    fn test_bare_resume_between_instructions_is_the_zero_form() {
+        let mut asm = MMixAssembler::new("SET $1,0\n\tRESUME\nSET $2,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::RESUME(0));
+        assert!(!asm.labels.contains_key("RESUME"));
+    }
+
+    #[test]
+    fn test_bare_sync_between_instructions_is_the_zero_form() {
+        let mut asm = MMixAssembler::new("SET $1,0\n\tSYNC\nSET $2,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::SYNC(0));
+        assert!(!asm.labels.contains_key("SYNC"));
+    }
+
+    #[test]
+    fn test_bare_trap_between_instructions_is_the_zero_form() {
+        let mut asm = MMixAssembler::new("SET $1,0\n\tTRAP\nSET $2,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::TRAP(0, 0, 0));
+        assert!(!asm.labels.contains_key("TRAP"));
+    }
+
+    #[test]
+    fn test_bare_trip_between_instructions_is_the_zero_form() {
+        let mut asm = MMixAssembler::new("SET $1,0\n\tTRIP\nSET $2,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::TRIP(0, 0, 0));
+        assert!(!asm.labels.contains_key("TRIP"));
+    }
+
+    #[test]
+    fn test_bare_save_between_instructions_is_the_owner_ruled_error() {
+        assert_eq!(
+            assemble_err("SET $1,0\n\tSAVE\nSET $2,0"),
+            "<test>:2:2: syntax error: unknown operation: SAVE"
+        );
+    }
+
+    #[test]
+    fn test_bare_unsave_between_instructions_is_the_owner_ruled_error() {
+        assert_eq!(
+            assemble_err("SET $1,0\n\tUNSAVE\nSET $2,0"),
+            "<test>:2:2: pure value 0 cannot be used where a register is required"
+        );
+    }
+
+    #[test]
+    fn test_save_after_semicolon_is_the_owner_ruled_error_not_a_label() {
+        assert!(assemble_err("SET $2,2 ; SAVE").contains("unknown operation: SAVE"));
+    }
+
+    #[test]
+    fn test_column_one_lone_pop_is_a_pop_not_a_label() {
+        let mut asm = MMixAssembler::new("POP\nSET $1,0", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::POP(0, 0, 0));
+        assert!(!asm.labels.contains_key("POP"));
+    }
+
+    // ---- C9.4: upper-case opcodes and the indented line -----------------
+
+    #[test]
+    fn test_lowercase_loc_prefix_defines_a_register_label() {
+        assert_first_instruction("loc GREG 0\nSET loc,5", MMixInstruction::SETL(254, 5));
+    }
+
+    #[test]
+    fn test_mixed_case_sync_defines_a_label_not_the_instruction() {
+        let mut asm = MMixAssembler::new("Sync BNZ $1,Main\nMain HALT", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.labels.contains_key("Sync"));
+    }
+
+    #[test]
+    fn test_indented_lowercase_mnemonic_is_unknown_operation() {
+        assert!(assemble_err("SET $1,0\n\tset $1,2").contains("unknown operation: set $1,2"));
+    }
+
+    #[test]
+    fn test_indented_label_with_instruction_is_unknown_operation() {
+        assert!(
+            assemble_err("SET $1,0\n\tFoo SET $2,9").contains("unknown operation: Foo SET $2,9")
+        );
+    }
+
+    #[test]
+    fn test_indented_label_with_is_directive_is_unknown_operation() {
+        assert!(assemble_err("SET $1,0\n\tFoo IS 5").contains("unknown operation: Foo IS 5"));
+    }
+
+    #[test]
+    fn test_indented_lone_word_is_unknown_operation() {
+        assert_eq!(
+            assemble_err("SET $1,0\n\tFoo\nSET $2,0"),
+            "<test>:2:2: syntax error: unknown operation: Foo"
+        );
+    }
+
+    #[test]
+    fn test_semicolon_lone_word_still_defines_a_label() {
+        let mut asm = MMixAssembler::new("SET $2,2 ; loop\nSET $3,loop", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.labels.contains_key("loop"));
+    }
+
+    #[test]
+    fn test_column_one_lone_word_is_still_a_label() {
+        let mut asm = MMixAssembler::new("Loop\nSET $1,Loop", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert!(asm.labels.contains_key("Loop"));
+    }
+
+    // ---- C9.4: longest form wins, partial lists still error ------------
+
+    #[test]
+    fn test_trap_three_operand_form_is_not_swallowed_by_shorter_forms() {
+        assert_first_instruction("TRAP 0,1,2", MMixInstruction::TRAP(0, 1, 2));
+    }
+
+    #[test]
+    fn test_pop_two_operand_form_unchanged_from_base() {
+        assert_first_instruction("POP 1,2", MMixInstruction::POP(1, 0, 2));
+    }
+
+    #[test]
+    fn test_trap_partial_operand_list_is_an_error() {
+        assert!(MMixAssembler::new("TRAP 0,", "<test>").parse().is_err());
+    }
+
+    #[test]
+    fn test_pop_partial_operand_list_is_an_error() {
+        assert!(MMixAssembler::new("POP 1,", "<test>").parse().is_err());
+    }
+
+    // ---- C9.4: the remark boundary moves with the new operand counts ---
+
+    #[test]
+    fn test_swym_one_operand_then_digit_is_a_dropped_operand_error() {
+        assert!(assemble_err("SWYM 1 2").contains("a remark cannot begin with `2`"));
+    }
+
+    #[test]
+    fn test_trap_two_operand_then_digit_is_a_dropped_operand_error() {
+        assert!(assemble_err("TRAP 0,1 2").contains("a remark cannot begin with `2`"));
+    }
+
+    #[test]
+    fn test_trap_blanks_around_comma_still_parse() {
+        assert_first_instruction("TRAP 0,1 ,2", MMixInstruction::TRAP(0, 1, 2));
+    }
+
+    #[test]
+    fn test_swym_one_operand_then_note_is_ignored() {
+        assert_first_instruction("SWYM 1 note", MMixInstruction::SWYM(0, 0, 1));
+    }
+
+    #[test]
+    fn test_bare_swym_then_undefined_word_is_undefined_symbol() {
+        assert!(assemble_err("SWYM do nothing").contains("Undefined symbol: do"));
+    }
+
+    #[test]
+    fn test_bare_swym_then_a_defined_symbol_is_its_address() {
+        let mut asm = MMixAssembler::new("JMP Skip\nMain HALT\nSkip SWYM Main", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        assert_eq!(asm.instructions[2].1, MMixInstruction::SWYM(0, 0, 4));
+    }
+
+    // ---- C9.4: arity unchanged where the prompt's Out section says so --
+
+    #[test]
+    fn test_save_one_operand_is_still_an_error() {
+        assert!(MMixAssembler::new("SAVE $2", "<test>").parse().is_err());
+    }
+
+    #[test]
+    fn test_get_with_a_predefined_special_register_name_still_assembles() {
+        assert_first_instruction("GET $1,rA", MMixInstruction::GET(1, 21));
+    }
+
+    #[test]
+    fn test_lowercase_greg_is_not_the_directive() {
+        // If lower-case `greg` matched the directive, this would allocate a
+        // register holding 0 instead of erroring on the digit-led text
+        // after the label `greg`.
+        assert!(assemble_err("greg 0").contains("unknown operation: greg 0"));
     }
 }

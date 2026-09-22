@@ -57,7 +57,7 @@
   "Every keyword the grammar accepts is a mode keyword, and no other.
 INCLUDE is a preprocessor stage outside the grammar."
   (should
-   (equal (mmix-test--matches "\\^\"\\([.A-Z0-9]+\\)\""
+   (equal (mmix-test--matches "^\\(?:mnemonic\\|directive\\)_[a-z0-9]+ = @{ \"\\([.A-Z0-9]+\\)\""
                               (mmix-test--file-string "src/mmixal.pest") 1)
           (sort (seq-difference (append mmix-instructions mmix-directives)
                                 '("INCLUDE"))
@@ -86,16 +86,16 @@ INCLUDE is a preprocessor stage outside the grammar."
 
 (ert-deftest mmix-help-covers-both-operand-forms ()
   "A base mnemonic lists its register and immediate rows."
-  (let ((help (mmix-instruction-help "add")))
+  (let ((help (mmix-instruction-help "ADD")))
     (should (member '("ADD $X, $Y, $Z" . "Add signed (sets overflow)") help))
     (should (member '("ADD $X, $Y, Z" . "Add signed immediate") help))))
 
 (ert-deftest mmix-help-reads-spelled-mnemonics-and-aliases ()
-  "2ADDU, 16ADDUI and byte resolve to their rows."
+  "2ADDU, 16ADDUI and BYTE resolve to their rows."
   (should (string-prefix-p "2ADDU" (caar (mmix-instruction-help "2ADDU"))))
   (should (equal (mmix-instruction-help "16ADDUI")
                  '(("16ADDU $X, $Y, Z" . "$X = 16*$Y + Z unsigned"))))
-  (should (string-prefix-p "BYTE" (caar (mmix-instruction-help "byte")))))
+  (should (string-prefix-p "BYTE" (caar (mmix-instruction-help "BYTE")))))
 
 (ert-deftest mmix-help-ignores-non-keywords ()
   "Only a keyword has help; debug is case-sensitive."
@@ -131,7 +131,7 @@ INCLUDE is a preprocessor stage outside the grammar."
                (expand-file-name invocation-name invocation-directory)
                nil t nil "--batch" "-Q" "-L" dir "-l" "mmix-mode"
                "--eval" "(princ (car (car (mmix-instruction-help \"PUSHJ\"))))")))
-            (should (string-match-p "PUSHJ \\$X, addr" (buffer-string)))))
+            (should (string-match-p "PUSHJ X, addr" (buffer-string)))))
       (delete-directory dir t))))
 
 (ert-deftest mmix-eldoc-documents-the-line-instruction ()
@@ -145,7 +145,7 @@ INCLUDE is a preprocessor stage outside the grammar."
 ;;;; Statement fields and font lock
 
 (ert-deftest mmix-first-word-is-a-label-unless-it-is-an-operation ()
-  "Labels need not start in column 0, and a mnemonic may name a label."
+  "In column 1 a mnemonic may name a label; an indented line has none."
   (mmix-test--with-buffer
       (concat "Main\tSETL\t$0,1\n"
               "  Loop ADD $1,$1,1\n"
@@ -158,8 +158,8 @@ INCLUDE is a preprocessor stage outside the grammar."
               ":Glob\tSWYM\n"
               "\tFOO\t$1\n")
     (should (eq (mmix-test--face-at "Main") 'font-lock-function-name-face))
-    (should (eq (mmix-test--face-at "Loop") 'font-lock-function-name-face))
-    (should (eq (mmix-test--face-at "ADD" 1) 'font-lock-keyword-face))
+    (should-not (mmix-test--face-at "Loop"))
+    (should-not (eq (mmix-test--face-at "ADD" 1) 'font-lock-keyword-face))
     (should (eq (mmix-test--face-at "ADD" 2) 'font-lock-keyword-face))
     (should (eq (mmix-test--face-at "Add") 'font-lock-function-name-face))
     (should (eq (mmix-test--face-at "ADD" 3) 'font-lock-keyword-face))
@@ -173,18 +173,20 @@ INCLUDE is a preprocessor stage outside the grammar."
 
 (ert-deftest mmix-single-operand-statements-take-a-keyword-named-operand ()
   "A lone keyword-named word after a single-operand keyword is its operand.
-checksmix assembles `JMP ADD' as a jump to ADD and `Loc HALT' as LOC, but
-reads `Set HALT' as the label Set on a HALT."
+checksmix assembles `JMP ADD' as a jump to ADD; `Loc HALT' and `Set
+HALT' both read as a label (Loc, Set) on a HALT, since LOC now matches
+only its own upper-case spelling."
   (mmix-test--with-buffer
       (concat "\tJMP\tADD\n"
               "Loc\tHALT\n"
               "\tPREFIX\tSET\n"
               "Set\tHALT\n"
-              "\tJMP\tADD $1\n"
+              "JMP\tADD $1\n"
               "\tINCLUDE\tADD\n")
     (should (eq (mmix-test--face-at "JMP") 'font-lock-keyword-face))
     (should-not (mmix-test--face-at "ADD\n"))
-    (should (eq (mmix-test--face-at "Loc") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "Loc") 'font-lock-function-name-face))
+    (should (eq (mmix-test--face-at "HALT" 1) 'font-lock-keyword-face))
     (should (eq (mmix-test--face-at "PREFIX") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "Set\t") 'font-lock-function-name-face))
     (should (eq (mmix-test--face-at "HALT" 2) 'font-lock-keyword-face))
@@ -202,30 +204,30 @@ reads `Set HALT' as the label Set on a HALT."
     (should (eq (mmix-test--face-at "debug") 'font-lock-preprocessor-face))
     (should-not (mmix-test--face-at "debug" 2))))
 
-(ert-deftest mmix-keywords-are-case-insensitive-and-symbols-are-not ()
-  "halt is the instruction; Halt in an operand is the TRAP constant."
+(ert-deftest mmix-keywords-match-in-upper-case-only-and-symbols-are-case-sensitive ()
+  "halt is not the instruction; Halt in an operand is the TRAP constant."
   (mmix-test--with-buffer "\thalt\n\tTRAP\t0,Halt,0\n\tGET\t$1,rJ\n\tGET\t$1,rj\n"
-    (should (eq (mmix-test--face-at "halt") 'font-lock-keyword-face))
+    (should-not (eq (mmix-test--face-at "halt") 'font-lock-keyword-face))
     (should (eq (mmix-test--face-at "Halt") 'font-lock-constant-face))
     (should (eq (mmix-test--face-at "rJ") 'font-lock-builtin-face))
     (should-not (mmix-test--face-at "rj"))))
 
 (ert-deftest mmix-directives-and-definitions ()
-  "Directives, case-insensitively, INCLUDE and debug are directives.
+  "Directives, matched in upper case only; INCLUDE and debug are directives.
 A name bound by IS or GREG is a variable, not a label."
   (mmix-test--with-buffer
       (concat "Five\tIS\t5\n"
               "Sp\tGREG\t@\n"
-              "\tbyte\t1\n"
-              "\tocta\t2\n"
+              "\tBYTE\t1\n"
+              "\tOCTA\t2\n"
               "\tINCLUDE\tlib.mms\n"
               "Main\tdebug \"hi\"\n"
               "\t2ADDU\t$1,$2,$3\n")
     (should (eq (mmix-test--face-at "Five") 'font-lock-variable-name-face))
     (should (eq (mmix-test--face-at "IS") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "Sp") 'font-lock-variable-name-face))
-    (should (eq (mmix-test--face-at "byte") 'font-lock-preprocessor-face))
-    (should (eq (mmix-test--face-at "octa") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "BYTE") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "OCTA") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "INCLUDE") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "debug") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "Main") 'font-lock-function-name-face))
@@ -233,13 +235,13 @@ A name bound by IS or GREG is a variable, not a label."
     (should (eq (mmix-test--face-at "@") 'font-lock-number-face))))
 
 (ert-deftest mmix-local-and-special-mode-directives-fontify ()
-  "LOCAL, BSPEC and ESPEC are directives, case-insensitively."
+  "LOCAL, BSPEC and ESPEC are directives, matched in upper case only."
   (mmix-test--with-buffer
       (concat "\tLOCAL\t$10\n"
-              "\tbspec\t1\n"
+              "\tBSPEC\t1\n"
               "\tESPEC\n")
     (should (eq (mmix-test--face-at "LOCAL") 'font-lock-preprocessor-face))
-    (should (eq (mmix-test--face-at "bspec") 'font-lock-preprocessor-face))
+    (should (eq (mmix-test--face-at "BSPEC") 'font-lock-preprocessor-face))
     (should (eq (mmix-test--face-at "ESPEC") 'font-lock-preprocessor-face))))
 
 (ert-deftest mmix-local-labels-and-references-fontify ()
@@ -390,7 +392,9 @@ tracked; a colon label before GREG or LOC is accepted."
     (buffer-string)))
 
 (ert-deftest mmix-indent-aligns-fields ()
-  "Labels go to column 0, operations to 8, operands to 16."
+  "Labels go to column 0, operations to 8, operands to 16.
+An indented line has no label field, so its first word moves to the
+operation column, not column 0."
   (should (equal (mmix-test--indent
                   (concat "   Main SETL $0,1 % one\n"
                           "ADD $1,$1,1\n"
@@ -398,7 +402,7 @@ tracked; a colon label before GREG or LOC is accepted."
                           "Done\n"
                           "% header\n"
                           "      ; aside\n"))
-                 (concat "Main\tSETL\t$0,1 % one\n"
+                 (concat "\tMain\tSETL $0,1 % one\n"
                          "\tADD\t$1,$1,1\n"
                          "LongLabelName PUSHJ $0,Fibonacci\n"
                          "Done\n"

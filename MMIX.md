@@ -11,6 +11,18 @@ octabyte at the aligned base below it, not eight bytes straddling two
 octabytes. A misaligned address is rounded, never rejected: there is no trap
 or diagnostic. Byte access is unaffected — a byte is its own alignment.
 
+Every load, store, `GO` and cache instruction that auto-selects its register
+or immediate opcode also takes a two-operand form: `LDO $X,$Y` fills Z with
+`0`, a register `$Y` read as an offset of zero. A pure `$Y` is instead an
+address: the assembler resolves it against the largest `GREG`-allocated base
+register, among those declared earlier in the source with a nonzero initial
+value, whose value is no more than 255 below it, and emits the three-operand
+form with that base in Y and the remaining offset in Z. No such base is an
+error: `no GREG before this instruction holds a base address 0 to 255 bytes
+below {addr:#x}`. The form always assembles one tetra. `LDA` does not take
+this path; its two-operand form is the address-loading alias described
+below.
+
 ## Minimal assembly skeleton
 
 ```
@@ -43,7 +55,10 @@ comment, so no second statement begins.
 
 A line whose first character is not a letter, a digit, `:` or `_` is a
 comment in its entirety — `;`, `*`, `#`, `/` and `-` all open one this way.
-An indented line is not covered by this rule; its content parses normally.
+An indented line has no label field: its first word is always the OP field,
+whatever it spells. A statement after `;` keeps its label field regardless
+of indentation. Mnemonics and directives match in upper case only; a
+lower-case or mixed-case spelling is an ordinary symbol.
 
 Text past EXPR is a **remark** — Knuth's own word, from his listings'
 Remarks column, for the commentary his prose permits there. Two rules
@@ -75,7 +90,7 @@ the first blank.
 | Directive | Syntax | Effect |
 | --- | --- | --- |
 | `LOC` | `LOC expr` | Set the assembly location counter to *expr*; a label on the same line names the location *before* the move |
-| `GREG` | `[label] GREG expr` | Allocate a global register initialized to *expr*; optional label becomes a register alias |
+| `GREG` | `[label] GREG expr` / `[label] GREG` | Allocate a global register initialized to *expr*, or to `0` with the operand omitted; optional label becomes a register alias; a nonzero value is a base address for the two-operand memory form |
 | `IS` | `Name IS expr` | Define a numeric or register alias constant |
 | `PREFIX` | `PREFIX str` | Qualify subsequent unqualified names as `str<name>`; names beginning with `:` opt out |
 | `BYTE` | `BYTE expr,...` | Emit one byte per operand |
@@ -209,7 +224,7 @@ redefinition error, which is what makes `9H IS 9B+1` a running counter.
 
 ### INCLUDE
 
-`INCLUDE file` (case-insensitive) is a **checksmix extension**, not part of
+`INCLUDE file` is a **checksmix extension**, not part of
 MMIXAL. It is a preprocessor stage, not a grammar rule: the
 named file is inserted as its own translation unit(s), so errors inside it
 report *its own* filename and line numbers rather than the includer's. The path
@@ -507,8 +522,9 @@ packed octa's address; `rO` and `rS` both become the address of the byte
 after it, and `rL` becomes 0. `rJ` is saved as data among the specials, never
 overwritten — `SAVE` opens no call frame.
 
-`UNSAVE 0, $Z` restores a context whose topmost (packed) octa `$Z` addresses,
-validating it whole before changing anything: a packed `rG` outside
+`UNSAVE 0, $Z`, or its one-operand spelling `UNSAVE $Z`, restores a context
+whose topmost (packed) octa `$Z` addresses, validating it whole before
+changing anything: a packed `rG` outside
 `32..=255`, a packed `rA` above the widest legal value, or a saved local
 count greater than the packed `rG` all halt with a diagnostic and the
 machine unchanged. Otherwise every saved register restores, `rL` becomes the
@@ -566,6 +582,34 @@ Measured on MMIXware:
 | | `$5, $6` | 0, 0 |
 | | `rL` | 5 |
 
+## Operand counts
+
+MMIXAL's general rule: three operands fill X, Y and Z; two fill X and YZ;
+one fills XYZ; an empty operand field is the single operand `0`. Most
+mnemonics take a fixed count. These take the range the reference allows,
+each field a pure byte or a register unless noted:
+
+| Form | Fields |
+| --- | --- |
+| `TRAP x,y,z` / `TRIP` / `SWYM` | X, Y, Z |
+| `TRAP x,yz` / `TRIP` / `SWYM` | X=x, Y=yz>>8, Z=yz&255 |
+| `TRAP xyz` / `TRIP` / `SWYM` | X=xyz>>16, Y=(xyz>>8)&255, Z=xyz&255 |
+| bare `TRAP` / `TRIP` / `SWYM` | every field 0 |
+| `POP p,yz` | X=p, YZ=yz |
+| `POP xyz` | XYZ=xyz |
+| bare `POP` | every field 0 |
+| bare `RESUME` / `SYNC` | XYZ=0; the one-operand form is unchanged |
+| `UNSAVE $Z` | the one-operand spelling of `UNSAVE 0,$Z` |
+| bare `UNSAVE` / bare `SAVE` | error |
+| `NEG $X,z` / `NEGU $X,z` | `NEG $X,0,z`: Y omitted is 0 |
+| `label GREG` with no operand | a global register holding 0 |
+| `PUSHJ`, `PUSHJB`, `PUSHGO` X | a pure byte or a register, same bytes; `GO`'s X stays a register |
+| `PRELD`, `PREGO`, `PREST`, `SYNCD`, `SYNCID`, `STCO` X | a pure byte or a register, same bytes |
+
+The longest matching form wins, so `TRAP 0,1,2` fills every field rather
+than leaving `,2` behind. A partial list — `TRAP 0,`, `POP 1,` — is still an
+error.
+
 ## Instruction table
 
 | Mnemonic | Operands | Description |
@@ -588,57 +632,57 @@ Measured on MMIXware:
 | `ANDNMH` | `ANDNMH $X, YZ` | Clear bits in the medium-high wyde; the other 48 bits are preserved |
 | `ANDNML` | `ANDNML $X, YZ` | Clear bits in the medium-low wyde; the other 48 bits are preserved |
 | `ANDNL` | `ANDNL $X, YZ` | Clear bits in the low wyde; the other 48 bits are preserved |
-| `LDB` | `LDB $X, $Y, $Z` | Load byte signed |
+| `LDB` | `LDB $X, $Y, $Z` / `LDB $X, $Y` | Load byte signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDBI` | `LDB $X, $Y, Z` | Load byte signed (immediate) |
-| `LDBU` | `LDBU $X, $Y, $Z` | Load byte unsigned |
+| `LDBU` | `LDBU $X, $Y, $Z` / `LDBU $X, $Y` | Load byte unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDBUI` | `LDBU $X, $Y, Z` | Load byte unsigned (immediate) |
-| `LDW` | `LDW $X, $Y, $Z` | Load wyde signed |
+| `LDW` | `LDW $X, $Y, $Z` / `LDW $X, $Y` | Load wyde signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDWI` | `LDW $X, $Y, Z` | Load wyde signed (immediate) |
-| `LDWU` | `LDWU $X, $Y, $Z` | Load wyde unsigned |
+| `LDWU` | `LDWU $X, $Y, $Z` / `LDWU $X, $Y` | Load wyde unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDWUI` | `LDWU $X, $Y, Z` | Load wyde unsigned (immediate) |
-| `LDT` | `LDT $X, $Y, $Z` | Load tetra signed |
+| `LDT` | `LDT $X, $Y, $Z` / `LDT $X, $Y` | Load tetra signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDTI` | `LDT $X, $Y, Z` | Load tetra signed (immediate) |
-| `LDTU` | `LDTU $X, $Y, $Z` | Load tetra unsigned |
+| `LDTU` | `LDTU $X, $Y, $Z` / `LDTU $X, $Y` | Load tetra unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDTUI` | `LDTU $X, $Y, Z` | Load tetra unsigned (immediate) |
-| `LDO` | `LDO $X, $Y, $Z` | Load octa |
+| `LDO` | `LDO $X, $Y, $Z` / `LDO $X, $Y` | Load octa (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDOI` | `LDO $X, $Y, Z` | Load octa (immediate) |
-| `LDOU` | `LDOU $X, $Y, $Z` | Load octa unsigned |
+| `LDOU` | `LDOU $X, $Y, $Z` / `LDOU $X, $Y` | Load octa unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDOUI` | `LDOU $X, $Y, Z` | Load octa unsigned (immediate) |
-| `LDUNC` | `LDUNC $X, $Y, $Z` | Load octa uncached |
+| `LDUNC` | `LDUNC $X, $Y, $Z` / `LDUNC $X, $Y` | Load octa uncached (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDUNCI` | `LDUNC $X, $Y, Z` | Load octa uncached (immediate) |
-| `LDHT` | `LDHT $X, $Y, $Z` | Load high tetra |
+| `LDHT` | `LDHT $X, $Y, $Z` / `LDHT $X, $Y` | Load high tetra (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDHTI` | `LDHT $X, $Y, Z` | Load high tetra (immediate) |
-| `LDSF` | `LDSF $X, $Y, $Z` | Load short float (widen f32 → f64) |
+| `LDSF` | `LDSF $X, $Y, $Z` / `LDSF $X, $Y` | Load short float (widen f32 → f64) (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDSFI` | `LDSF $X, $Y, Z` | Load short float (immediate) |
-| `LDVTS` | `LDVTS $X, $Y, $Z` | Load virtual translation status |
+| `LDVTS` | `LDVTS $X, $Y, $Z` / `LDVTS $X, $Y` | Load virtual translation status (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `LDVTSI` | `LDVTS $X, $Y, Z` | Load virtual translation status (immediate) |
-| `CSWAP` | `CSWAP $X, $Y, $Z` | Compare and swap: if `M8[$Y+$Z] = rP`, store `$X` there and set `$X ← 1`; otherwise `rP ← M8[$Y+$Z]` and `$X ← 0` |
+| `CSWAP` | `CSWAP $X, $Y, $Z` / `CSWAP $X, $Y` | Compare and swap: if `M8[$Y+$Z] = rP`, store `$X` there and set `$X ← 1`; otherwise `rP ← M8[$Y+$Z]` and `$X ← 0` (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `CSWAPI` | `CSWAP $X, $Y, Z` | Compare and swap (immediate): if `M8[$Y+Z] = rP`, store `$X` there and set `$X ← 1`; otherwise `rP ← M8[$Y+Z]` and `$X ← 0` |
 | `LDA` | `LDA $X, $Y, $Z` / `LDA $X, addr` | Load address of `$Y + $Z` — the `ADDU $X, $Y, $Z` alias; two-operand form described below the table |
 | `LDAI` | `LDA $X, $Y, Z` / `LDAI $X, addr` | Load address of `$Y + Z` — the `ADDU $X, $Y, Z` alias; two-operand form described below the table |
-| `STB` | `STB $X, $Y, $Z` | Store byte signed |
+| `STB` | `STB $X, $Y, $Z` / `STB $X, $Y` | Store byte signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STBI` | `STB $X, $Y, Z` | Store byte signed (immediate) |
-| `STBU` | `STBU $X, $Y, $Z` | Store byte unsigned |
+| `STBU` | `STBU $X, $Y, $Z` / `STBU $X, $Y` | Store byte unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STBUI` | `STBU $X, $Y, Z` | Store byte unsigned (immediate) |
-| `STW` | `STW $X, $Y, $Z` | Store wyde signed |
+| `STW` | `STW $X, $Y, $Z` / `STW $X, $Y` | Store wyde signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STWI` | `STW $X, $Y, Z` | Store wyde signed (immediate) |
-| `STWU` | `STWU $X, $Y, $Z` | Store wyde unsigned |
+| `STWU` | `STWU $X, $Y, $Z` / `STWU $X, $Y` | Store wyde unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STWUI` | `STWU $X, $Y, Z` | Store wyde unsigned (immediate) |
-| `STT` | `STT $X, $Y, $Z` | Store tetra signed |
+| `STT` | `STT $X, $Y, $Z` / `STT $X, $Y` | Store tetra signed (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STTI` | `STT $X, $Y, Z` | Store tetra signed (immediate) |
-| `STTU` | `STTU $X, $Y, $Z` | Store tetra unsigned |
+| `STTU` | `STTU $X, $Y, $Z` / `STTU $X, $Y` | Store tetra unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STTUI` | `STTU $X, $Y, Z` | Store tetra unsigned (immediate) |
-| `STO` | `STO $X, $Y, $Z` | Store octa |
+| `STO` | `STO $X, $Y, $Z` / `STO $X, $Y` | Store octa (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STOI` | `STO $X, $Y, Z` | Store octa (immediate) |
-| `STOU` | `STOU $X, $Y, $Z` | Store octa unsigned |
+| `STOU` | `STOU $X, $Y, $Z` / `STOU $X, $Y` | Store octa unsigned (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STOUI` | `STOU $X, $Y, Z` | Store octa unsigned (immediate) |
-| `STUNC` | `STUNC $X, $Y, $Z` | Store octa uncached |
+| `STUNC` | `STUNC $X, $Y, $Z` / `STUNC $X, $Y` | Store octa uncached (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STUNCI` | `STUNC $X, $Y, Z` | Store octa uncached (immediate) |
-| `STCO` | `STCO X, $Y, $Z` | Store constant octabyte |
-| `STCOI` | `STCO X, $Y, Z` | Store constant octabyte (immediate) |
-| `STHT` | `STHT $X, $Y, $Z` | Store high tetra |
+| `STCO` | `STCO X, $Y, $Z` / `STCO X, $Y` | Store constant octabyte, or to the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `STCOI` | `STCO X, $Y, Z` | Store constant octabyte, immediate address; `X` is a byte or a register holding one |
+| `STHT` | `STHT $X, $Y, $Z` / `STHT $X, $Y` | Store high tetra (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STHTI` | `STHT $X, $Y, Z` | Store high tetra (immediate) |
-| `STSF` | `STSF $X, $Y, $Z` | Store short float (narrow f64 → f32, honors rA rounding) |
+| `STSF` | `STSF $X, $Y, $Z` / `STSF $X, $Y` | Store short float (narrow f64 → f32, honors rA rounding) (the two-operand form's `$Y` is a register, an offset of zero, or a base-relative address) |
 | `STSFI` | `STSF $X, $Y, Z` | Store short float (immediate) |
 | `ADD` | `ADD $X, $Y, $Z` | Add signed (sets overflow) |
 | `ADDI` | `ADD $X, $Y, Z` | Add signed immediate |
@@ -656,9 +700,9 @@ Measured on MMIXware:
 | `SUBI` | `SUB $X, $Y, Z` | Subtract signed immediate |
 | `SUBU` | `SUBU $X, $Y, $Z` | Subtract unsigned (wrapping) |
 | `SUBUI` | `SUBU $X, $Y, Z` | Subtract unsigned immediate |
-| `NEG` | `NEG $X, Y, $Z` | `$X = Y − $Z` signed (Y is literal) |
+| `NEG` | `NEG $X, Y, $Z` / `NEG $X, $Z` | `$X = Y − $Z` signed (Y is literal; omitted Y is 0) |
 | `NEGI` | `NEG $X, Y, Z` | `$X = Y − Z` signed |
-| `NEGU` | `NEGU $X, Y, $Z` | `$X = Y − $Z` unsigned |
+| `NEGU` | `NEGU $X, Y, $Z` / `NEGU $X, $Z` | `$X = Y − $Z` unsigned (omitted Y is 0) |
 | `NEGUI` | `NEGU $X, Y, Z` | `$X = Y − Z` unsigned |
 | `MUL` | `MUL $X, $Y, $Z` | Multiply signed |
 | `MULI` | `MUL $X, $Y, Z` | Multiply signed immediate |
@@ -801,42 +845,42 @@ Measured on MMIXware:
 | `ZSNPI` | `ZSNPI $X, $Y, Z` | Zero or set immediate if `$Y <= 0` |
 | `ZSEV` | `ZSEV $X, $Y, $Z` | Zero or set if `$Y` is even |
 | `ZSEVI` | `ZSEVI $X, $Y, Z` | Zero or set immediate if `$Y` is even |
-| `PUSHJ` | `PUSHJ $X, addr` | Push registers and jump; return address in `rJ` |
-| `PUSHJB` | `PUSHJB $X, addr` | Push registers and jump (backward hint) |
-| `PUSHGO` | `PUSHGO $X, $Y, $Z` | Push registers and jump to `$Y + $Z` |
-| `PUSHGOI` | `PUSHGO $X, $Y, Z` | Push registers and jump to `$Y + Z` |
-| `POP` | `POP X, YZ` | Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order |
-| `GO` | `GO $X, $Y, $Z` | Jump to `$Y + $Z`; save next PC in `$X` |
+| `PUSHJ` | `PUSHJ X, addr` | Push registers and jump; return address in `rJ`; `X` is a byte or a register holding one |
+| `PUSHJB` | `PUSHJB X, addr` | Push registers and jump (backward hint); `X` is a byte or a register holding one |
+| `PUSHGO` | `PUSHGO X, $Y, $Z` / `PUSHGO X, $Y` | Push registers and jump to `$Y + $Z`, or to the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `PUSHGOI` | `PUSHGO X, $Y, Z` | Push registers and jump to `$Y + Z`; `X` is a byte or a register holding one |
+| `POP` | `POP X, YZ` / `POP xyz` / `POP` | Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order; `XYZ=xyz` for the one-operand form; bare `POP` is `POP 0,0` |
+| `GO` | `GO $X, $Y, $Z` / `GO $X, $Y` | Jump to `$Y + $Z`, or to the base address `$Y` alone resolves to; save next PC in `$X` |
 | `GOI` | `GO $X, $Y, Z` | Jump to `$Y + Z`; save next PC in `$X` |
 | `GETA` | `GETA $X, addr` | Get relative address into `$X` |
 | `GETAB` | `GETAB $X, addr` | Get relative address (backward hint) |
 | `GET` | `GET $X, Z` | Read special register Z into `$X`; `Z ≥ 32` or `Y != 0` halts |
 | `PUT` | `PUT X, $Z` | Write `$Z` into special register X; `X ≥ 32` or `Y != 0` halts; `rC rN rO rS rI rT rTT rK rQ rU rV` (8–18) are read-only in user mode; `rG` must be 32–255 and at least `rL`; `rA` at most `#3FFFF` |
 | `PUTI` | `PUT X, Z` | Write immediate Z into special register X; same rejections as `PUT` |
-| `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address; a nonzero `Y` or `Z` halts |
-| `UNSAVE` | `UNSAVE 0, $Z` | Restore the context `$Z` addresses from the register stack; a nonzero `X` or `Y` halts |
-| `RESUME` | `RESUME XYZ` | Resume after interrupt or trip; a nonzero `X` or `Y` halts |
-| `TRAP` | `TRAP X, Y, Z` | System call (see TRAP interface above) |
+| `SAVE` | `SAVE $X, 0` | Push a context onto the register stack; `$X` (global) receives its address; a nonzero `Y` or `Z` halts; bare `SAVE` is an error |
+| `UNSAVE` | `UNSAVE 0, $Z` / `UNSAVE $Z` | Restore the context `$Z` addresses from the register stack; a nonzero `X` or `Y` halts; bare `UNSAVE` is an error |
+| `RESUME` | `RESUME XYZ` / `RESUME` | Resume after interrupt or trip; a nonzero `X` or `Y` halts; bare `RESUME` is `RESUME 0` |
+| `TRAP` | `TRAP X, Y, Z` / `TRAP X, YZ` / `TRAP XYZ` / `TRAP` | System call (see TRAP interface above); `X`, `Y` and `Z` (or `X`) are each a pure byte or a register; bare `TRAP` is `TRAP 0,0,0` |
 | `HALT` | `HALT` | checksmix extension — encodes as `TRAP 0,Halt,0` |
-| `TRIP` | `TRIP X, Y, Z` | Forced trip (software interrupt) |
-| `SYNC` | `SYNC XYZ` | Synchronize memory/pipeline; `XYZ` 0–3 is a no-op, 4–7 a privileged-operation interrupt, above 7 an illegal-instruction interrupt |
-| `SWYM` | `SWYM` / `SWYM X, Y, Z` | Sympathize with your machinery (no-op); operands optional, default to zero |
-| `PRELD` | `PRELD $X, $Y, $Z` | Prefetch data into cache |
-| `PRELDI` | `PRELD $X, $Y, Z` | Prefetch data (immediate) |
-| `PREGO` | `PREGO $X, $Y, $Z` | Prefetch for execution |
-| `PREGOI` | `PREGO $X, $Y, Z` | Prefetch for execution (immediate) |
-| `PREST` | `PREST $X, $Y, $Z` | Prestore data |
-| `PRESTI` | `PREST $X, $Y, Z` | Prestore data (immediate) |
-| `SYNCD` | `SYNCD $X, $Y, $Z` | Synchronize data cache |
-| `SYNCDI` | `SYNCD $X, $Y, Z` | Synchronize data cache (immediate) |
-| `SYNCID` | `SYNCID $X, $Y, $Z` | Synchronize instruction and data cache |
-| `SYNCIDI` | `SYNCID $X, $Y, Z` | Synchronize instruction and data cache (immediate) |
+| `TRIP` | `TRIP X, Y, Z` / `TRIP X, YZ` / `TRIP XYZ` / `TRIP` | Forced trip (software interrupt); `X`, `Y` and `Z` (or `X`) are each a pure byte or a register; bare `TRIP` is `TRIP 0,0,0` |
+| `SYNC` | `SYNC XYZ` / `SYNC` | Synchronize memory/pipeline; `XYZ` 0–3 is a no-op, 4–7 a privileged-operation interrupt, above 7 an illegal-instruction interrupt; bare `SYNC` is `SYNC 0` |
+| `SWYM` | `SWYM` / `SWYM X` / `SWYM X, YZ` / `SWYM X, Y, Z` | Sympathize with your machinery (no-op); operands optional, default to zero; `X`, `Y` and `Z` are each a pure byte or a register |
+| `PRELD` | `PRELD X, $Y, $Z` / `PRELD X, $Y` | Prefetch data into cache, or the range the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `PRELDI` | `PRELD X, $Y, Z` | Prefetch data (immediate); `X` is a byte or a register holding one |
+| `PREGO` | `PREGO X, $Y, $Z` / `PREGO X, $Y` | Prefetch for execution, or for the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `PREGOI` | `PREGO X, $Y, Z` | Prefetch for execution (immediate); `X` is a byte or a register holding one |
+| `PREST` | `PREST X, $Y, $Z` / `PREST X, $Y` | Prestore data, or the range the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `PRESTI` | `PREST X, $Y, Z` | Prestore data (immediate); `X` is a byte or a register holding one |
+| `SYNCD` | `SYNCD X, $Y, $Z` / `SYNCD X, $Y` | Synchronize data cache, or the range the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `SYNCDI` | `SYNCD X, $Y, Z` | Synchronize data cache (immediate); `X` is a byte or a register holding one |
+| `SYNCID` | `SYNCID X, $Y, $Z` / `SYNCID X, $Y` | Synchronize instruction and data cache, or the range the base address `$Y` alone resolves to; `X` is a byte or a register holding one |
+| `SYNCIDI` | `SYNCID X, $Y, Z` | Synchronize instruction and data cache (immediate); `X` is a byte or a register holding one |
 
-checksmix parses the `X` operand of `PRELD`, `PREGO`, `PREST`, `SYNCD` and
-`SYNCID` as a register. In MMIX, `X` is an immediate byte count: `PRELD
-X,$Y,$Z` covers the `X+1` bytes `M[$Y+$Z]` through `M[$Y+$Z+X]`. So
-`PRELD 7,$1,$2` fails to assemble here; write `PRELD $7,$1,$2`, which
-emits the same tetra `#9A070102`.
+`X` in `PRELD`, `PREGO`, `PREST`, `SYNCD`, `SYNCID` and `STCO` takes either
+spelling: a pure byte or a register holding one, both assembling the same
+tetra. In MMIX, `X` is an immediate byte count: `PRELD X,$Y,$Z` covers the
+`X+1` bytes `M[$Y+$Z]` through `M[$Y+$Z+X]`. `PRELD 7,$1,$2` and
+`PRELD $7,$1,$2` both emit `#9A070102`.
 
 `LDA`/`LDAI $X, addr` resolve at assemble time by whether `addr` fits a byte.
 An `addr` of 0 to 255 assembles to a single tetra: `LDAI` correctly emits a

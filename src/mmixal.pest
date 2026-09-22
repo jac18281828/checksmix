@@ -76,19 +76,19 @@ label_def = { global_id ~ ":"? }
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 // Data directives - must be complete words
-directive_byte = @{ ^"BYTE" ~ word_end }
-directive_wyde = @{ ^"WYDE" ~ word_end }
-directive_tetra = @{ ^"TETRA" ~ word_end }
-directive_octa = @{ ^"OCTA" ~ word_end }
+directive_byte = @{ "BYTE" ~ word_end }
+directive_wyde = @{ "WYDE" ~ word_end }
+directive_tetra = @{ "TETRA" ~ word_end }
+directive_octa = @{ "OCTA" ~ word_end }
 
 // Control directives - must be complete words, not prefixes
-directive_loc = @{ ^"LOC" ~ word_end }
-directive_is = @{ ^"IS" ~ word_end }
-directive_greg = @{ ^"GREG" ~ word_end }
-directive_prefix = @{ ^"PREFIX" ~ word_end }
-directive_local = @{ ^"LOCAL" ~ word_end }
-directive_bspec = @{ ^"BSPEC" ~ word_end }
-directive_espec = @{ ^"ESPEC" ~ word_end }
+directive_loc = @{ "LOC" ~ word_end }
+directive_is = @{ "IS" ~ word_end }
+directive_greg = @{ "GREG" ~ word_end }
+directive_prefix = @{ "PREFIX" ~ word_end }
+directive_local = @{ "LOCAL" ~ word_end }
+directive_bspec = @{ "BSPEC" ~ word_end }
+directive_espec = @{ "ESPEC" ~ word_end }
 
 // PREFIX text is prepended verbatim, so PREFIX foo: makes bar define
 // foo:bar (PREFIX foo would give foobar); PREFIX : resets to the root
@@ -108,7 +108,7 @@ data_directive = {
     directive_octa ~ data_values
 }
 
-greg_directive = { directive_greg ~ expr }
+greg_directive = { directive_greg ~ expr? }
 
 loc_directive = { directive_loc ~ expr }
 is_directive = { (local_label_def | global_id) ~ directive_is ~ expr }
@@ -140,339 +140,329 @@ statement = {
   | local_label_def ~ (instruction | directive)?
   | label_def ~ (instruction | directive)?
 }
-mnemonic_setmh = @{ ^"SETMH" ~ word_end }
-mnemonic_setml = @{ ^"SETML" ~ word_end }
-mnemonic_setl = @{ ^"SETL" ~ word_end }
-mnemonic_seth = @{ ^"SETH" ~ word_end }
-mnemonic_seti = @{ ^"SETI" ~ word_end }
-mnemonic_set = @{ ^"SET" ~ word_end }
-mnemonic_incl = @{ ^"INCL" ~ word_end }
-mnemonic_inch = @{ ^"INCH" ~ word_end }
-mnemonic_incmh = @{ ^"INCMH" ~ word_end }
-mnemonic_incml = @{ ^"INCML" ~ word_end }
-mnemonic_orh = @{ ^"ORH" ~ word_end }
-mnemonic_ormh = @{ ^"ORMH" ~ word_end }
-mnemonic_orml = @{ ^"ORML" ~ word_end }
-mnemonic_orl = @{ ^"ORL" ~ word_end }
-mnemonic_andnh = @{ ^"ANDNH" ~ word_end }
-mnemonic_andnmh = @{ ^"ANDNMH" ~ word_end }
-mnemonic_andnml = @{ ^"ANDNML" ~ word_end }
-mnemonic_andnl = @{ ^"ANDNL" ~ word_end }
+mnemonic_setmh = @{ "SETMH" ~ word_end }
+mnemonic_setml = @{ "SETML" ~ word_end }
+mnemonic_setl = @{ "SETL" ~ word_end }
+mnemonic_seth = @{ "SETH" ~ word_end }
+mnemonic_seti = @{ "SETI" ~ word_end }
+mnemonic_set = @{ "SET" ~ word_end }
+mnemonic_incl = @{ "INCL" ~ word_end }
+mnemonic_inch = @{ "INCH" ~ word_end }
+mnemonic_incmh = @{ "INCMH" ~ word_end }
+mnemonic_incml = @{ "INCML" ~ word_end }
+mnemonic_orh = @{ "ORH" ~ word_end }
+mnemonic_ormh = @{ "ORMH" ~ word_end }
+mnemonic_orml = @{ "ORML" ~ word_end }
+mnemonic_orl = @{ "ORL" ~ word_end }
+mnemonic_andnh = @{ "ANDNH" ~ word_end }
+mnemonic_andnmh = @{ "ANDNMH" ~ word_end }
+mnemonic_andnml = @{ "ANDNML" ~ word_end }
+mnemonic_andnl = @{ "ANDNL" ~ word_end }
 
 // Load/Store instructions - ordered longest first
-mnemonic_ldbui = @{ ^"LDBUI" ~ word_end }
-mnemonic_ldbu = @{ ^"LDBU" ~ word_end }
-mnemonic_ldbi = @{ ^"LDBI" ~ word_end }
-mnemonic_ldb = @{ ^"LDB" ~ word_end }
-mnemonic_ldwui = @{ ^"LDWUI" ~ word_end }
-mnemonic_ldwu = @{ ^"LDWU" ~ word_end }
-mnemonic_ldwi = @{ ^"LDWI" ~ word_end }
-mnemonic_ldw = @{ ^"LDW" ~ word_end }
-mnemonic_ldtui = @{ ^"LDTUI" ~ word_end }
-mnemonic_ldtu = @{ ^"LDTU" ~ word_end }
-mnemonic_ldti = @{ ^"LDTI" ~ word_end }
-mnemonic_ldt = @{ ^"LDT" ~ word_end }
-mnemonic_ldoui = @{ ^"LDOUI" ~ word_end }
-mnemonic_ldou = @{ ^"LDOU" ~ word_end }
-mnemonic_ldoi = @{ ^"LDOI" ~ word_end }
-mnemonic_ldo = @{ ^"LDO" ~ word_end }
-mnemonic_ldai = @{ ^"LDAI" ~ word_end }
-mnemonic_lda = @{ ^"LDA" ~ word_end }
+mnemonic_ldbui = @{ "LDBUI" ~ word_end }
+mnemonic_ldbu = @{ "LDBU" ~ word_end }
+mnemonic_ldbi = @{ "LDBI" ~ word_end }
+mnemonic_ldb = @{ "LDB" ~ word_end }
+mnemonic_ldwui = @{ "LDWUI" ~ word_end }
+mnemonic_ldwu = @{ "LDWU" ~ word_end }
+mnemonic_ldwi = @{ "LDWI" ~ word_end }
+mnemonic_ldw = @{ "LDW" ~ word_end }
+mnemonic_ldtui = @{ "LDTUI" ~ word_end }
+mnemonic_ldtu = @{ "LDTU" ~ word_end }
+mnemonic_ldti = @{ "LDTI" ~ word_end }
+mnemonic_ldt = @{ "LDT" ~ word_end }
+mnemonic_ldoui = @{ "LDOUI" ~ word_end }
+mnemonic_ldou = @{ "LDOU" ~ word_end }
+mnemonic_ldoi = @{ "LDOI" ~ word_end }
+mnemonic_ldo = @{ "LDO" ~ word_end }
+mnemonic_ldai = @{ "LDAI" ~ word_end }
+mnemonic_lda = @{ "LDA" ~ word_end }
 
-mnemonic_stbui = @{ ^"STBUI" ~ word_end }
-mnemonic_stbu = @{ ^"STBU" ~ word_end }
-mnemonic_stbi = @{ ^"STBI" ~ word_end }
-mnemonic_stb = @{ ^"STB" ~ word_end }
-mnemonic_stwui = @{ ^"STWUI" ~ word_end }
-mnemonic_stwu = @{ ^"STWU" ~ word_end }
-mnemonic_stwi = @{ ^"STWI" ~ word_end }
-mnemonic_stw = @{ ^"STW" ~ word_end }
-mnemonic_sttui = @{ ^"STTUI" ~ word_end }
-mnemonic_sttu = @{ ^"STTU" ~ word_end }
-mnemonic_stti = @{ ^"STTI" ~ word_end }
-mnemonic_stt = @{ ^"STT" ~ word_end }
-mnemonic_stoui = @{ ^"STOUI" ~ word_end }
-mnemonic_stou = @{ ^"STOU" ~ word_end }
-mnemonic_stoi = @{ ^"STOI" ~ word_end }
-mnemonic_sto = @{ ^"STO" ~ word_end }
+mnemonic_stbui = @{ "STBUI" ~ word_end }
+mnemonic_stbu = @{ "STBU" ~ word_end }
+mnemonic_stbi = @{ "STBI" ~ word_end }
+mnemonic_stb = @{ "STB" ~ word_end }
+mnemonic_stwui = @{ "STWUI" ~ word_end }
+mnemonic_stwu = @{ "STWU" ~ word_end }
+mnemonic_stwi = @{ "STWI" ~ word_end }
+mnemonic_stw = @{ "STW" ~ word_end }
+mnemonic_sttui = @{ "STTUI" ~ word_end }
+mnemonic_sttu = @{ "STTU" ~ word_end }
+mnemonic_stti = @{ "STTI" ~ word_end }
+mnemonic_stt = @{ "STT" ~ word_end }
+mnemonic_stoui = @{ "STOUI" ~ word_end }
+mnemonic_stou = @{ "STOU" ~ word_end }
+mnemonic_stoi = @{ "STOI" ~ word_end }
+mnemonic_sto = @{ "STO" ~ word_end }
 
 // Arithmetic instructions - ordered longest first
-mnemonic_16addui = @{ ^"16ADDUI" ~ word_end }
-mnemonic_16addu = @{ ^"16ADDU" ~ word_end }
-mnemonic_8addui = @{ ^"8ADDUI" ~ word_end }
-mnemonic_8addu = @{ ^"8ADDU" ~ word_end }
-mnemonic_4addui = @{ ^"4ADDUI" ~ word_end }
-mnemonic_4addu = @{ ^"4ADDU" ~ word_end }
-mnemonic_2addui = @{ ^"2ADDUI" ~ word_end }
-mnemonic_2addu = @{ ^"2ADDU" ~ word_end }
-mnemonic_addui = @{ ^"ADDUI" ~ word_end }
-mnemonic_addu = @{ ^"ADDU" ~ word_end }
-mnemonic_addi = @{ ^"ADDI" ~ word_end }
-mnemonic_add = @{ ^"ADD" ~ word_end }
-mnemonic_subui = @{ ^"SUBUI" ~ word_end }
-mnemonic_subu = @{ ^"SUBU" ~ word_end }
-mnemonic_subi = @{ ^"SUBI" ~ word_end }
-mnemonic_sub = @{ ^"SUB" ~ word_end }
-mnemonic_negui = @{ ^"NEGUI" ~ word_end }
-mnemonic_negu = @{ ^"NEGU" ~ word_end }
-mnemonic_negi = @{ ^"NEGI" ~ word_end }
-mnemonic_neg = @{ ^"NEG" ~ word_end }
-mnemonic_mului = @{ ^"MULUI" ~ word_end }
-mnemonic_mulu = @{ ^"MULU" ~ word_end }
-mnemonic_muli = @{ ^"MULI" ~ word_end }
-mnemonic_mul = @{ ^"MUL" ~ word_end }
-mnemonic_divui = @{ ^"DIVUI" ~ word_end }
-mnemonic_divu = @{ ^"DIVU" ~ word_end }
-mnemonic_divi = @{ ^"DIVI" ~ word_end }
-mnemonic_div = @{ ^"DIV" ~ word_end }
+mnemonic_16addui = @{ "16ADDUI" ~ word_end }
+mnemonic_16addu = @{ "16ADDU" ~ word_end }
+mnemonic_8addui = @{ "8ADDUI" ~ word_end }
+mnemonic_8addu = @{ "8ADDU" ~ word_end }
+mnemonic_4addui = @{ "4ADDUI" ~ word_end }
+mnemonic_4addu = @{ "4ADDU" ~ word_end }
+mnemonic_2addui = @{ "2ADDUI" ~ word_end }
+mnemonic_2addu = @{ "2ADDU" ~ word_end }
+mnemonic_addui = @{ "ADDUI" ~ word_end }
+mnemonic_addu = @{ "ADDU" ~ word_end }
+mnemonic_addi = @{ "ADDI" ~ word_end }
+mnemonic_add = @{ "ADD" ~ word_end }
+mnemonic_subui = @{ "SUBUI" ~ word_end }
+mnemonic_subu = @{ "SUBU" ~ word_end }
+mnemonic_subi = @{ "SUBI" ~ word_end }
+mnemonic_sub = @{ "SUB" ~ word_end }
+mnemonic_negui = @{ "NEGUI" ~ word_end }
+mnemonic_negu = @{ "NEGU" ~ word_end }
+mnemonic_negi = @{ "NEGI" ~ word_end }
+mnemonic_neg = @{ "NEG" ~ word_end }
+mnemonic_mului = @{ "MULUI" ~ word_end }
+mnemonic_mulu = @{ "MULU" ~ word_end }
+mnemonic_muli = @{ "MULI" ~ word_end }
+mnemonic_mul = @{ "MUL" ~ word_end }
+mnemonic_divui = @{ "DIVUI" ~ word_end }
+mnemonic_divu = @{ "DIVU" ~ word_end }
+mnemonic_divi = @{ "DIVI" ~ word_end }
+mnemonic_div = @{ "DIV" ~ word_end }
 
 // Comparison instructions - ordered longest first
-mnemonic_cmpui = @{ ^"CMPUI" ~ word_end }
-mnemonic_cmpu = @{ ^"CMPU" ~ word_end }
-mnemonic_cmpi = @{ ^"CMPI" ~ word_end }
-mnemonic_cmp = @{ ^"CMP" ~ word_end }
+mnemonic_cmpui = @{ "CMPUI" ~ word_end }
+mnemonic_cmpu = @{ "CMPU" ~ word_end }
+mnemonic_cmpi = @{ "CMPI" ~ word_end }
+mnemonic_cmp = @{ "CMP" ~ word_end }
 
 // Floating point instructions - ordered longest first
-mnemonic_sflotui = @{ ^"SFLOTUI" ~ word_end }
-mnemonic_sflotu = @{ ^"SFLOTU" ~ word_end }
-mnemonic_sfloti = @{ ^"SFLOTI" ~ word_end }
-mnemonic_sflot = @{ ^"SFLOT" ~ word_end }
-mnemonic_flotui = @{ ^"FLOTUI" ~ word_end }
-mnemonic_flotu = @{ ^"FLOTU" ~ word_end }
-mnemonic_floti = @{ ^"FLOTI" ~ word_end }
-mnemonic_flot = @{ ^"FLOT" ~ word_end }
-mnemonic_fixu = @{ ^"FIXU" ~ word_end }
-mnemonic_fix = @{ ^"FIX" ~ word_end }
-mnemonic_fsqrt = @{ ^"FSQRT" ~ word_end }
-mnemonic_fint = @{ ^"FINT" ~ word_end }
-mnemonic_frem = @{ ^"FREM" ~ word_end }
-mnemonic_fmul = @{ ^"FMUL" ~ word_end }
-mnemonic_fdiv = @{ ^"FDIV" ~ word_end }
-mnemonic_fadd = @{ ^"FADD" ~ word_end }
-mnemonic_fsub = @{ ^"FSUB" ~ word_end }
-mnemonic_fcmpe = @{ ^"FCMPE" ~ word_end }
-mnemonic_fcmp = @{ ^"FCMP" ~ word_end }
-mnemonic_feqle = @{ ^"FEQLE" ~ word_end }
-mnemonic_feql = @{ ^"FEQL" ~ word_end }
-mnemonic_fune = @{ ^"FUNE" ~ word_end }
-mnemonic_fun = @{ ^"FUN" ~ word_end }
+mnemonic_sflotui = @{ "SFLOTUI" ~ word_end }
+mnemonic_sflotu = @{ "SFLOTU" ~ word_end }
+mnemonic_sfloti = @{ "SFLOTI" ~ word_end }
+mnemonic_sflot = @{ "SFLOT" ~ word_end }
+mnemonic_flotui = @{ "FLOTUI" ~ word_end }
+mnemonic_flotu = @{ "FLOTU" ~ word_end }
+mnemonic_floti = @{ "FLOTI" ~ word_end }
+mnemonic_flot = @{ "FLOT" ~ word_end }
+mnemonic_fixu = @{ "FIXU" ~ word_end }
+mnemonic_fix = @{ "FIX" ~ word_end }
+mnemonic_fsqrt = @{ "FSQRT" ~ word_end }
+mnemonic_fint = @{ "FINT" ~ word_end }
+mnemonic_frem = @{ "FREM" ~ word_end }
+mnemonic_fmul = @{ "FMUL" ~ word_end }
+mnemonic_fdiv = @{ "FDIV" ~ word_end }
+mnemonic_fadd = @{ "FADD" ~ word_end }
+mnemonic_fsub = @{ "FSUB" ~ word_end }
+mnemonic_fcmpe = @{ "FCMPE" ~ word_end }
+mnemonic_fcmp = @{ "FCMP" ~ word_end }
+mnemonic_feqle = @{ "FEQLE" ~ word_end }
+mnemonic_feql = @{ "FEQL" ~ word_end }
+mnemonic_fune = @{ "FUNE" ~ word_end }
+mnemonic_fun = @{ "FUN" ~ word_end }
 
 // Bitwise operations - ordered longest first for exact matching
-mnemonic_andni = @{ ^"ANDNI" ~ word_end }
-mnemonic_andn = @{ ^"ANDN" ~ word_end }
-mnemonic_andi = @{ ^"ANDI" ~ word_end }
-mnemonic_and = @{ ^"AND" ~ word_end }
-mnemonic_orni = @{ ^"ORNI" ~ word_end }
-mnemonic_orn = @{ ^"ORN" ~ word_end }
-mnemonic_ori = @{ ^"ORI" ~ word_end }
-mnemonic_or = @{ ^"OR" ~ word_end }
-mnemonic_xori = @{ ^"XORI" ~ word_end }
-mnemonic_xor = @{ ^"XOR" ~ word_end }
-mnemonic_nandi = @{ ^"NANDI" ~ word_end }
-mnemonic_nand = @{ ^"NAND" ~ word_end }
-mnemonic_nxori = @{ ^"NXORI" ~ word_end }
-mnemonic_nxor = @{ ^"NXOR" ~ word_end }
-mnemonic_nori = @{ ^"NORI" ~ word_end }
-mnemonic_nor = @{ ^"NOR" ~ word_end }
-mnemonic_muxi = @{ ^"MUXI" ~ word_end }
-mnemonic_mux = @{ ^"MUX" ~ word_end }
+mnemonic_andni = @{ "ANDNI" ~ word_end }
+mnemonic_andn = @{ "ANDN" ~ word_end }
+mnemonic_andi = @{ "ANDI" ~ word_end }
+mnemonic_and = @{ "AND" ~ word_end }
+mnemonic_orni = @{ "ORNI" ~ word_end }
+mnemonic_orn = @{ "ORN" ~ word_end }
+mnemonic_ori = @{ "ORI" ~ word_end }
+mnemonic_or = @{ "OR" ~ word_end }
+mnemonic_xori = @{ "XORI" ~ word_end }
+mnemonic_xor = @{ "XOR" ~ word_end }
+mnemonic_nandi = @{ "NANDI" ~ word_end }
+mnemonic_nand = @{ "NAND" ~ word_end }
+mnemonic_nxori = @{ "NXORI" ~ word_end }
+mnemonic_nxor = @{ "NXOR" ~ word_end }
+mnemonic_nori = @{ "NORI" ~ word_end }
+mnemonic_nor = @{ "NOR" ~ word_end }
+mnemonic_muxi = @{ "MUXI" ~ word_end }
+mnemonic_mux = @{ "MUX" ~ word_end }
 
 // Conditional set instructions - ordered longest first
-mnemonic_csnni = @{ ^"CSNNI" ~ word_end }
-mnemonic_csnzi = @{ ^"CSNZI" ~ word_end }
-mnemonic_csnpi = @{ ^"CSNPI" ~ word_end }
-mnemonic_csodi = @{ ^"CSODI" ~ word_end }
-mnemonic_csevi = @{ ^"CSEVI" ~ word_end }
-mnemonic_csni = @{ ^"CSNI" ~ word_end }
-mnemonic_cszi = @{ ^"CSZI" ~ word_end }
-mnemonic_cspi = @{ ^"CSPI" ~ word_end }
-mnemonic_csnn = @{ ^"CSNN" ~ word_end }
-mnemonic_csnz = @{ ^"CSNZ" ~ word_end }
-mnemonic_csnp = @{ ^"CSNP" ~ word_end }
-mnemonic_csod = @{ ^"CSOD" ~ word_end }
-mnemonic_csev = @{ ^"CSEV" ~ word_end }
-mnemonic_csn = @{ ^"CSN" ~ word_end }
-mnemonic_csz = @{ ^"CSZ" ~ word_end }
-mnemonic_csp = @{ ^"CSP" ~ word_end }
+mnemonic_csnni = @{ "CSNNI" ~ word_end }
+mnemonic_csnzi = @{ "CSNZI" ~ word_end }
+mnemonic_csnpi = @{ "CSNPI" ~ word_end }
+mnemonic_csodi = @{ "CSODI" ~ word_end }
+mnemonic_csevi = @{ "CSEVI" ~ word_end }
+mnemonic_csni = @{ "CSNI" ~ word_end }
+mnemonic_cszi = @{ "CSZI" ~ word_end }
+mnemonic_cspi = @{ "CSPI" ~ word_end }
+mnemonic_csnn = @{ "CSNN" ~ word_end }
+mnemonic_csnz = @{ "CSNZ" ~ word_end }
+mnemonic_csnp = @{ "CSNP" ~ word_end }
+mnemonic_csod = @{ "CSOD" ~ word_end }
+mnemonic_csev = @{ "CSEV" ~ word_end }
+mnemonic_csn = @{ "CSN" ~ word_end }
+mnemonic_csz = @{ "CSZ" ~ word_end }
+mnemonic_csp = @{ "CSP" ~ word_end }
 
 // Zero or set instructions - ordered longest first
-mnemonic_zsnni = @{ ^"ZSNNI" ~ word_end }
-mnemonic_zsnzi = @{ ^"ZSNZI" ~ word_end }
-mnemonic_zsnpi = @{ ^"ZSNPI" ~ word_end }
-mnemonic_zsodi = @{ ^"ZSODI" ~ word_end }
-mnemonic_zsevi = @{ ^"ZSEVI" ~ word_end }
-mnemonic_zsni = @{ ^"ZSNI" ~ word_end }
-mnemonic_zszi = @{ ^"ZSZI" ~ word_end }
-mnemonic_zspi = @{ ^"ZSPI" ~ word_end }
-mnemonic_zsnn = @{ ^"ZSNN" ~ word_end }
-mnemonic_zsnz = @{ ^"ZSNZ" ~ word_end }
-mnemonic_zsnp = @{ ^"ZSNP" ~ word_end }
-mnemonic_zsod = @{ ^"ZSOD" ~ word_end }
-mnemonic_zsev = @{ ^"ZSEV" ~ word_end }
-mnemonic_zsn = @{ ^"ZSN" ~ word_end }
-mnemonic_zsz = @{ ^"ZSZ" ~ word_end }
-mnemonic_zsp = @{ ^"ZSP" ~ word_end }
+mnemonic_zsnni = @{ "ZSNNI" ~ word_end }
+mnemonic_zsnzi = @{ "ZSNZI" ~ word_end }
+mnemonic_zsnpi = @{ "ZSNPI" ~ word_end }
+mnemonic_zsodi = @{ "ZSODI" ~ word_end }
+mnemonic_zsevi = @{ "ZSEVI" ~ word_end }
+mnemonic_zsni = @{ "ZSNI" ~ word_end }
+mnemonic_zszi = @{ "ZSZI" ~ word_end }
+mnemonic_zspi = @{ "ZSPI" ~ word_end }
+mnemonic_zsnn = @{ "ZSNN" ~ word_end }
+mnemonic_zsnz = @{ "ZSNZ" ~ word_end }
+mnemonic_zsnp = @{ "ZSNP" ~ word_end }
+mnemonic_zsod = @{ "ZSOD" ~ word_end }
+mnemonic_zsev = @{ "ZSEV" ~ word_end }
+mnemonic_zsn = @{ "ZSN" ~ word_end }
+mnemonic_zsz = @{ "ZSZ" ~ word_end }
+mnemonic_zsp = @{ "ZSP" ~ word_end }
 
 // Bit fiddling operations - ordered longest first
-mnemonic_bdifi = @{ ^"BDIFI" ~ word_end }
-mnemonic_bdif = @{ ^"BDIF" ~ word_end }
-mnemonic_wdifi = @{ ^"WDIFI" ~ word_end }
-mnemonic_wdif = @{ ^"WDIF" ~ word_end }
-mnemonic_tdifi = @{ ^"TDIFI" ~ word_end }
-mnemonic_tdif = @{ ^"TDIF" ~ word_end }
-mnemonic_odifi = @{ ^"ODIFI" ~ word_end }
-mnemonic_odif = @{ ^"ODIF" ~ word_end }
-mnemonic_saddi = @{ ^"SADDI" ~ word_end }
-mnemonic_sadd = @{ ^"SADD" ~ word_end }
-mnemonic_mxori = @{ ^"MXORI" ~ word_end }
-mnemonic_mxor = @{ ^"MXOR" ~ word_end }
-mnemonic_mori = @{ ^"MORI" ~ word_end }
-mnemonic_mor = @{ ^"MOR" ~ word_end }
+mnemonic_bdifi = @{ "BDIFI" ~ word_end }
+mnemonic_bdif = @{ "BDIF" ~ word_end }
+mnemonic_wdifi = @{ "WDIFI" ~ word_end }
+mnemonic_wdif = @{ "WDIF" ~ word_end }
+mnemonic_tdifi = @{ "TDIFI" ~ word_end }
+mnemonic_tdif = @{ "TDIF" ~ word_end }
+mnemonic_odifi = @{ "ODIFI" ~ word_end }
+mnemonic_odif = @{ "ODIF" ~ word_end }
+mnemonic_saddi = @{ "SADDI" ~ word_end }
+mnemonic_sadd = @{ "SADD" ~ word_end }
+mnemonic_mxori = @{ "MXORI" ~ word_end }
+mnemonic_mxor = @{ "MXOR" ~ word_end }
+mnemonic_mori = @{ "MORI" ~ word_end }
+mnemonic_mor = @{ "MOR" ~ word_end }
 
 // Shift instructions - ordered longest first
-mnemonic_slui = @{ ^"SLUI" ~ word_end }
-mnemonic_slu = @{ ^"SLU" ~ word_end }
-mnemonic_sli = @{ ^"SLI" ~ word_end }
-mnemonic_sl = @{ ^"SL" ~ word_end }
-mnemonic_srui = @{ ^"SRUI" ~ word_end }
-mnemonic_sru = @{ ^"SRU" ~ word_end }
-mnemonic_sri = @{ ^"SRI" ~ word_end }
-mnemonic_sr = @{ ^"SR" ~ word_end }
+mnemonic_slui = @{ "SLUI" ~ word_end }
+mnemonic_slu = @{ "SLU" ~ word_end }
+mnemonic_sli = @{ "SLI" ~ word_end }
+mnemonic_sl = @{ "SL" ~ word_end }
+mnemonic_srui = @{ "SRUI" ~ word_end }
+mnemonic_sru = @{ "SRU" ~ word_end }
+mnemonic_sri = @{ "SRI" ~ word_end }
+mnemonic_sr = @{ "SR" ~ word_end }
 
 // Branch/Jump instructions - ordered longest first
-mnemonic_pbodb = @{ ^"PBODB" ~ word_end }
-mnemonic_pbnnb = @{ ^"PBNNB" ~ word_end }
-mnemonic_pbnzb = @{ ^"PBNZB" ~ word_end }
-mnemonic_pbnpb = @{ ^"PBNPB" ~ word_end }
-mnemonic_pbevb = @{ ^"PBEVB" ~ word_end }
-mnemonic_pbnb = @{ ^"PBNB" ~ word_end }
-mnemonic_pbzb = @{ ^"PBZB" ~ word_end }
-mnemonic_pbpb = @{ ^"PBPB" ~ word_end }
-mnemonic_pbod = @{ ^"PBOD" ~ word_end }
-mnemonic_pbnn = @{ ^"PBNN" ~ word_end }
-mnemonic_pbnz = @{ ^"PBNZ" ~ word_end }
-mnemonic_pbnp = @{ ^"PBNP" ~ word_end }
-mnemonic_pbev = @{ ^"PBEV" ~ word_end }
-mnemonic_pbn = @{ ^"PBN" ~ word_end }
-mnemonic_pbz = @{ ^"PBZ" ~ word_end }
-mnemonic_pbp = @{ ^"PBP" ~ word_end }
-mnemonic_bodb = @{ ^"BODB" ~ word_end }
-mnemonic_bnnb = @{ ^"BNNB" ~ word_end }
-mnemonic_bnzb = @{ ^"BNZB" ~ word_end }
-mnemonic_bnpb = @{ ^"BNPB" ~ word_end }
-mnemonic_bevb = @{ ^"BEVB" ~ word_end }
-mnemonic_bnb = @{ ^"BNB" ~ word_end }
-mnemonic_bzb = @{ ^"BZB" ~ word_end }
-mnemonic_bpb = @{ ^"BPB" ~ word_end }
-mnemonic_bod = @{ ^"BOD" ~ word_end }
-mnemonic_bnn = @{ ^"BNN" ~ word_end }
-mnemonic_bnz = @{ ^"BNZ" ~ word_end }
-mnemonic_bnp = @{ ^"BNP" ~ word_end }
-mnemonic_bev = @{ ^"BEV" ~ word_end }
-mnemonic_bn = @{ ^"BN" ~ word_end }
-mnemonic_bz = @{ ^"BZ" ~ word_end }
-mnemonic_bp = @{ ^"BP" ~ word_end }
-mnemonic_jmpb = @{ ^"JMPB" ~ word_end }
-mnemonic_jmp = @{ ^"JMP" ~ word_end }
+mnemonic_pbodb = @{ "PBODB" ~ word_end }
+mnemonic_pbnnb = @{ "PBNNB" ~ word_end }
+mnemonic_pbnzb = @{ "PBNZB" ~ word_end }
+mnemonic_pbnpb = @{ "PBNPB" ~ word_end }
+mnemonic_pbevb = @{ "PBEVB" ~ word_end }
+mnemonic_pbnb = @{ "PBNB" ~ word_end }
+mnemonic_pbzb = @{ "PBZB" ~ word_end }
+mnemonic_pbpb = @{ "PBPB" ~ word_end }
+mnemonic_pbod = @{ "PBOD" ~ word_end }
+mnemonic_pbnn = @{ "PBNN" ~ word_end }
+mnemonic_pbnz = @{ "PBNZ" ~ word_end }
+mnemonic_pbnp = @{ "PBNP" ~ word_end }
+mnemonic_pbev = @{ "PBEV" ~ word_end }
+mnemonic_pbn = @{ "PBN" ~ word_end }
+mnemonic_pbz = @{ "PBZ" ~ word_end }
+mnemonic_pbp = @{ "PBP" ~ word_end }
+mnemonic_bodb = @{ "BODB" ~ word_end }
+mnemonic_bnnb = @{ "BNNB" ~ word_end }
+mnemonic_bnzb = @{ "BNZB" ~ word_end }
+mnemonic_bnpb = @{ "BNPB" ~ word_end }
+mnemonic_bevb = @{ "BEVB" ~ word_end }
+mnemonic_bnb = @{ "BNB" ~ word_end }
+mnemonic_bzb = @{ "BZB" ~ word_end }
+mnemonic_bpb = @{ "BPB" ~ word_end }
+mnemonic_bod = @{ "BOD" ~ word_end }
+mnemonic_bnn = @{ "BNN" ~ word_end }
+mnemonic_bnz = @{ "BNZ" ~ word_end }
+mnemonic_bnp = @{ "BNP" ~ word_end }
+mnemonic_bev = @{ "BEV" ~ word_end }
+mnemonic_bn = @{ "BN" ~ word_end }
+mnemonic_bz = @{ "BZ" ~ word_end }
+mnemonic_bp = @{ "BP" ~ word_end }
+mnemonic_jmpb = @{ "JMPB" ~ word_end }
+mnemonic_jmp = @{ "JMP" ~ word_end }
 
 // Subroutine and control flow instructions
-mnemonic_pushj = @{ ^"PUSHJ" ~ word_end }
-mnemonic_pushjb = @{ ^"PUSHJB" ~ word_end }
-mnemonic_pushgo = @{ ^"PUSHGO" ~ word_end }
-mnemonic_pushgoi = @{ ^"PUSHGOI" ~ word_end }
-mnemonic_pop = @{ ^"POP" ~ word_end }
-mnemonic_go = @{ ^"GO" ~ word_end }
-mnemonic_goi = @{ ^"GOI" ~ word_end }
-mnemonic_save = @{ ^"SAVE" ~ word_end }
-mnemonic_unsave = @{ ^"UNSAVE" ~ word_end }
-mnemonic_resume = @{ ^"RESUME" ~ word_end }
-mnemonic_trip = @{ ^"TRIP" ~ word_end }
-mnemonic_swym = @{ ^"SWYM" ~ word_end }
-mnemonic_sync = @{ ^"SYNC" ~ word_end }
+mnemonic_pushj = @{ "PUSHJ" ~ word_end }
+mnemonic_pushjb = @{ "PUSHJB" ~ word_end }
+mnemonic_pushgo = @{ "PUSHGO" ~ word_end }
+mnemonic_pushgoi = @{ "PUSHGOI" ~ word_end }
+mnemonic_pop = @{ "POP" ~ word_end }
+mnemonic_go = @{ "GO" ~ word_end }
+mnemonic_goi = @{ "GOI" ~ word_end }
+mnemonic_save = @{ "SAVE" ~ word_end }
+mnemonic_unsave = @{ "UNSAVE" ~ word_end }
+mnemonic_resume = @{ "RESUME" ~ word_end }
+mnemonic_trip = @{ "TRIP" ~ word_end }
+mnemonic_swym = @{ "SWYM" ~ word_end }
+mnemonic_sync = @{ "SYNC" ~ word_end }
 
 // Special register access
-mnemonic_get = @{ ^"GET" ~ word_end }
-mnemonic_put = @{ ^"PUT" ~ word_end }
-mnemonic_puti = @{ ^"PUTI" ~ word_end }
+mnemonic_get = @{ "GET" ~ word_end }
+mnemonic_put = @{ "PUT" ~ word_end }
+mnemonic_puti = @{ "PUTI" ~ word_end }
 
 // Prefetch and cache instructions
-mnemonic_prego = @{ ^"PREGO" ~ word_end }
-mnemonic_pregoi = @{ ^"PREGOI" ~ word_end }
-mnemonic_preld = @{ ^"PRELD" ~ word_end }
-mnemonic_preldi = @{ ^"PRELDI" ~ word_end }
-mnemonic_prest = @{ ^"PREST" ~ word_end }
-mnemonic_presti = @{ ^"PRESTI" ~ word_end }
-mnemonic_syncd = @{ ^"SYNCD" ~ word_end }
-mnemonic_syncdi = @{ ^"SYNCDI" ~ word_end }
-mnemonic_syncid = @{ ^"SYNCID" ~ word_end }
-mnemonic_syncidi = @{ ^"SYNCIDI" ~ word_end }
+mnemonic_prego = @{ "PREGO" ~ word_end }
+mnemonic_pregoi = @{ "PREGOI" ~ word_end }
+mnemonic_preld = @{ "PRELD" ~ word_end }
+mnemonic_preldi = @{ "PRELDI" ~ word_end }
+mnemonic_prest = @{ "PREST" ~ word_end }
+mnemonic_presti = @{ "PRESTI" ~ word_end }
+mnemonic_syncd = @{ "SYNCD" ~ word_end }
+mnemonic_syncdi = @{ "SYNCDI" ~ word_end }
+mnemonic_syncid = @{ "SYNCID" ~ word_end }
+mnemonic_syncidi = @{ "SYNCIDI" ~ word_end }
 
 // Additional load/store instructions
-mnemonic_ldunci = @{ ^"LDUNCI" ~ word_end }
-mnemonic_ldunc = @{ ^"LDUNC" ~ word_end }
-mnemonic_stunci = @{ ^"STUNCI" ~ word_end }
-mnemonic_stunc = @{ ^"STUNC" ~ word_end }
-mnemonic_ldhti = @{ ^"LDHTI" ~ word_end }
-mnemonic_ldht = @{ ^"LDHT" ~ word_end }
-mnemonic_sthti = @{ ^"STHTI" ~ word_end }
-mnemonic_stht = @{ ^"STHT" ~ word_end }
-mnemonic_ldsfi = @{ ^"LDSFI" ~ word_end }
-mnemonic_ldsf = @{ ^"LDSF" ~ word_end }
-mnemonic_stsfi = @{ ^"STSFI" ~ word_end }
-mnemonic_stsf = @{ ^"STSF" ~ word_end }
-mnemonic_ldvtsi = @{ ^"LDVTSI" ~ word_end }
-mnemonic_ldvts = @{ ^"LDVTS" ~ word_end }
-mnemonic_cswapi = @{ ^"CSWAPI" ~ word_end }
-mnemonic_cswap = @{ ^"CSWAP" ~ word_end }
-mnemonic_stcoi = @{ ^"STCOI" ~ word_end }
-mnemonic_stco = @{ ^"STCO" ~ word_end }
+mnemonic_ldunci = @{ "LDUNCI" ~ word_end }
+mnemonic_ldunc = @{ "LDUNC" ~ word_end }
+mnemonic_stunci = @{ "STUNCI" ~ word_end }
+mnemonic_stunc = @{ "STUNC" ~ word_end }
+mnemonic_ldhti = @{ "LDHTI" ~ word_end }
+mnemonic_ldht = @{ "LDHT" ~ word_end }
+mnemonic_sthti = @{ "STHTI" ~ word_end }
+mnemonic_stht = @{ "STHT" ~ word_end }
+mnemonic_ldsfi = @{ "LDSFI" ~ word_end }
+mnemonic_ldsf = @{ "LDSF" ~ word_end }
+mnemonic_stsfi = @{ "STSFI" ~ word_end }
+mnemonic_stsf = @{ "STSF" ~ word_end }
+mnemonic_ldvtsi = @{ "LDVTSI" ~ word_end }
+mnemonic_ldvts = @{ "LDVTS" ~ word_end }
+mnemonic_cswapi = @{ "CSWAPI" ~ word_end }
+mnemonic_cswap = @{ "CSWAP" ~ word_end }
+mnemonic_stcoi = @{ "STCOI" ~ word_end }
+mnemonic_stco = @{ "STCO" ~ word_end }
 
 // Other instructions
-mnemonic_geta = @{ ^"GETA" ~ word_end }
-mnemonic_getab = @{ ^"GETAB" ~ word_end }
-mnemonic_trap = @{ ^"TRAP" ~ word_end }
-mnemonic_halt = @{ ^"HALT" ~ word_end }
+mnemonic_geta = @{ "GETA" ~ word_end }
+mnemonic_getab = @{ "GETAB" ~ word_end }
+mnemonic_trap = @{ "TRAP" ~ word_end }
+mnemonic_halt = @{ "HALT" ~ word_end }
 
 // Instruction operands
 comma = _{ "," }
 
 // Every operand is one expression; whether a site demands a register or a
-// pure value, and whether Z auto-selects between them, is the evaluator's
-// call, not the grammar's -- each of these keeps its own name only so the
-// parser can tell which site it is looking at.
-operand_reg_reg_reg = { expr ~ comma ~ expr ~ comma ~ expr }
-operand_reg_reg_imm = { expr ~ comma ~ expr ~ comma ~ expr }
-// Auto-immediate operand shape for base mnemonics (ADD, AND, SR, ...).
-// Z is either a register reference or an expression value; the parser
-// chooses the RRR or RRI MMixInstruction variant after resolving Z.
-operand_reg_reg_z = { expr ~ comma ~ expr ~ comma ~ expr }
-operand_reg_reg = { expr ~ comma ~ expr }
-// Auto-immediate operand shape for SET: the source is either a register
-// reference or an expression value, and the parser chooses SETRR or SETL.
-operand_reg_z = { expr ~ comma ~ expr }
-operand_reg_imm = { expr ~ comma ~ expr }
-operand_reg = { expr }
-operand_imm = { expr }
+// pure value, and whether a register-or-immediate site auto-selects between
+// them, is the evaluator's call, not the grammar's. One rule per operand
+// count, reused at every arity the reference gives that many operands.
+operand_list_one = { expr }
+operand_list_two = { expr ~ comma ~ expr }
+operand_list_three = { expr ~ comma ~ expr ~ comma ~ expr }
 
 // Instructions with different operand patterns
-inst_set = { mnemonic_set ~ operand_reg_z }
-inst_seti = { mnemonic_seti ~ operand_reg_imm }
-inst_setl_ri = { mnemonic_setl ~ operand_reg_imm }
-inst_seth_ri = { mnemonic_seth ~ operand_reg_imm }
-inst_setmh_ri = { mnemonic_setmh ~ operand_reg_imm }
-inst_setml_ri = { mnemonic_setml ~ operand_reg_imm }
-inst_incl_ri = { mnemonic_incl ~ operand_reg_imm }
-inst_inch_ri = { mnemonic_inch ~ operand_reg_imm }
-inst_incmh_ri = { mnemonic_incmh ~ operand_reg_imm }
-inst_incml_ri = { mnemonic_incml ~ operand_reg_imm }
-inst_orh_ri = { mnemonic_orh ~ operand_reg_imm }
-inst_ormh_ri = { mnemonic_ormh ~ operand_reg_imm }
-inst_orml_ri = { mnemonic_orml ~ operand_reg_imm }
-inst_orl_ri = { mnemonic_orl ~ operand_reg_imm }
-inst_andnh_ri = { mnemonic_andnh ~ operand_reg_imm }
-inst_andnmh_ri = { mnemonic_andnmh ~ operand_reg_imm }
-inst_andnml_ri = { mnemonic_andnml ~ operand_reg_imm }
-inst_andnl_ri = { mnemonic_andnl ~ operand_reg_imm }
+inst_set = { mnemonic_set ~ operand_list_two }
+inst_seti = { mnemonic_seti ~ operand_list_two }
+inst_setl_ri = { mnemonic_setl ~ operand_list_two }
+inst_seth_ri = { mnemonic_seth ~ operand_list_two }
+inst_setmh_ri = { mnemonic_setmh ~ operand_list_two }
+inst_setml_ri = { mnemonic_setml ~ operand_list_two }
+inst_incl_ri = { mnemonic_incl ~ operand_list_two }
+inst_inch_ri = { mnemonic_inch ~ operand_list_two }
+inst_incmh_ri = { mnemonic_incmh ~ operand_list_two }
+inst_incml_ri = { mnemonic_incml ~ operand_list_two }
+inst_orh_ri = { mnemonic_orh ~ operand_list_two }
+inst_ormh_ri = { mnemonic_ormh ~ operand_list_two }
+inst_orml_ri = { mnemonic_orml ~ operand_list_two }
+inst_orl_ri = { mnemonic_orl ~ operand_list_two }
+inst_andnh_ri = { mnemonic_andnh ~ operand_list_two }
+inst_andnmh_ri = { mnemonic_andnmh ~ operand_list_two }
+inst_andnml_ri = { mnemonic_andnml ~ operand_list_two }
+inst_andnl_ri = { mnemonic_andnl ~ operand_list_two }
 
 // Load/Store base mnemonics auto-select RRR/RRI by Z.
 // Ordered longest first so prefixes like LDBU win over LDB.
@@ -489,7 +479,7 @@ inst_load_store_auto = {
      mnemonic_stou | mnemonic_sto |
      mnemonic_stunc | mnemonic_stht |
      mnemonic_stsf | mnemonic_cswap) ~
-    operand_reg_reg_z
+    (operand_list_three | operand_list_two)
 }
 
 inst_load_store_rri = {
@@ -497,14 +487,14 @@ inst_load_store_rri = {
      mnemonic_ldtui | mnemonic_ldti | mnemonic_ldoui | mnemonic_ldoi |
      mnemonic_stbui | mnemonic_stbi | mnemonic_stwui | mnemonic_stwi |
      mnemonic_sttui | mnemonic_stti | mnemonic_stoui | mnemonic_stoi) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // LDA aliases ADDU, so its Z auto-selects the register or immediate opcode.
 // The two-operand form LDA $X,Label loads a full address.
-inst_lda_auto = { mnemonic_lda ~ operand_reg_reg_z }
-inst_lda_rri = { mnemonic_ldai ~ operand_reg_reg_imm }
-inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_reg_imm }
+inst_lda_auto = { mnemonic_lda ~ operand_list_three }
+inst_lda_rri = { mnemonic_ldai ~ operand_list_three }
+inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_list_two }
 
 // Arithmetic (3 operands) - base mnemonics auto-select RRR/RRI by Z.
 // Ordered longest first so prefixes like ADDU win over ADD.
@@ -513,25 +503,27 @@ inst_arith_auto = {
      mnemonic_addu | mnemonic_subu |
      mnemonic_mulu | mnemonic_divu |
      mnemonic_cmpu | mnemonic_add | mnemonic_sub | mnemonic_mul | mnemonic_div | mnemonic_cmp) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_arith_rri = {
     (mnemonic_16addui | mnemonic_8addui | mnemonic_4addui | mnemonic_2addui |
      mnemonic_addui | mnemonic_subui | mnemonic_mului | mnemonic_divui | mnemonic_cmpui |
      mnemonic_addi | mnemonic_subi | mnemonic_muli | mnemonic_divi | mnemonic_cmpi) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // NEG is special: Y is an immediate byte, and Z auto-selects RRR/RRI.
+// NEG/NEGU's 2-operand form omits Y (implicitly 0); the 3-operand form
+// is tried first so `NEG $1,5,$2` is unaffected.
 inst_neg_auto = {
     (mnemonic_negu | mnemonic_neg) ~
-    expr ~ comma ~ expr ~ comma ~ expr
+    (operand_list_three | operand_list_two)
 }
 
 inst_neg_rri = {
     (mnemonic_negui | mnemonic_negi) ~
-    expr ~ comma ~ expr ~ comma ~ expr
+    operand_list_three
 }
 
 // Floating point instructions (3 operands) - ordered longest first.
@@ -543,7 +535,7 @@ inst_float_rrr = {
      mnemonic_fcmp | mnemonic_feql | mnemonic_fun |
      mnemonic_fadd | mnemonic_fsub | mnemonic_fmul | mnemonic_fdiv |
      mnemonic_frem) ~
-    operand_reg_reg_reg
+    operand_list_three
 }
 
 // FIX/FIXU/FSQRT/FINT take a single register operand plus an optional Y
@@ -553,12 +545,12 @@ inst_float_rrr = {
 // otherwise swallow the register-looking Y symbol and strand the comma.
 inst_float_round_rrz = {
     (mnemonic_fixu | mnemonic_fix | mnemonic_fsqrt | mnemonic_fint) ~
-    expr ~ comma ~ expr ~ comma ~ expr
+    operand_list_three
 }
 
 inst_float_round_rr = {
     (mnemonic_fixu | mnemonic_fix | mnemonic_fsqrt | mnemonic_fint) ~
-    operand_reg_reg
+    operand_list_two
 }
 
 // Fixed-to-float conversions: Y is a rounding-mode value, Z auto-selects
@@ -567,13 +559,13 @@ inst_float_round_rr = {
 inst_flot_round = {
     (mnemonic_sflotu | mnemonic_sflot |
      mnemonic_flotu | mnemonic_flot) ~
-    expr ~ comma ~ expr ~ comma ~ expr
+    operand_list_three
 }
 
 inst_flot_auto = {
     (mnemonic_sflotu | mnemonic_sflot |
      mnemonic_flotu | mnemonic_flot) ~
-    operand_reg_z
+    operand_list_two
 }
 
 // FLOTI/FLOTUI/SFLOTI/SFLOTUI: Y is a rounding-mode value; Z stays
@@ -581,13 +573,13 @@ inst_flot_auto = {
 inst_float_round_rri = {
     (mnemonic_sflotui | mnemonic_sfloti |
      mnemonic_flotui | mnemonic_floti) ~
-    expr ~ comma ~ expr ~ comma ~ expr
+    operand_list_three
 }
 
 inst_float_rri = {
     (mnemonic_sflotui | mnemonic_sfloti |
      mnemonic_flotui | mnemonic_floti) ~
-    operand_reg_imm
+    operand_list_two
 }
 
 // Bitwise operations (3 operands) - base mnemonics auto-select RRR/RRI by Z.
@@ -597,63 +589,63 @@ inst_bitwise_auto = {
      mnemonic_orn | mnemonic_nor |
      mnemonic_or | mnemonic_xor |
      mnemonic_mux) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_bitwise_rri = {
     (mnemonic_andni | mnemonic_nandi | mnemonic_nxori | mnemonic_andi | 
      mnemonic_orni | mnemonic_nori | mnemonic_ori | 
      mnemonic_xori | mnemonic_muxi) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // Bit fiddling operations - base mnemonics auto-select RRR/RRI by Z.
 inst_bitfiddle_auto = {
     (mnemonic_bdif | mnemonic_wdif | mnemonic_tdif | mnemonic_odif | mnemonic_sadd | mnemonic_mxor | mnemonic_mor) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_bitfiddle_rri = {
     (mnemonic_bdifi | mnemonic_wdifi | mnemonic_tdifi | mnemonic_odifi | mnemonic_saddi | mnemonic_mxori | mnemonic_mori) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // Shift instructions - base mnemonics auto-select RRR/RRI by Z.
 inst_shift_auto = {
     (mnemonic_slu | mnemonic_sru |
      mnemonic_sl | mnemonic_sr) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_shift_rri = {
     (mnemonic_slui | mnemonic_srui | mnemonic_sli | mnemonic_sri) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // Conditional set instructions - base mnemonics auto-select RRR/RRI by Z.
 inst_conditional_set_auto = {
     (mnemonic_csnn | mnemonic_csnz | mnemonic_csnp | mnemonic_csod | mnemonic_csev |
      mnemonic_csn | mnemonic_csz | mnemonic_csp) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_conditional_set_rri = {
     (mnemonic_csnni | mnemonic_csnzi | mnemonic_csnpi | mnemonic_csodi | mnemonic_csevi |
      mnemonic_csni | mnemonic_cszi | mnemonic_cspi) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // Zero or set instructions - base mnemonics auto-select RRR/RRI by Z.
 inst_zero_or_set_auto = {
     (mnemonic_zsnn | mnemonic_zsnz | mnemonic_zsnp | mnemonic_zsod | mnemonic_zsev |
      mnemonic_zsn | mnemonic_zsz | mnemonic_zsp) ~
-    operand_reg_reg_z
+    operand_list_three
 }
 
 inst_zero_or_set_rri = {
     (mnemonic_zsnni | mnemonic_zsnzi | mnemonic_zsnpi | mnemonic_zsodi | mnemonic_zsevi |
      mnemonic_zsni | mnemonic_zszi | mnemonic_zspi) ~
-    operand_reg_reg_imm
+    operand_list_three
 }
 
 // Branch instructions - ordered longest first
@@ -662,7 +654,7 @@ inst_branch = {
      mnemonic_bnn | mnemonic_bnz | mnemonic_bnp | mnemonic_bev |
      mnemonic_bnb | mnemonic_bzb | mnemonic_bpb | mnemonic_bodb |
      mnemonic_bn | mnemonic_bz | mnemonic_bp | mnemonic_bod) ~
-    operand_reg_imm
+    operand_list_two
 }
 
 inst_pbranch = {
@@ -670,69 +662,67 @@ inst_pbranch = {
      mnemonic_pbodb | mnemonic_pbnb | mnemonic_pbzb | mnemonic_pbpb |
      mnemonic_pbod | mnemonic_pbnn | mnemonic_pbnz | mnemonic_pbnp |
      mnemonic_pbev | mnemonic_pbn | mnemonic_pbz | mnemonic_pbp) ~
-    operand_reg_imm
+    operand_list_two
 }
 
-inst_jmp = { (mnemonic_jmpb | mnemonic_jmp) ~ operand_imm }
+inst_jmp = { (mnemonic_jmpb | mnemonic_jmp) ~ operand_list_one }
 
 // TRAP instruction: TRAP X, Y, Z (where X, Y, Z can be numbers or identifiers)
-inst_trap = { mnemonic_trap ~ expr ~ comma ~ expr ~ comma ~ expr }
+inst_trap = { mnemonic_trap ~ (operand_list_three | operand_list_two | operand_list_one)? }
 
 // GETA instructions: GETA $X, addr
-inst_geta = { mnemonic_geta ~ operand_reg_imm }
-inst_getab = { mnemonic_getab ~ operand_reg_imm }
+inst_geta = { mnemonic_geta ~ operand_list_two }
+inst_getab = { mnemonic_getab ~ operand_list_two }
 
 // Subroutine instructions
-inst_pushj = { mnemonic_pushj ~ operand_reg_imm }
-inst_pushjb = { mnemonic_pushjb ~ operand_reg_imm }
-inst_go_auto = { (mnemonic_pushgo | mnemonic_go) ~ operand_reg_reg_z }
-inst_pushgo_rri = { mnemonic_pushgoi ~ operand_reg_reg_imm }
-inst_pop = { mnemonic_pop ~ expr ~ comma ~ expr }
-inst_go_rri = { mnemonic_goi ~ operand_reg_reg_imm }
+inst_pushj = { mnemonic_pushj ~ operand_list_two }
+inst_pushjb = { mnemonic_pushjb ~ operand_list_two }
+inst_go_auto = { (mnemonic_pushgo | mnemonic_go) ~ (operand_list_three | operand_list_two) }
+inst_pushgo_rri = { mnemonic_pushgoi ~ operand_list_three }
+inst_pop = { mnemonic_pop ~ (operand_list_two | operand_list_one)? }
+inst_go_rri = { mnemonic_goi ~ operand_list_three }
 
 // Special register access
-inst_get = { mnemonic_get ~ expr ~ comma ~ expr }
-inst_put_auto = { mnemonic_put ~ expr ~ comma ~ expr }
-inst_puti = { mnemonic_puti ~ expr ~ comma ~ expr }
+inst_get = { mnemonic_get ~ operand_list_two }
+inst_put_auto = { mnemonic_put ~ operand_list_two }
+inst_puti = { mnemonic_puti ~ operand_list_two }
 
 // Context management
-inst_save = { mnemonic_save ~ expr ~ comma ~ expr }
-inst_unsave = { mnemonic_unsave ~ expr ~ comma ~ expr }
+inst_save = { mnemonic_save ~ operand_list_two }
+// UNSAVE $Z is the one-operand spelling of UNSAVE 0,$Z.
+inst_unsave = { mnemonic_unsave ~ (operand_list_two | operand_list_one) }
 
 // Prefetch and cache control
 inst_cache_auto = {
     (mnemonic_preld | mnemonic_prego | mnemonic_prest |
      mnemonic_syncid | mnemonic_syncd) ~
-    operand_reg_reg_z
+    (operand_list_three | operand_list_two)
 }
-inst_preld_rri = { mnemonic_preldi ~ operand_reg_reg_imm }
-inst_prego_rri = { mnemonic_pregoi ~ operand_reg_reg_imm }
-inst_prest_rri = { mnemonic_presti ~ operand_reg_reg_imm }
-inst_syncd_rri = { mnemonic_syncdi ~ operand_reg_reg_imm }
-inst_syncid_rri = { mnemonic_syncidi ~ operand_reg_reg_imm }
+inst_preld_rri = { mnemonic_preldi ~ operand_list_three }
+inst_prego_rri = { mnemonic_pregoi ~ operand_list_three }
+inst_prest_rri = { mnemonic_presti ~ operand_list_three }
+inst_syncd_rri = { mnemonic_syncdi ~ operand_list_three }
+inst_syncid_rri = { mnemonic_syncidi ~ operand_list_three }
 
 // Additional load/store 
-inst_ldunc_rri = { mnemonic_ldunci ~ operand_reg_reg_imm }
-inst_stunc_rri = { mnemonic_stunci ~ operand_reg_reg_imm }
-inst_ldht_rri = { mnemonic_ldhti ~ operand_reg_reg_imm }
-inst_stht_rri = { mnemonic_sthti ~ operand_reg_reg_imm }
-inst_ldsf_rri = { mnemonic_ldsfi ~ operand_reg_reg_imm }
-inst_stsf_rri = { mnemonic_stsfi ~ operand_reg_reg_imm }
-inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_reg_reg_imm }
-inst_cswap_rri = { mnemonic_cswapi ~ operand_reg_reg_imm }
+inst_ldunc_rri = { mnemonic_ldunci ~ operand_list_three }
+inst_stunc_rri = { mnemonic_stunci ~ operand_list_three }
+inst_ldht_rri = { mnemonic_ldhti ~ operand_list_three }
+inst_stht_rri = { mnemonic_sthti ~ operand_list_three }
+inst_ldsf_rri = { mnemonic_ldsfi ~ operand_list_three }
+inst_stsf_rri = { mnemonic_stsfi ~ operand_list_three }
+inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_list_three }
+inst_cswap_rri = { mnemonic_cswapi ~ operand_list_three }
 
 // STCO's X is an immediate byte, never a register; only Z auto-selects.
-inst_stco_auto = { mnemonic_stco ~ expr ~ comma ~ expr ~ comma ~ expr }
-inst_stco_rri = { mnemonic_stcoi ~ expr ~ comma ~ expr ~ comma ~ expr }
+inst_stco_auto = { mnemonic_stco ~ (operand_list_three | operand_list_two) }
+inst_stco_rri = { mnemonic_stcoi ~ operand_list_three }
 
 // System instructions
-inst_resume = { mnemonic_resume ~ operand_imm }
-inst_trip = { mnemonic_trip ~ expr ~ comma ~ expr ~ comma ~ expr }
-inst_swym = { mnemonic_swym ~ (expr ~ comma ~ expr ~ comma ~ expr)? }
-inst_sync = { mnemonic_sync ~ operand_imm }
-
-// Operand patterns
-operand_num_num_num = { expr ~ comma ~ expr ~ comma ~ expr }
+inst_resume = { mnemonic_resume ~ operand_list_one? }
+inst_trip = { mnemonic_trip ~ (operand_list_three | operand_list_two | operand_list_one)? }
+inst_swym = { mnemonic_swym ~ (operand_list_three | operand_list_two | operand_list_one)? }
+inst_sync = { mnemonic_sync ~ operand_list_one? }
 
 // Simple instructions
 inst_halt = { mnemonic_halt }

@@ -12,14 +12,17 @@
 ;;     separates statements.
 ;;   - A string literal has no escapes; a character literal accepts
 ;;     \n \r \t \0 \\ and \'.
-;;   - A statement is not column-sensitive.  Its first word is a label
+;;   - An indented line has no label field: its first word is the
+;;     operation.  In column 1, or after a `;', the first word is a label
 ;;     unless it is a mnemonic or directive, and a label may carry a
 ;;     leading `:' (global), interior `:'s (`Foo:Bar', qualified by
 ;;     PREFIX) and a trailing `:'.  A decimal digit followed by `H'
 ;;     is a local label instead; `B'/`F' reference the nearest one
 ;;     behind/ahead of it in an operand.
-;;   - Mnemonics and directives are case-insensitive; predefined symbols
-;;     (`rJ', `StdOut', `Fputs', `ROUND_NEAR', ...) are case-sensitive.
+;;   - Mnemonics and directives match in upper case only; predefined
+;;     symbols (`rJ', `StdOut', `Fputs', `ROUND_NEAR', ...) are
+;;     case-sensitive in their own spelling, `debug' is checksmix's own
+;;     lower-case directive.
 ;;   - The explicit immediate spellings (ADDI, SETI, GETAB, ...), the
 ;;     extension HALT, INCLUDE and the `debug "text"' preprocessor line
 ;;     are all keywords.
@@ -211,11 +214,12 @@ Each is (NAME . MEANING).")
   "Map from a keyword, spelled as `mmix--keyword-key' returns it, to its kind.")
 
 (defun mmix--keyword-key (word)
-  "Return WORD spelled as the keyword tables spell it.
-Keywords are case-insensitive and upper case, except `debug'."
-  (if (string= word mmix-debug-directive)
-      word
-    (upcase word)))
+  "Return WORD unchanged: the key the keyword tables look WORD up under.
+Keywords match in upper case only, except `debug', checksmix's own
+lower-case directive, which the tables already hold under that spelling.
+This seam stays so every lookup -- fontification, help, eldoc -- shares
+one place that decides how a word reaches the tables."
+  word)
 
 (defun mmix--keyword-kind (word)
   "Return `instruction', `directive' or nil for WORD."
@@ -223,12 +227,14 @@ Keywords are case-insensitive and upper case, except `debug'."
 
 ;;;; Statements
 
-(defconst mmix--standalone-instructions '("HALT" "SWYM" "ESPEC")
+(defconst mmix--standalone-instructions
+  '("HALT" "SWYM" "ESPEC" "POP" "RESUME" "SYNC" "TRAP" "TRIP")
   "Instructions that form a whole statement with no operands.")
 
 (defconst mmix--single-operand-keywords
   '("JMP" "JMPB" "RESUME" "SYNC" "LOC" "GREG" "PREFIX" "BYTE"
-    "WYDE" "TETRA" "OCTA" "LOCAL" "BSPEC")
+    "WYDE" "TETRA" "OCTA" "LOCAL" "BSPEC" "TRAP" "TRIP" "SWYM" "POP"
+    "UNSAVE")
   "Keywords whose statement is complete with a single operand.")
 
 (defconst mmix--rest-of-line-directives '("INCLUDE")
@@ -287,48 +293,55 @@ the operation."
   (save-excursion
     (beginning-of-line)
     (unless (nth 3 (syntax-ppss))
-      (skip-chars-forward " \t")
-      (when-let* ((first (mmix--forward-word)))
-        (let* ((second (mmix--forward-word))
-               (operation-first (mmix--operation-first-p
-                                 (mmix--bounds-text first)
-                                 (mmix--bounds-text second)
-                                 (mmix--operands-at-point-p)))
-               (label (unless operation-first first))
-               (operation (if operation-first first second)))
-          (when operation
-            (goto-char (cdr operation))
-            (skip-chars-forward " \t"))
-          (mmix--make-statement
-           :label (mmix--bounds-text label)
-           :label-beg (car label)
-           :label-end (cdr label)
-           :operation (mmix--bounds-text operation)
-           :operation-beg (car operation)
-           :operation-end (cdr operation)
-           :operands-beg (and operation (mmix--operands-at-point-p) (point))))))))
+      (let ((indented (looking-at-p "[ \t]")))
+        (skip-chars-forward " \t")
+        (when-let* ((first (mmix--forward-word)))
+          (let* ((second (mmix--forward-word))
+                 (operation-first (mmix--operation-first-p
+                                   (mmix--bounds-text first)
+                                   (mmix--bounds-text second)
+                                   (mmix--operands-at-point-p)
+                                   indented))
+                 (label (unless operation-first first))
+                 (operation (if operation-first first second)))
+            (when operation
+              (goto-char (cdr operation))
+              (skip-chars-forward " \t"))
+            (mmix--make-statement
+             :label (mmix--bounds-text label)
+             :label-beg (car label)
+             :label-end (cdr label)
+             :operation (mmix--bounds-text operation)
+             :operation-beg (car operation)
+             :operation-end (cdr operation)
+             :operands-beg (and operation (mmix--operands-at-point-p) (point)))))))))
 
-(defun mmix--operation-first-p (first second rest)
+(defun mmix--operation-first-p (first second rest indented)
   "Return non-nil when FIRST, a line's first word, is its operation.
 SECOND is the word after FIRST, or nil.  REST is non-nil when something
-other than a comment follows the last of the two words.
+other than a comment follows the last of the two words.  INDENTED is
+non-nil when the line began with a blank or a tab: checksmix reads an
+indented line as having no label field, so its first word is always the
+operation there, whatever it spells.
 
 checksmix reads a line as a bare statement before it reads it as a
 label followed by one, and the conditions below follow that order."
-  (let ((key (mmix--keyword-key first)))
-    (cond
-     ;; `2ADDU': not label-shaped.
-     ((not (string-match-p mmix--label-regexp first)) t)
-     ((member key mmix--rest-of-line-directives) (or second rest))
-     ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
-     ((null second) (or rest (member key mmix--standalone-instructions)))
-     ;; `Main SETL $0,1'.
-     ((not (mmix--keyword-kind first)) nil)
-     ;; `PUT rA,$1', `JMP Loop'.
-     ((not (mmix--keyword-kind second)) t)
-     ;; `JMP ADD' jumps to a label named ADD; `Add ADD $1,$2,$3' and
-     ;; `Set HALT' are labelled statements.
-     (t (and (not rest) (member key mmix--single-operand-keywords))))))
+  (if indented
+      t
+    (let ((key (mmix--keyword-key first)))
+      (cond
+       ;; `2ADDU': not label-shaped.
+       ((not (string-match-p mmix--label-regexp first)) t)
+       ((member key mmix--rest-of-line-directives) (or second rest))
+       ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
+       ((null second) (or rest (member key mmix--standalone-instructions)))
+       ;; `Main SETL $0,1'.
+       ((not (mmix--keyword-kind first)) nil)
+       ;; `PUT rA,$1', `JMP Loop'.
+       ((not (mmix--keyword-kind second)) t)
+       ;; `JMP ADD' jumps to a label named ADD; `Add ADD $1,$2,$3' and
+       ;; `Set HALT' are labelled statements.
+       (t (and (not rest) (member key mmix--single-operand-keywords)))))))
 
 (defun mmix--line-operation ()
   "Return the current line's operation word, or nil."
@@ -632,8 +645,8 @@ Leave one space when the text before POSITION already reaches COLUMN."
   '(
     (("LOC") "LOC expr"
      "Set the assembly location counter to expr")
-    (("GREG") "[label] GREG expr"
-     "Allocate a global register initialized to expr; optional label becomes a register alias")
+    (("GREG") "[label] GREG expr / [label] GREG"
+     "Allocate a global register initialized to expr, or to 0 if expr is omitted; optional label becomes a register alias; a nonzero value serves as a base address for the two-operand memory form")
     (("IS") "Name IS expr"
      "Define a numeric or register alias constant")
     (("PREFIX") "PREFIX str"
@@ -690,108 +703,108 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Clear bits in the medium-low wyde; the other 48 bits are preserved")
     (("ANDNL") "ANDNL $X, YZ"
      "Clear bits in the low wyde; the other 48 bits are preserved")
-    (("LDB") "LDB $X, $Y, $Z"
-     "Load byte signed")
+    (("LDB") "LDB $X, $Y, $Z / LDB $X, $Y"
+     "Load byte signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDBI" "LDB") "LDB $X, $Y, Z"
      "Load byte signed (immediate)")
-    (("LDBU") "LDBU $X, $Y, $Z"
-     "Load byte unsigned")
+    (("LDBU") "LDBU $X, $Y, $Z / LDBU $X, $Y"
+     "Load byte unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDBUI" "LDBU") "LDBU $X, $Y, Z"
      "Load byte unsigned (immediate)")
-    (("LDW") "LDW $X, $Y, $Z"
-     "Load wyde signed")
+    (("LDW") "LDW $X, $Y, $Z / LDW $X, $Y"
+     "Load wyde signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDWI" "LDW") "LDW $X, $Y, Z"
      "Load wyde signed (immediate)")
-    (("LDWU") "LDWU $X, $Y, $Z"
-     "Load wyde unsigned")
+    (("LDWU") "LDWU $X, $Y, $Z / LDWU $X, $Y"
+     "Load wyde unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDWUI" "LDWU") "LDWU $X, $Y, Z"
      "Load wyde unsigned (immediate)")
-    (("LDT") "LDT $X, $Y, $Z"
-     "Load tetra signed")
+    (("LDT") "LDT $X, $Y, $Z / LDT $X, $Y"
+     "Load tetra signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDTI" "LDT") "LDT $X, $Y, Z"
      "Load tetra signed (immediate)")
-    (("LDTU") "LDTU $X, $Y, $Z"
-     "Load tetra unsigned")
+    (("LDTU") "LDTU $X, $Y, $Z / LDTU $X, $Y"
+     "Load tetra unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDTUI" "LDTU") "LDTU $X, $Y, Z"
      "Load tetra unsigned (immediate)")
-    (("LDO") "LDO $X, $Y, $Z"
-     "Load octa")
+    (("LDO") "LDO $X, $Y, $Z / LDO $X, $Y"
+     "Load octa; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDOI" "LDO") "LDO $X, $Y, Z"
      "Load octa (immediate)")
-    (("LDOU") "LDOU $X, $Y, $Z"
-     "Load octa unsigned")
+    (("LDOU") "LDOU $X, $Y, $Z / LDOU $X, $Y"
+     "Load octa unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDOUI" "LDOU") "LDOU $X, $Y, Z"
      "Load octa unsigned (immediate)")
-    (("LDUNC") "LDUNC $X, $Y, $Z"
-     "Load octa uncached")
+    (("LDUNC") "LDUNC $X, $Y, $Z / LDUNC $X, $Y"
+     "Load octa uncached; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDUNCI" "LDUNC") "LDUNC $X, $Y, Z"
      "Load octa uncached (immediate)")
-    (("LDHT") "LDHT $X, $Y, $Z"
-     "Load high tetra")
+    (("LDHT") "LDHT $X, $Y, $Z / LDHT $X, $Y"
+     "Load high tetra; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDHTI" "LDHT") "LDHT $X, $Y, Z"
      "Load high tetra (immediate)")
-    (("LDSF") "LDSF $X, $Y, $Z"
-     "Load short float (widen f32 → f64)")
+    (("LDSF") "LDSF $X, $Y, $Z / LDSF $X, $Y"
+     "Load short float (widen f32 → f64); the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDSFI" "LDSF") "LDSF $X, $Y, Z"
      "Load short float (immediate)")
-    (("LDVTS") "LDVTS $X, $Y, $Z"
-     "Load virtual translation status")
+    (("LDVTS") "LDVTS $X, $Y, $Z / LDVTS $X, $Y"
+     "Load virtual translation status; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("LDVTSI" "LDVTS") "LDVTS $X, $Y, Z"
      "Load virtual translation status (immediate)")
-    (("CSWAP") "CSWAP $X, $Y, $Z"
-     "Compare and swap: if M8[$Y+$Z] = rP, store $X there and set $X ← 1; otherwise rP ← M8[$Y+$Z] and $X ← 0")
+    (("CSWAP") "CSWAP $X, $Y, $Z / CSWAP $X, $Y"
+     "Compare and swap: if M8[$Y+$Z] = rP, store $X there and set $X ← 1; otherwise rP ← M8[$Y+$Z] and $X ← 0; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("CSWAPI" "CSWAP") "CSWAP $X, $Y, Z"
      "Compare and swap (immediate): if M8[$Y+Z] = rP, store $X there and set $X ← 1; otherwise rP ← M8[$Y+Z] and $X ← 0")
     (("LDA") "LDA $X, $Y, $Z / LDA $X, addr"
      "Load address of $Y + $Z — the ADDU $X, $Y, $Z alias; LDA $X, addr loads addr in one tetra when it fits a byte, else in four")
     (("LDAI" "LDA") "LDA $X, $Y, Z / LDAI $X, addr"
      "Load address of $Y + Z — the ADDU $X, $Y, Z alias; LDAI $X, addr loads addr in one tetra when it fits a byte, else in four")
-    (("STB") "STB $X, $Y, $Z"
-     "Store byte signed")
+    (("STB") "STB $X, $Y, $Z / STB $X, $Y"
+     "Store byte signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STBI" "STB") "STB $X, $Y, Z"
      "Store byte signed (immediate)")
-    (("STBU") "STBU $X, $Y, $Z"
-     "Store byte unsigned")
+    (("STBU") "STBU $X, $Y, $Z / STBU $X, $Y"
+     "Store byte unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STBUI" "STBU") "STBU $X, $Y, Z"
      "Store byte unsigned (immediate)")
-    (("STW") "STW $X, $Y, $Z"
-     "Store wyde signed")
+    (("STW") "STW $X, $Y, $Z / STW $X, $Y"
+     "Store wyde signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STWI" "STW") "STW $X, $Y, Z"
      "Store wyde signed (immediate)")
-    (("STWU") "STWU $X, $Y, $Z"
-     "Store wyde unsigned")
+    (("STWU") "STWU $X, $Y, $Z / STWU $X, $Y"
+     "Store wyde unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STWUI" "STWU") "STWU $X, $Y, Z"
      "Store wyde unsigned (immediate)")
-    (("STT") "STT $X, $Y, $Z"
-     "Store tetra signed")
+    (("STT") "STT $X, $Y, $Z / STT $X, $Y"
+     "Store tetra signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STTI" "STT") "STT $X, $Y, Z"
      "Store tetra signed (immediate)")
-    (("STTU") "STTU $X, $Y, $Z"
-     "Store tetra unsigned")
+    (("STTU") "STTU $X, $Y, $Z / STTU $X, $Y"
+     "Store tetra unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STTUI" "STTU") "STTU $X, $Y, Z"
      "Store tetra unsigned (immediate)")
-    (("STO") "STO $X, $Y, $Z"
-     "Store octa")
+    (("STO") "STO $X, $Y, $Z / STO $X, $Y"
+     "Store octa; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STOI" "STO") "STO $X, $Y, Z"
      "Store octa (immediate)")
-    (("STOU") "STOU $X, $Y, $Z"
-     "Store octa unsigned")
+    (("STOU") "STOU $X, $Y, $Z / STOU $X, $Y"
+     "Store octa unsigned; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STOUI" "STOU") "STOU $X, $Y, Z"
      "Store octa unsigned (immediate)")
-    (("STUNC") "STUNC $X, $Y, $Z"
-     "Store octa uncached")
+    (("STUNC") "STUNC $X, $Y, $Z / STUNC $X, $Y"
+     "Store octa uncached; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STUNCI" "STUNC") "STUNC $X, $Y, Z"
      "Store octa uncached (immediate)")
-    (("STCO") "STCO X, $Y, $Z"
-     "Store constant octabyte")
+    (("STCO") "STCO X, $Y, $Z / STCO X, $Y"
+     "Store constant octabyte, or to the base address $Y alone resolves to; X is a byte or a register holding one")
     (("STCOI" "STCO") "STCO X, $Y, Z"
-     "Store constant octabyte (immediate)")
-    (("STHT") "STHT $X, $Y, $Z"
-     "Store high tetra")
+     "Store constant octabyte, immediate address (X is a byte or a register holding one)")
+    (("STHT") "STHT $X, $Y, $Z / STHT $X, $Y"
+     "Store high tetra; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STHTI" "STHT") "STHT $X, $Y, Z"
      "Store high tetra (immediate)")
-    (("STSF") "STSF $X, $Y, $Z"
-     "Store short float (narrow f64 → f32, honors rA rounding)")
+    (("STSF") "STSF $X, $Y, $Z / STSF $X, $Y"
+     "Store short float (narrow f64 → f32, honors rA rounding); the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STSFI" "STSF") "STSF $X, $Y, Z"
      "Store short float (immediate)")
     (("ADD") "ADD $X, $Y, $Z"
@@ -826,12 +839,12 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Subtract unsigned (wrapping)")
     (("SUBUI" "SUBU") "SUBU $X, $Y, Z"
      "Subtract unsigned immediate")
-    (("NEG") "NEG $X, Y, $Z"
-     "$X = Y − $Z signed (Y is literal)")
+    (("NEG") "NEG $X, Y, $Z / NEG $X, $Z"
+     "$X = Y − $Z signed (Y is literal; omitted Y is 0)")
     (("NEGI" "NEG") "NEG $X, Y, Z"
      "$X = Y − Z signed")
-    (("NEGU") "NEGU $X, Y, $Z"
-     "$X = Y − $Z unsigned")
+    (("NEGU") "NEGU $X, Y, $Z / NEGU $X, $Z"
+     "$X = Y − $Z unsigned (omitted Y is 0)")
     (("NEGUI" "NEGU") "NEGU $X, Y, Z"
      "$X = Y − Z unsigned")
     (("MUL") "MUL $X, $Y, $Z"
@@ -1116,18 +1129,18 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Zero or set if $Y is even")
     (("ZSEVI") "ZSEVI $X, $Y, Z"
      "Zero or set immediate if $Y is even")
-    (("PUSHJ") "PUSHJ $X, addr"
-     "Push registers and jump; return address in rJ")
-    (("PUSHJB") "PUSHJB $X, addr"
-     "Push registers and jump (backward hint)")
-    (("PUSHGO") "PUSHGO $X, $Y, $Z"
-     "Push registers and jump to $Y + $Z")
-    (("PUSHGOI" "PUSHGO") "PUSHGO $X, $Y, Z"
-     "Push registers and jump to $Y + Z")
-    (("POP") "POP X, YZ"
-     "Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order")
-    (("GO") "GO $X, $Y, $Z"
-     "Jump to $Y + $Z; save next PC in $X")
+    (("PUSHJ") "PUSHJ X, addr"
+     "Push registers and jump; return address in rJ; X is a byte or a register holding one")
+    (("PUSHJB") "PUSHJB X, addr"
+     "Push registers and jump (backward hint); X is a byte or a register holding one")
+    (("PUSHGO") "PUSHGO X, $Y, $Z / PUSHGO X, $Y"
+     "Push registers and jump to $Y + $Z, or to the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("PUSHGOI" "PUSHGO") "PUSHGO X, $Y, Z"
+     "Push registers and jump to $Y + Z; X is a byte or a register holding one")
+    (("POP") "POP X, YZ / POP xyz / POP"
+     "Pop registers and return; the hole gets the last of the X returned values, the rest land above it in order; XYZ=xyz for the one-operand form; a bare POP is POP 0,0")
+    (("GO") "GO $X, $Y, $Z / GO $X, $Y"
+     "Jump to $Y + $Z, or to the base address $Y alone resolves to; save next PC in $X")
     (("GOI" "GO") "GO $X, $Y, Z"
      "Jump to $Y + Z; save next PC in $X")
     (("GETA") "GETA $X, addr"
@@ -1142,40 +1155,40 @@ Leave one space when the text before POSITION already reaches COLUMN."
      "Write immediate Z into special register X")
     (("SAVE") "SAVE $X, 0"
      "Save register stack to memory")
-    (("UNSAVE") "UNSAVE 0, $Z"
-     "Restore register stack from memory")
-    (("RESUME") "RESUME XYZ"
-     "Resume after interrupt or trip")
-    (("TRAP") "TRAP X, Y, Z"
-     "System call (see TRAP interface above)")
+    (("UNSAVE") "UNSAVE 0, $Z / UNSAVE $Z"
+     "Restore register stack from memory; the one-operand form is UNSAVE 0,$Z; bare UNSAVE is an error")
+    (("RESUME") "RESUME XYZ / RESUME"
+     "Resume after interrupt or trip; a bare RESUME is RESUME 0")
+    (("TRAP") "TRAP X, Y, Z / TRAP X, YZ / TRAP XYZ / TRAP"
+     "System call (see TRAP interface above); X, Y and Z (or X) are each a pure byte or a register; a bare TRAP is TRAP 0,0,0")
     (("HALT") "HALT"
      "checksmix extension — encodes as TRAP 0,Halt,0")
-    (("TRIP") "TRIP X, Y, Z"
-     "Forced trip (software interrupt)")
-    (("SYNC") "SYNC XYZ"
-     "Synchronize memory/pipeline")
-    (("SWYM") "SWYM / SWYM X, Y, Z"
-     "Sympathize with your machinery (no-op); operands optional, default to zero")
-    (("PRELD") "PRELD $X, $Y, $Z"
-     "Prefetch data into cache")
-    (("PRELDI" "PRELD") "PRELD $X, $Y, Z"
-     "Prefetch data (immediate)")
-    (("PREGO") "PREGO $X, $Y, $Z"
-     "Prefetch for execution")
-    (("PREGOI" "PREGO") "PREGO $X, $Y, Z"
-     "Prefetch for execution (immediate)")
-    (("PREST") "PREST $X, $Y, $Z"
-     "Prestore data")
-    (("PRESTI" "PREST") "PREST $X, $Y, Z"
-     "Prestore data (immediate)")
-    (("SYNCD") "SYNCD $X, $Y, $Z"
-     "Synchronize data cache")
-    (("SYNCDI" "SYNCD") "SYNCD $X, $Y, Z"
-     "Synchronize data cache (immediate)")
-    (("SYNCID") "SYNCID $X, $Y, $Z"
-     "Synchronize instruction and data cache")
-    (("SYNCIDI" "SYNCID") "SYNCID $X, $Y, Z"
-     "Synchronize instruction and data cache (immediate)")
+    (("TRIP") "TRIP X, Y, Z / TRIP X, YZ / TRIP XYZ / TRIP"
+     "Forced trip (software interrupt); X, Y and Z (or X) are each a pure byte or a register; a bare TRIP is TRIP 0,0,0")
+    (("SYNC") "SYNC XYZ / SYNC"
+     "Synchronize memory/pipeline; a bare SYNC is SYNC 0")
+    (("SWYM") "SWYM / SWYM X / SWYM X, YZ / SWYM X, Y, Z"
+     "Sympathize with your machinery (no-op); operands optional, default to zero; X, Y and Z are each a pure byte or a register")
+    (("PRELD") "PRELD X, $Y, $Z / PRELD X, $Y"
+     "Prefetch data into cache, or into the range the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("PRELDI" "PRELD") "PRELD X, $Y, Z"
+     "Prefetch data (immediate); X is a byte or a register holding one")
+    (("PREGO") "PREGO X, $Y, $Z / PREGO X, $Y"
+     "Prefetch for execution, or for the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("PREGOI" "PREGO") "PREGO X, $Y, Z"
+     "Prefetch for execution (immediate); X is a byte or a register holding one")
+    (("PREST") "PREST X, $Y, $Z / PREST X, $Y"
+     "Prestore data, or the range the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("PRESTI" "PREST") "PREST X, $Y, Z"
+     "Prestore data (immediate); X is a byte or a register holding one")
+    (("SYNCD") "SYNCD X, $Y, $Z / SYNCD X, $Y"
+     "Synchronize data cache, or the range the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("SYNCDI" "SYNCD") "SYNCD X, $Y, Z"
+     "Synchronize data cache (immediate); X is a byte or a register holding one")
+    (("SYNCID") "SYNCID X, $Y, $Z / SYNCID X, $Y"
+     "Synchronize instruction and data cache, or the range the base address $Y alone resolves to; X is a byte or a register holding one")
+    (("SYNCIDI" "SYNCID") "SYNCID X, $Y, Z"
+     "Synchronize instruction and data cache (immediate); X is a byte or a register holding one")
     (("debug") "debug \"text\""
      "checksmix preprocessor line: print text and a newline to StdOut, preserving registers"))
   "One row per instruction form and directive: (SPELLINGS SYNTAX DESCRIPTION).

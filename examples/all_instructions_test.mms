@@ -4032,8 +4032,76 @@ Test283BspecEnd
         SET     Result,Test283BspecEnd-Test283BspecStart
         SET     Expect,0          % the block moved the location counter nowhere
         CMP     Temp,Result,Expect
+        PBZ     Temp,Test284
+        JMP     TestFail
+
+% ========================================
+% Test 284: the two-operand memory form's register operand, TRAP's short
+% forms, SWYM's one-operand form, a bare POP, PUSHJ's pure X and NEG's
+% short form. The two-operand base-address form (a GREG holding a base
+% address) is covered instead by tests/fixtures/greg_base_address.mms; see
+% "Intentional coverage exceptions" below.
+% ========================================
+% Every register this test touches (Expect, Result, Temp) is written here
+% before it is ever read.
+% ========================================
+Test284 ADDU    TestNum,TestNum,1
+        SET     $10,Test284Data   % a register holding Data's address
+        LDO     Result,$10        % the two-operand form: register operand, offset 0
+        SET     Expect,246
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test284b
+        JMP     TestFail
+Test284Data OCTA 246
+
+Test284b
+        TRAP    0,Fclose,0        % three-operand form: closing stdin always fails
+        SET     Result,$255
+        SETI    Expect,-1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test284c
+        JMP     TestFail
+Test284c
+        SETI    $255,0
+        TRAP    0,#0200           % two-operand form reaching the same trap: Y=Fclose(2), Z=0
+        SET     Result,$255
+        SETI    Expect,-1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test284d
+        JMP     TestFail
+Test284d
+        SWYM    1                 % the one-operand form; SWYM has no observable state
+        NEG     Result,5          % the two-operand form: Y omitted, Result = 0-5
+        SETI    Expect,-5
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test284e
+        JMP     TestFail
+Test284e
+% PUSHJ $X pushes and renames every local register below X, so the callee
+% cannot hand a result back through Result ($2) the way the other checks
+% do; $100 is global (above rG), untouched by the push, so it carries the
+% callee's mark across a bare POP -- every field 0, no return value taken.
+        SETI    $100,0
+        PUSHJ   $5,Test284Callee  % register X
+        SET     Result,$100
+        SET     Expect,1
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Test284f
+        JMP     TestFail
+Test284Callee
+        SETI    $100,1
+        POP                       % bare POP: returns with every field 0
+Test284f
+        SETI    $100,0
+        PUSHJ   5,Test284Callee2  % pure X, the same bytes as $5
+        SET     Result,$100
+        SET     Expect,1
+        CMP     Temp,Result,Expect
         PBZ     Temp,TestPass
         JMP     TestFail
+Test284Callee2
+        SETI    $100,1
+        POP
 
 % ========================================
 % Intentional coverage exceptions
@@ -4049,6 +4117,13 @@ Test283BspecEnd
 % HALT itself is not on this list: TestPass below now executes plain HALT
 % (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
 % skipped, which is real (if narrow) coverage of HALT's assembler path.
+%   The two-operand memory form's base-address spelling (a pure address
+%             resolved against a preceding GREG, e.g. `LDO $1,Data` with a
+%             GREG base ahead of it) is not exercised above: it needs a
+%             GREG holding a nonzero base, and this file's first GREG would
+%             take $254 and move rG, where every test here is written for
+%             rG=32. tests/fixtures/greg_base_address.mms covers it
+%             instead, run by tests/cli_subcommands.rs.
 % ========================================
 
 % ========================================
