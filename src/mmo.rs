@@ -378,6 +378,8 @@ impl MmoDecoder {
         if pos + 4 > data.len() {
             return Ok(None);
         }
+        // `pos + 4 <= data.len()` above, and every call below reads at `pos`
+        // or at `pos + 4` after checking `pos + 8 <= data.len()`.
         let tetra_at = |offset: usize| *data[offset..offset + 4].first_chunk::<4>().unwrap();
         if data[pos] == MM {
             let lopcode_byte = data[pos + 1];
@@ -641,8 +643,12 @@ impl MmoDecoder {
 
     /// Decode the object file, calling `write_byte` for every loaded byte
     /// in file order, and return the entry point (`$255`'s postamble
-    /// value) on success. `Err` on any shape [`MmoGenerator::generate`]
-    /// would not emit; see the module docs for every rejected shape.
+    /// value) on success. Each run starts on a tetra boundary, so the
+    /// callback also receives the zero bytes that pad a run to it, at
+    /// addresses another run may already hold: it must XOR every byte into
+    /// memory, as [`MmoDecoder::load`] does, never store it. `Err` on any
+    /// shape [`MmoGenerator::generate`] would not emit; see the module docs
+    /// for every rejected shape.
     pub fn decode<F>(&self, mut write_byte: F) -> Result<u64, String>
     where
         F: FnMut(u64, u8),
