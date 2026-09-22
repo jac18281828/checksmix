@@ -316,7 +316,7 @@ location record and its data tetras per contiguous run of assembled bytes, a
 `debug` string table, and a postamble carrying every `GREG`-initialized
 register through `$255`'s entry point. `run` on a `.mmo` reads exactly that
 shape back and rejects anything else — a stray record, a foreign-shaped one,
-or a file built before this reader — rather than risk loading it wrong. A
+or an unrecognized preamble version — rather than risk loading it wrong. A
 `.mmo` built by checksmix 0.3.12 or earlier must be rebuilt.
 
 ## Floating-point arithmetic
