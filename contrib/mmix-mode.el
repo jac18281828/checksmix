@@ -211,19 +211,11 @@ Each is (NAME . MEANING).")
     (dolist (name mmix-directives) (puthash name 'directive table))
     (puthash mmix-debug-directive 'directive table)
     table)
-  "Map from a keyword, spelled as `mmix--keyword-key' returns it, to its kind.")
-
-(defun mmix--keyword-key (word)
-  "Return WORD unchanged: the key the keyword tables look WORD up under.
-Keywords match in upper case only, except `debug', checksmix's own
-lower-case directive, which the tables already hold under that spelling.
-Every lookup -- fontification, help, eldoc -- shares this one place that
-decides how a word reaches the tables."
-  word)
+  "Map from a keyword, upper case except `debug', to its kind.")
 
 (defun mmix--keyword-kind (word)
   "Return `instruction', `directive' or nil for WORD."
-  (gethash (mmix--keyword-key word) mmix--keywords))
+  (gethash word mmix--keywords))
 
 ;;;; Statements
 
@@ -328,20 +320,19 @@ checksmix reads a line as a bare statement before it reads it as a
 label followed by one, and the conditions below follow that order."
   (if indented
       t
-    (let ((key (mmix--keyword-key first)))
-      (cond
-       ;; `2ADDU': not label-shaped.
-       ((not (string-match-p mmix--label-regexp first)) t)
-       ((member key mmix--rest-of-line-directives) (or second rest))
-       ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
-       ((null second) (or rest (member key mmix--standalone-instructions)))
-       ;; `Main SETL $0,1'.
-       ((not (mmix--keyword-kind first)) nil)
-       ;; `PUT rA,$1', `JMP Loop'.
-       ((not (mmix--keyword-kind second)) t)
-       ;; `JMP ADD' jumps to a label named ADD; `Add ADD $1,$2,$3' and
-       ;; `Set HALT' are labelled statements.
-       (t (and (not rest) (member key mmix--single-operand-keywords)))))))
+    (cond
+     ;; `2ADDU': not label-shaped.
+     ((not (string-match-p mmix--label-regexp first)) t)
+     ((member first mmix--rest-of-line-directives) (or second rest))
+     ;; `ADD $1,$2,$3' or a lone `HALT'; a lone `Done' is a label.
+     ((null second) (or rest (member first mmix--standalone-instructions)))
+     ;; `Main SETL $0,1'.
+     ((not (mmix--keyword-kind first)) nil)
+     ;; `PUT rA,$1', `JMP Loop'.
+     ((not (mmix--keyword-kind second)) t)
+     ;; `JMP ADD' jumps to a label named ADD; `Add ADD $1,$2,$3' and
+     ;; `Set HALT' are labelled statements.
+     (t (and (not rest) (member first mmix--single-operand-keywords))))))
 
 (defun mmix--line-operation ()
   "Return the current line's operation word, or nil."
@@ -373,8 +364,7 @@ A label before one of `mmix--value-directives' names a value, and any
 other label an address.  A label with a trailing colon before one of
 `mmix--bare-name-directives' defines nothing, since checksmix rejects it."
   (when-let* ((label (mmix-statement-label statement)))
-    (let ((operation (mmix--keyword-key
-                      (or (mmix-statement-operation statement) ""))))
+    (let ((operation (or (mmix-statement-operation statement) "")))
       (cond
        ((and (member operation mmix--bare-name-directives)
              (string-suffix-p ":" label))
@@ -1192,9 +1182,8 @@ Leave one space when the text before POSITION already reaches COLUMN."
     (("debug") "debug \"text\""
      "checksmix preprocessor line: print text and a newline to StdOut, preserving registers"))
   "One row per instruction form and directive: (SPELLINGS SYNTAX DESCRIPTION).
-SPELLINGS are the keywords the row documents, spelled as
-`mmix--keyword-key' returns them.  SYNTAX lists the row's source forms,
-separated by \" / \".")
+SPELLINGS are the keywords the row documents, upper case except
+`debug'.  SYNTAX lists the row's source forms, separated by \" / \".")
 
 (defconst mmix--instruction-help
   (let ((table (make-hash-table :test #'equal)))
@@ -1209,7 +1198,7 @@ separated by \" / \".")
 
 (defun mmix-instruction-help (word)
   "Return the (SYNTAX . DESCRIPTION) entries documenting WORD."
-  (gethash (mmix--keyword-key word) mmix--instruction-help))
+  (gethash word mmix--instruction-help))
 
 (defun mmix-symbol-help (symbol)
   "Return a one-line description of predefined SYMBOL, or nil."
