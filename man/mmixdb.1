@@ -111,6 +111,22 @@ Print a general register (\fB$\fIN\fR or bare \fIN\fR), a special
 register, a label's address, an IS/GREG symbol or the memory octa at the
 hex address's aligned 8-byte base (MMIX has no unaligned access).
 .TP
+.BR "p/f " \fIARG\fR ", " "p /f " \fIARG\fR ", " "print/x " \fIARG\fR ", " "\&..."
+A
+.B /f
+or
+.B /x
+suffix, attached to the command word or given as the argument's first
+word, prints the same octabyte as an IEEE 754 double or as MMIXAL hex
+(\fB#\fR, lowercase, no leading zeros) instead of a decimal integer. A NaN
+prints as
+.RB \(lq nan( \fIhex\fR ) \(rq,
+or
+.RB \(lq \-nan( \fIhex\fR ) \(rq
+when the sign bit is set, where \fIhex\fR is the 52-bit fraction field
+(the quiet bit included) in the same hex spelling. Any other suffix is an
+error.
+.TP
 .BR "set " \fITARGET\fR " " \fIVALUE\fR
 Write a general register, a special register, or the memory octa at a hex
 address's aligned 8-byte base. A symbol whose type is a register alias

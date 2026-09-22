@@ -40,12 +40,24 @@ pub enum Command {
     Breakpoints,
     Delete(Option<String>),
     Print(String),
+    PrintAs(PrintFormat, String),
     Set(String, String),
     State,
     List,
     Help,
     Quit,
     Repeat,
+}
+
+/// A `print` output format, gdb's `/f` and `/x` suffixes. Non-exhaustive: a
+/// later format is an additive change here, not a breaking one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintFormat {
+    /// The octabyte read as an IEEE 754 double (`p/f`).
+    Float,
+    /// The octabyte in MMIXAL hex notation (`p/x`).
+    Hex,
 }
 
 /// Parse one line of debugger input into a `Command`.
@@ -80,12 +92,20 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         } else {
             Some(rest.to_string())
         })),
-        "p" | "print" => {
-            if rest.is_empty() {
-                Err("print requires an argument".to_string())
-            } else {
-                Ok(Command::Print(rest.to_string()))
+        "p" | "print" => match rest.strip_prefix('/') {
+            Some(after_slash) => {
+                let (suffix, arg) = split_format_suffix(after_slash);
+                parse_print_as(suffix, arg)
             }
+            None if rest.is_empty() => Err("print requires an argument".to_string()),
+            None => Ok(Command::Print(rest.to_string())),
+        },
+        head if head.starts_with("p/") || head.starts_with("print/") => {
+            let suffix = head
+                .strip_prefix("p/")
+                .or_else(|| head.strip_prefix("print/"))
+                .expect("head matched one of the two prefixes just tested");
+            parse_print_as(suffix, rest)
         }
         "set" => match rest.split_once(char::is_whitespace) {
             Some((target, value)) if !target.is_empty() && !value.trim().is_empty() => {
@@ -107,6 +127,32 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
     }
 }
 
+/// Split a `print` format suffix from what follows it: up to the first blank
+/// is the suffix, the rest (trimmed) is the argument. No blank means the
+/// whole text is the suffix and the argument is empty.
+fn split_format_suffix(text: &str) -> (&str, &str) {
+    match text.split_once(char::is_whitespace) {
+        Some((suffix, arg)) => (suffix, arg.trim()),
+        None => (text, ""),
+    }
+}
+
+/// Resolve a `print` format suffix to a `Command::PrintAs`, gdb's "Undefined
+/// output format" error for any suffix but `f` and `x`, or `print`'s existing
+/// no-argument error for a valid format with nothing to print.
+fn parse_print_as(suffix: &str, arg: &str) -> Result<Command, String> {
+    let format = match suffix {
+        "f" => PrintFormat::Float,
+        "x" => PrintFormat::Hex,
+        _ => return Err(format!("Undefined output format \"{suffix}\".")),
+    };
+    if arg.is_empty() {
+        Err("print requires an argument".to_string())
+    } else {
+        Ok(Command::PrintAs(format, arg.to_string()))
+    }
+}
+
 /// Resolve a special-register name against `SpecialReg::name`, the single
 /// table the state dump and the assembler's predefined symbols also spell
 /// registers from.
@@ -117,7 +163,8 @@ fn special_reg_from_name(name: &str) -> Option<SpecialReg> {
 }
 
 /// Parse a general-register argument: `$N` or bare `N`, `0 <= N <= 255`.
-/// Shared by `print_register` and `set`'s target resolution.
+/// Shared by `Debugger::resolve_print_argument` and `set`'s target
+/// resolution.
 fn register_index(arg: &str) -> Option<u8> {
     let digits = arg.strip_prefix('$').unwrap_or(arg);
     let n: u16 = digits.parse().ok()?;
@@ -129,6 +176,63 @@ fn format_value(value: u64, format: ValueFormat) -> String {
         ValueFormat::Signed => (value as i64).to_string(),
         ValueFormat::Unsigned => value.to_string(),
     }
+}
+
+/// Render an octabyte for `p/f` or `p/x`, independent of `ValueFormat` --
+/// `set_format`'s signed/unsigned choice governs plain `print` only.
+fn format_as(value: u64, format: PrintFormat) -> String {
+    match format {
+        PrintFormat::Float => format_float(value),
+        PrintFormat::Hex => format_hex(value),
+    }
+}
+
+/// `p/x`: the MMIXAL constant spelling -- `#` followed by lowercase hex
+/// digits, no leading zeros (Rust's `{:x}` already strips them).
+fn format_hex(value: u64) -> String {
+    format!("#{value:x}")
+}
+
+/// `p/f`: the octabyte read as an IEEE 754 double, in shortest round-trip
+/// digits. Positional notation for zero and for finite magnitudes in
+/// `[1e-4, 1e16)`; scientific otherwise -- Rust's `{}` never switches to
+/// scientific notation on its own, so the cutoff is applied here.
+fn format_float(bits: u64) -> String {
+    let value = f64::from_bits(bits);
+    if value.is_nan() {
+        return format_nan(bits);
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-inf".to_string()
+        } else {
+            "inf".to_string()
+        };
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            "0".to_string()
+        };
+    }
+    let magnitude = value.abs();
+    if (1e-4..1e16).contains(&magnitude) {
+        format!("{value}")
+    } else {
+        format!("{value:e}")
+    }
+}
+
+/// A NaN's sign and 52-bit fraction field, gdb's `nan(<payload>)` form: the
+/// fraction (quiet bit included) in the same hex spelling as `p/x`, prefixed
+/// with `-` when the sign bit is set. The fraction and the quiet bit are what
+/// distinguish one NaN from another; the exponent field carries nothing.
+fn format_nan(bits: u64) -> String {
+    const FRACTION_MASK: u64 = (1 << 52) - 1;
+    let sign = if bits & (1 << 63) != 0 { "-" } else { "" };
+    let fraction = bits & FRACTION_MASK;
+    format!("{sign}nan({})", format_hex(fraction))
 }
 
 /// Write every assembled instruction's encoded bytes into `mmix`'s memory,
@@ -288,6 +392,7 @@ impl Debugger {
             Command::Breakpoints => self.do_breakpoints(),
             Command::Delete(arg) => vec![self.do_delete(arg.clone())],
             Command::Print(arg) => vec![self.do_print(arg)],
+            Command::PrintAs(format, arg) => vec![self.do_print_as(*format, arg)],
             Command::Set(target, value) => vec![self.do_set(target.clone(), value.clone())],
             Command::State => self.do_state(),
             Command::List => self.do_list(),
@@ -499,33 +604,49 @@ impl Debugger {
         }
     }
 
-    /// `print <arg>` resolution, in priority order: `$N`/bare `N` (general
-    /// register), a special-register name, a label, an IS/GREG symbol, a hex
-    /// address (the memory octa at its aligned 8-byte base), else an error.
-    /// A leading ':' is stripped before the label/symbol lookups, since
-    /// `MMixAssembler::labels`/`symbols` key a root name without it.
-    fn do_print(&self, arg: &str) -> String {
+    /// `print <arg>` argument resolution, in priority order: `$N`/bare `N`
+    /// (general register), a special-register name, a label, an IS/GREG
+    /// symbol, a hex address (the memory octa at its aligned 8-byte base),
+    /// else unresolved. A leading ':' is stripped before the label/symbol
+    /// lookups, since `MMixAssembler::labels`/`symbols` key a root name
+    /// without it. Shared by `do_print` and `do_print_as`, so plain and
+    /// formatted printing can never disagree about what an argument names.
+    fn resolve_print_argument(&self, arg: &str) -> Option<u64> {
         let arg = arg.trim();
-        if let Some(value) = self.print_register(arg) {
-            return value;
+        if let Some(n) = register_index(arg) {
+            return Some(self.mmix.get_register(n));
         }
         if let Some(reg) = special_reg_from_name(arg) {
-            return format_value(self.mmix.get_special(reg), self.format);
+            return Some(self.mmix.get_special(reg));
         }
         let key = arg.strip_prefix(':').unwrap_or(arg);
         if let Some(&addr) = self.assembler.labels.get(key) {
-            return format_value(addr, self.format);
+            return Some(addr);
         }
         if let Some(sym) = self.assembler.symbols.get(key) {
-            return match sym {
-                SymbolType::Register(n) => format_value(self.mmix.get_register(*n), self.format),
-                SymbolType::Constant(v) => format_value(*v, self.format),
-            };
+            return Some(match sym {
+                SymbolType::Register(n) => self.mmix.get_register(*n),
+                SymbolType::Constant(v) => *v,
+            });
         }
-        if let Some(addr) = self.parse_hex_address(arg) {
-            return format_value(self.mmix.read_octa(addr), self.format);
+        self.parse_hex_address(arg)
+            .map(|addr| self.mmix.read_octa(addr))
+    }
+
+    fn do_print(&self, arg: &str) -> String {
+        match self.resolve_print_argument(arg) {
+            Some(value) => format_value(value, self.format),
+            None => format!("No symbol \"{}\" in current context.", arg.trim()),
         }
-        format!("No symbol \"{arg}\" in current context.")
+    }
+
+    /// `p/f`/`p/x`: the same argument resolution as plain `print`, formatted
+    /// as `format` instead of by `self.format`.
+    fn do_print_as(&self, format: PrintFormat, arg: &str) -> String {
+        match self.resolve_print_argument(arg) {
+            Some(value) => format_as(value, format),
+            None => format!("No symbol \"{}\" in current context.", arg.trim()),
+        }
     }
 
     /// `set <target> <value>`: writes a general register, a special
@@ -582,11 +703,6 @@ impl Debugger {
             .map(|v| v as u64)
             .or_else(|_| value.parse::<u64>())
             .ok()
-    }
-
-    fn print_register(&self, arg: &str) -> Option<String> {
-        let n = register_index(arg)?;
-        Some(format_value(self.mmix.get_register(n), self.format))
     }
 
     fn parse_hex_address(&self, arg: &str) -> Option<u64> {
@@ -719,7 +835,7 @@ continue      c, continue                      Resume, single-stepping until a b
 run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
 break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
 delete        d, delete, d <line>, d <label>   Delete one breakpoint, or every breakpoint given no argument.
-print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base.
+print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base. p/f and p/x, attached or detached, print it as an IEEE double or in hex.
 set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
@@ -895,6 +1011,39 @@ Text\tBYTE\t\"Hi\",0
         assert_eq!(parse_command(""), Ok(Command::Repeat));
         assert_eq!(parse_command("   "), Ok(Command::Repeat));
         assert!(parse_command("bogus").is_err());
+    }
+
+    #[test]
+    fn parse_command_maps_print_format_suffixes() {
+        assert_eq!(
+            parse_command("p/f $1"),
+            Ok(Command::PrintAs(PrintFormat::Float, "$1".to_string()))
+        );
+        assert_eq!(
+            parse_command("print/x rA"),
+            Ok(Command::PrintAs(PrintFormat::Hex, "rA".to_string()))
+        );
+        assert_eq!(
+            parse_command("p /f $1"),
+            Ok(Command::PrintAs(PrintFormat::Float, "$1".to_string()))
+        );
+        assert_eq!(
+            parse_command("p/z $1"),
+            Err("Undefined output format \"z\".".to_string())
+        );
+        assert_eq!(
+            parse_command("p/2x $1"),
+            Err("Undefined output format \"2x\".".to_string())
+        );
+        assert_eq!(
+            parse_command("p/ $1"),
+            Err("Undefined output format \"\".".to_string())
+        );
+        assert_eq!(
+            parse_command("p/f"),
+            Err("print requires an argument".to_string())
+        );
+        assert_eq!(parse_command("p $1"), Ok(Command::Print("$1".to_string())));
     }
 
     #[test]
@@ -1306,6 +1455,152 @@ Gap     LOC     #300
             format_value(dbg.mmix.get_special(SpecialReg::RJ), dbg.format)
         );
         assert_eq!(dbg.do_print("rJ"), "244837814047284");
+    }
+
+    #[test]
+    fn print_x_formats_every_hex_table_row() {
+        assert_eq!(format_as(0, PrintFormat::Hex), "#0");
+        assert_eq!(format_as(5, PrintFormat::Hex), "#5");
+        assert_eq!(
+            format_as(0x3FE0000000000000, PrintFormat::Hex),
+            "#3fe0000000000000"
+        );
+        assert_eq!(
+            format_as(0xFFFFFFFFFFFFFFFF, PrintFormat::Hex),
+            "#ffffffffffffffff"
+        );
+    }
+
+    #[test]
+    fn print_f_formats_every_float_table_row() {
+        assert_eq!(format_as(0x3FE0000000000000, PrintFormat::Float), "0.5");
+        assert_eq!(format_as(0x3FF0000000000000, PrintFormat::Float), "1");
+        assert_eq!(format_as(0x4059000000000000, PrintFormat::Float), "100");
+        assert_eq!(format_as(0xC004000000000000, PrintFormat::Float), "-2.5");
+        assert_eq!(format_as(0x3F1A36E2EB1C432D, PrintFormat::Float), "0.0001");
+        assert_eq!(format_as(0x3EE4F8B588E368F1, PrintFormat::Float), "1e-5");
+        assert_eq!(format_as(0x4341C37937E08000, PrintFormat::Float), "1e16");
+        assert_eq!(
+            format_as(0x7FEFFFFFFFFFFFFF, PrintFormat::Float),
+            "1.7976931348623157e308"
+        );
+        assert_eq!(
+            format_as(0x0010000000000000, PrintFormat::Float),
+            "2.2250738585072014e-308"
+        );
+        assert_eq!(format_as(0x0000000000000001, PrintFormat::Float), "5e-324");
+        assert_eq!(format_as(0, PrintFormat::Float), "0");
+        assert_eq!(format_as(0x8000000000000000, PrintFormat::Float), "-0");
+        assert_eq!(format_as(0x7FF0000000000000, PrintFormat::Float), "inf");
+        assert_eq!(format_as(0xFFF0000000000000, PrintFormat::Float), "-inf");
+        assert_eq!(
+            format_as(0x7FF8000000000000, PrintFormat::Float),
+            "nan(#8000000000000)"
+        );
+        assert_eq!(
+            format_as(0xFFF8000000000001, PrintFormat::Float),
+            "-nan(#8000000000001)"
+        );
+        assert_eq!(format_as(0x7FF0000000000001, PrintFormat::Float), "nan(#1)");
+    }
+
+    /// A general register, a special register, a label, a register-valued
+    /// (`GREG`) symbol, a constant-valued (`IS`) symbol and a hex address --
+    /// every form `do_print` resolves. `Limit` and `Sp` mirror
+    /// `CONSTANT_SYMBOL_PROGRAM` and `STACK_PROGRAM`'s ordering, the shape
+    /// the assembler expects.
+    const ARG_FORMS_PROGRAM: &str = "\
+        LOC     Data_Segment
+Cells   OCTA    0
+Sp      GREG    Cells
+Limit   IS      100
+        LOC     #100
+Main    TRAP    0,Halt,0
+";
+
+    #[test]
+    fn print_format_suffixes_apply_to_every_argument_form() {
+        let mut dbg = Debugger::load(assemble(ARG_FORMS_PROGRAM, "argforms.mms"));
+        let main_addr = *dbg.assembler.labels.get("Main").unwrap();
+        dbg.do_set("$1".to_string(), "0x3FE0000000000000".to_string());
+        dbg.mmix.set_special(SpecialReg::RJ, 0x2A);
+        dbg.do_set("Sp".to_string(), "9".to_string());
+        dbg.mmix.write_octa(0x200, 0x3FF0000000000000);
+
+        let cases: [(&str, u64); 6] = [
+            ("$1", 0x3FE0000000000000),
+            ("rJ", 0x2A),
+            ("Main", main_addr),
+            ("Sp", 9),
+            ("Limit", 100),
+            ("0x200", 0x3FF0000000000000),
+        ];
+        for (arg, expected) in cases {
+            assert_eq!(
+                dbg.resolve_print_argument(arg),
+                Some(expected),
+                "resolution mismatch for {arg}"
+            );
+            assert_eq!(
+                dbg.do_print_as(PrintFormat::Hex, arg),
+                format_as(expected, PrintFormat::Hex),
+                "p/x mismatch for {arg}"
+            );
+            assert_eq!(
+                dbg.do_print_as(PrintFormat::Float, arg),
+                format_as(expected, PrintFormat::Float),
+                "p/f mismatch for {arg}"
+            );
+        }
+
+        assert_eq!(
+            dbg.do_print_as(PrintFormat::Hex, "Bogus"),
+            "No symbol \"Bogus\" in current context."
+        );
+        assert_eq!(
+            dbg.do_print_as(PrintFormat::Float, "Bogus"),
+            "No symbol \"Bogus\" in current context."
+        );
+    }
+
+    /// `set_format` governs `ValueFormat::Signed`/`Unsigned` for plain
+    /// `print` only; `p/x` and `p/f` read the same bits either way.
+    #[test]
+    fn set_format_affects_plain_print_only() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "format.mms"));
+        dbg.do_set("$1".to_string(), "-1".to_string());
+        let signed = dbg.do_print("$1");
+        let hex = dbg.do_print_as(PrintFormat::Hex, "$1");
+        let float = dbg.do_print_as(PrintFormat::Float, "$1");
+
+        dbg.set_format(ValueFormat::Unsigned);
+
+        assert_ne!(
+            signed,
+            dbg.do_print("$1"),
+            "set_format must change plain print"
+        );
+        assert_eq!(
+            dbg.do_print_as(PrintFormat::Hex, "$1"),
+            hex,
+            "p/x must ignore set_format"
+        );
+        assert_eq!(
+            dbg.do_print_as(PrintFormat::Float, "$1"),
+            float,
+            "p/f must ignore set_format"
+        );
+    }
+
+    #[test]
+    fn blank_repeats_a_formatted_print() {
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "repeat_fmt.mms"));
+        dbg.do_set("$1".to_string(), "0x2A".to_string());
+        let cmd = parse_command("p/x $1").unwrap();
+        let first = dbg.execute(cmd);
+        let repeated = dbg.execute(Command::Repeat);
+        assert_eq!(first, repeated);
+        assert_eq!(first, vec!["#2a".to_string()]);
     }
 
     /// Every register number resolves to the variant with that discriminant,

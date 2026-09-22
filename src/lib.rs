@@ -10,7 +10,9 @@ mod mmix;
 mod mmixal;
 mod mmo;
 
-pub use debugger::{Command, Debugger, entry_point, parse_command, start_program, write_image};
+pub use debugger::{
+    Command, Debugger, PrintFormat, entry_point, parse_command, start_program, write_image,
+};
 pub use mix::Mix;
 pub use mmix::{Host, MMix, SpecialReg, StdHost, Stop, TrapCode, ValueFormat};
 pub use mmixal::{MMixAssembler, SourceLoc};
