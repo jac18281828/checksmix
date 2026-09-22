@@ -217,8 +217,8 @@ Each is (NAME . MEANING).")
   "Return WORD unchanged: the key the keyword tables look WORD up under.
 Keywords match in upper case only, except `debug', checksmix's own
 lower-case directive, which the tables already hold under that spelling.
-This seam stays so every lookup -- fontification, help, eldoc -- shares
-one place that decides how a word reaches the tables."
+Every lookup -- fontification, help, eldoc -- shares this one place that
+decides how a word reaches the tables."
   word)
 
 (defun mmix--keyword-kind (word)

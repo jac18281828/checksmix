@@ -1856,75 +1856,83 @@ impl MMixAssembler {
     /// as a remark.
     fn statement_is_label_only(pair: &pest::iterators::Pair<Rule>) -> bool {
         let mut inner = pair.clone().into_inner();
-        matches!(inner.next().map(|p| p.as_rule()), Some(Rule::label_def)) && inner.next().is_none()
+        matches!(
+            inner.next().map(|p| p.as_rule()),
+            Some(Rule::label_def | Rule::local_label_def)
+        ) && inner.next().is_none()
     }
 
-    /// LEX-2: whether the physical line numbered `line_number` in `source`
-    /// opens with a blank or a tab. Independent of what pest's own implicit
-    /// whitespace already skipped before handing a `Rule::line` pair its
-    /// span -- that span starts past any leading blank, so indentation is
-    /// only visible by reading the raw line back out of the source.
-    fn line_opens_indented(source: &str, line_number: usize) -> bool {
-        source
-            .split('\n')
-            .nth(line_number - 1)
-            .and_then(|line| line.chars().next())
-            .is_some_and(|c| c == ' ' || c == '\t')
+    /// Whether the line whose `Rule::line` pair starts at byte `start` in
+    /// `source` opens with a blank or a tab. `program` is not atomic, so
+    /// pest already skipped any leading blank before handing the pair its
+    /// span; the byte just behind `start` is that blank's last character
+    /// when there was one, or the newline (or start of file) that closed
+    /// the previous line when there was none -- so one lookback byte
+    /// answers it, with no rescan of the line's own text.
+    fn line_opens_indented(source: &str, start: usize) -> bool {
+        start > 0 && matches!(source.as_bytes()[start - 1], b' ' | b'\t')
     }
 
-    /// The label-shaped pair that opens `stmt_pair`'s match, if any:
-    /// `label_def` or `local_label_def` from `statement`'s own label
-    /// alternatives, or the local label / global id `is_directive` reads
-    /// ahead of its own `IS` keyword -- the one directive whose grammar
-    /// folds a label into itself. `None` when `stmt_pair` matched via
-    /// `instruction` or a directive that carries no label.
+    /// The label-shaped pair that opens `stmt_pair`'s match, and the pair
+    /// right after it if the label was not the whole match: `label_def` or
+    /// `local_label_def` from `statement`'s own label alternatives, paired
+    /// with the instruction or directive that followed; or the local label
+    /// / global id `is_directive` reads ahead of its own `IS` keyword --
+    /// the one directive whose grammar folds a label into itself -- paired
+    /// with `IS`'s own keyword pair. `(None, _)` when `stmt_pair` matched
+    /// via `instruction` or a directive that carries no label.
+    fn statement_label_split<'i>(
+        stmt_pair: &pest::iterators::Pair<'i, Rule>,
+    ) -> (
+        Option<pest::iterators::Pair<'i, Rule>>,
+        Option<pest::iterators::Pair<'i, Rule>>,
+    ) {
+        let mut inner = stmt_pair.clone().into_inner();
+        let Some(first) = inner.next() else {
+            return (None, None);
+        };
+        match first.as_rule() {
+            Rule::label_def | Rule::local_label_def => {
+                let after = inner.next();
+                (Some(first), after)
+            }
+            Rule::directive => {
+                let Some(d) = first.into_inner().next() else {
+                    return (None, None);
+                };
+                if d.as_rule() == Rule::is_directive {
+                    let mut is_inner = d.into_inner();
+                    let label = is_inner.next();
+                    let after = is_inner.next();
+                    (label, after)
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        }
+    }
+
+    /// The label-shaped pair that opens `stmt_pair`'s match, if any. See
+    /// `statement_label_split`.
     fn statement_label_pair<'i>(
         stmt_pair: &pest::iterators::Pair<'i, Rule>,
     ) -> Option<pest::iterators::Pair<'i, Rule>> {
-        let first = stmt_pair.clone().into_inner().next()?;
-        match first.as_rule() {
-            Rule::label_def | Rule::local_label_def => Some(first),
-            Rule::directive => {
-                let d = first.into_inner().next()?;
-                if d.as_rule() == Rule::is_directive {
-                    d.into_inner().next()
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+        Self::statement_label_split(stmt_pair).0
     }
 
     /// The pair right after `stmt_pair`'s opening label, if the label was
-    /// not the whole match: the instruction or directive that followed it
-    /// in `statement`'s label alternatives, or `IS`'s own keyword pair in
-    /// `is_directive`.
+    /// not the whole match. See `statement_label_split`.
     fn statement_after_label<'i>(
         stmt_pair: &pest::iterators::Pair<'i, Rule>,
     ) -> Option<pest::iterators::Pair<'i, Rule>> {
-        let mut inner = stmt_pair.clone().into_inner();
-        let first = inner.next()?;
-        match first.as_rule() {
-            Rule::label_def | Rule::local_label_def => inner.next(),
-            Rule::directive => {
-                let d = first.into_inner().next()?;
-                if d.as_rule() == Rule::is_directive {
-                    let mut is_inner = d.into_inner();
-                    let _label_tok = is_inner.next();
-                    is_inner.next()
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+        Self::statement_label_split(stmt_pair).1
     }
 
-    /// LEX-2, case 1: an indented line has no label field, so a statement
-    /// that opened by reading one is an unknown operation even when a real
-    /// instruction or directive followed it (`\tFoo SET $2,9`,
-    /// `\t2H JMP 2F`, an indented `Foo IS 5`). `{col}` lands on whatever
+    /// An indented line has no label field, so a statement that opened by
+    /// reading one is an unknown operation even when a real instruction or
+    /// directive followed it (`\tFoo SET $2,9`, `\t2H JMP 2F`, an indented
+    /// `Foo IS 5`). `{col}` lands on whatever
     /// followed the label -- the instruction, the directive, or `IS`'s own
     /// keyword -- matching where the same diagnostic already lands for a
     /// bare word followed by trailing text.
@@ -1942,19 +1950,23 @@ impl MMixAssembler {
         Self::unknown_operation_error(segment, filename, line, col)
     }
 
-    /// LEX-2, case 2: an indented line's lone word, with nothing at all
-    /// following it, is an unknown operation rather than a silently defined
-    /// label. `{col}` is the word itself, since nothing follows it to point
-    /// at.
+    /// An indented line's lone word, with nothing at all following it, is
+    /// an unknown operation rather than a silently defined label. `{col}`
+    /// is the word itself, since nothing follows it to point at; `{statement}`
+    /// is formed the way the opcode-field diagnosis forms it -- the source
+    /// text from the line's start through `remark_pair`'s end, trimmed --
+    /// since `label_pair`'s own span can carry trailing blanks that a
+    /// following optional token left unconsumed.
     fn indented_bare_label_error(
         label_pair: &pest::iterators::Pair<Rule>,
+        remark_pair: &pest::iterators::Pair<Rule>,
+        source: &str,
         filename: &str,
+        segment_start: usize,
     ) -> String {
+        let segment = &source[segment_start..remark_pair.as_span().end()];
         let (line, col) = label_pair.line_col();
-        format!(
-            "{filename}:{line}:{col}: syntax error: unknown operation: {}",
-            label_pair.as_str()
-        )
+        Self::unknown_operation_error(segment, filename, line, col)
     }
 
     /// `SAVE` and `UNSAVE` are the two of the seven bare mnemonics the
@@ -1962,12 +1974,18 @@ impl MMixAssembler {
     /// exactly two operands, so the one implicit operand an empty field
     /// gives is not enough to assemble it, and `UNSAVE`'s new one-operand
     /// form reads that implicit operand as a register, which 0 is not.
-    /// Owner-approved: both are errors in every position a bare word can
+    /// Both are errors in every position a bare word can
     /// appear -- indented, column 1, or after `;` -- never a silently
-    /// defined label. `None` when `label_pair`'s name is neither.
+    /// defined label. `None` when `label_pair`'s name is neither. `SAVE`'s
+    /// diagnostic names the statement as written -- `{statement}`, formed
+    /// as `indented_bare_label_error` forms it -- so a trailing colon
+    /// shows; `UNSAVE`'s does not name the word at all.
     fn bare_reserved_mnemonic_error(
         label_pair: &pest::iterators::Pair<Rule>,
+        remark_pair: &pest::iterators::Pair<Rule>,
+        source: &str,
         filename: &str,
+        segment_start: usize,
     ) -> Option<String> {
         let name = label_pair
             .clone()
@@ -1977,9 +1995,10 @@ impl MMixAssembler {
             .unwrap_or_default();
         let (line, col) = label_pair.line_col();
         match name.as_str() {
-            "SAVE" => Some(format!(
-                "{filename}:{line}:{col}: syntax error: unknown operation: SAVE"
-            )),
+            "SAVE" => {
+                let segment = &source[segment_start..remark_pair.as_span().end()];
+                Some(Self::unknown_operation_error(segment, filename, line, col))
+            }
             "UNSAVE" => Some(format!(
                 "{filename}:{line}:{col}: pure value 0 cannot be used where a register is required"
             )),
@@ -2039,95 +2058,7 @@ impl MMixAssembler {
                 if pair.as_rule() == Rule::program {
                     for line_pair in pair.into_inner() {
                         if line_pair.as_rule() == Rule::line {
-                            // Tracks where the current `;`-delimited segment
-                            // began, whether its statement was a bare label,
-                            // and whether it had a statement at all, so a
-                            // segment's candidate remark is diagnosed by the
-                            // matching function and never blamed on a
-                            // sibling's parens. LEX-2 (an indented line has
-                            // no label field) applies only to a line's own
-                            // first segment -- a statement after `;` keeps
-                            // reading a label, wherever the physical line
-                            // started.
-                            let (line_number, _) = line_pair.line_col();
-                            let line_indented =
-                                Self::line_opens_indented(&unit.preprocessed, line_number);
-                            let mut segment_start = line_pair.as_span().start();
-                            let mut is_first_segment = true;
-                            let mut label_only = false;
-                            let mut has_statement = false;
-                            let mut bare_label_pair: Option<pest::iterators::Pair<Rule>> = None;
-                            for stmt_pair in line_pair.into_inner() {
-                                match stmt_pair.as_rule() {
-                                    Rule::statement => {
-                                        label_only = Self::statement_is_label_only(&stmt_pair);
-                                        has_statement = true;
-                                        bare_label_pair = None;
-                                        if is_first_segment
-                                            && line_indented
-                                            && let Some(label_pair) =
-                                                Self::statement_label_pair(&stmt_pair)
-                                            && stmt_pair.as_span().end()
-                                                > label_pair.as_span().end()
-                                        {
-                                            return Err(Self::indented_label_statement_error(
-                                                &stmt_pair,
-                                                &label_pair,
-                                                &unit.preprocessed,
-                                                &unit.filename,
-                                                segment_start,
-                                            ));
-                                        }
-                                        if label_only {
-                                            bare_label_pair = stmt_pair.clone().into_inner().next();
-                                        }
-                                        self.first_pass_statement(stmt_pair)?;
-                                    }
-                                    Rule::remark => {
-                                        if label_only && stmt_pair.as_str().is_empty() {
-                                            let label_pair = bare_label_pair
-                                                .as_ref()
-                                                .expect("label_only implies a label pair");
-                                            if let Some(err) = Self::bare_reserved_mnemonic_error(
-                                                label_pair,
-                                                &unit.filename,
-                                            ) {
-                                                return Err(err);
-                                            }
-                                            if is_first_segment && line_indented {
-                                                return Err(Self::indented_bare_label_error(
-                                                    label_pair,
-                                                    &unit.filename,
-                                                ));
-                                            }
-                                        }
-                                        if label_only {
-                                            Self::diagnose_unrecognized_opcode(
-                                                &stmt_pair,
-                                                &unit.preprocessed,
-                                                &unit.filename,
-                                                segment_start,
-                                            )?;
-                                        } else {
-                                            Self::check_remark(
-                                                &stmt_pair,
-                                                &unit.preprocessed,
-                                                &unit.filename,
-                                                segment_start,
-                                                has_statement,
-                                            )?;
-                                        }
-                                        // Skip the `;` that follows, if any,
-                                        // so the next segment starts clean.
-                                        segment_start = stmt_pair.as_span().end() + 1;
-                                        is_first_segment = false;
-                                        label_only = false;
-                                        has_statement = false;
-                                        bare_label_pair = None;
-                                    }
-                                    _ => {}
-                                }
-                            }
+                            self.first_pass_line(line_pair, &unit.preprocessed, &unit.filename)?;
                         }
                     }
                 }
@@ -2189,6 +2120,101 @@ impl MMixAssembler {
         }
 
         self.current_addr = saved_addr;
+        Ok(())
+    }
+
+    /// Pass 1's per-line walk. Tracks where the current `;`-delimited
+    /// segment began and whether its statement was a bare label, so a
+    /// segment's candidate remark is diagnosed by the matching function and
+    /// never blamed on a sibling's parens. The rule that an indented line
+    /// has no label field applies only to a line's own first segment -- a
+    /// statement after `;` keeps reading a label, wherever the physical
+    /// line started.
+    fn first_pass_line(
+        &mut self,
+        line_pair: pest::iterators::Pair<Rule>,
+        source: &str,
+        filename: &str,
+    ) -> Result<(), String> {
+        let mut segment_start = line_pair.as_span().start();
+        let line_indented = Self::line_opens_indented(source, segment_start);
+        let mut is_first_segment = true;
+        let mut has_statement = false;
+        // `Some(label_pair)` exactly when the current segment's statement
+        // is a bare label with no instruction or directive attached.
+        let mut bare_label: Option<pest::iterators::Pair<Rule>> = None;
+
+        for stmt_pair in line_pair.into_inner() {
+            match stmt_pair.as_rule() {
+                Rule::statement => {
+                    has_statement = true;
+                    if is_first_segment
+                        && line_indented
+                        && let Some(label_pair) = Self::statement_label_pair(&stmt_pair)
+                        && stmt_pair.as_span().end() > label_pair.as_span().end()
+                    {
+                        return Err(Self::indented_label_statement_error(
+                            &stmt_pair,
+                            &label_pair,
+                            source,
+                            filename,
+                            segment_start,
+                        ));
+                    }
+                    bare_label = Self::statement_is_label_only(&stmt_pair)
+                        .then(|| stmt_pair.clone().into_inner().next())
+                        .flatten();
+                    self.first_pass_statement(stmt_pair)?;
+                }
+                Rule::remark => {
+                    if let Some(label_pair) = bare_label.as_ref()
+                        && stmt_pair.as_str().is_empty()
+                    {
+                        if let Some(err) = Self::bare_reserved_mnemonic_error(
+                            label_pair,
+                            &stmt_pair,
+                            source,
+                            filename,
+                            segment_start,
+                        ) {
+                            return Err(err);
+                        }
+                        if is_first_segment && line_indented {
+                            return Err(Self::indented_bare_label_error(
+                                label_pair,
+                                &stmt_pair,
+                                source,
+                                filename,
+                                segment_start,
+                            ));
+                        }
+                    }
+                    if bare_label.is_some() {
+                        Self::diagnose_unrecognized_opcode(
+                            &stmt_pair,
+                            source,
+                            filename,
+                            segment_start,
+                        )?;
+                    } else {
+                        Self::check_remark(
+                            &stmt_pair,
+                            source,
+                            filename,
+                            segment_start,
+                            has_statement,
+                        )?;
+                    }
+                    // Skip the `;` that follows, if any, so the next
+                    // segment starts clean.
+                    segment_start = stmt_pair.as_span().end() + 1;
+                    is_first_segment = false;
+                    has_statement = false;
+                    bare_label = None;
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -2848,7 +2874,7 @@ impl MMixAssembler {
     fn parse_inst_set(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // mnemonic_set
-        let operands = parts.next().unwrap(); // operand_reg_z
+        let operands = parts.next().unwrap(); // operand_list_two
         let mut ops = operands.into_inner();
         let dest = self.parse_register(ops.next().unwrap())?;
         self.lower_set_source(dest, ops.next().unwrap())
@@ -2894,8 +2920,8 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let _mnem = parts.next(); // mnemonic_seti  
-        let operands = parts.next().unwrap(); // operand_reg_imm
+        let _mnem = parts.next(); // mnemonic_seti
+        let operands = parts.next().unwrap(); // operand_list_two
         let mut ops = operands.into_inner();
         let dest_reg = self.parse_register(ops.next().unwrap())?;
         let val = self.parse_number(ops.next().unwrap())?;
@@ -4055,7 +4081,7 @@ impl MMixAssembler {
         let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
-        let operand = parts.next().unwrap(); // Get operand_reg_imm
+        let operand = parts.next().unwrap(); // Get operand_list_two
 
         let mut operand_parts = operand.into_inner();
         let reg_pair = operand_parts.next().unwrap();
@@ -4099,7 +4125,7 @@ impl MMixAssembler {
         let (line, col) = pair.line_col();
         let mut parts = pair.into_inner();
         let _mnem = parts.next(); // Skip mnemonic
-        let operand = parts.next().unwrap(); // Get operand_reg_imm
+        let operand = parts.next().unwrap(); // Get operand_list_two
 
         let mut operand_parts = operand.into_inner();
         let reg_pair = operand_parts.next().unwrap();
@@ -4119,6 +4145,23 @@ impl MMixAssembler {
         let z = (resolved.field & 0xFF) as u8;
 
         Ok(MMixInstruction::GETAB(x, y, z))
+    }
+
+    /// Splits a pure 16-bit value into its high and low bytes: Y and Z for
+    /// the two-operand forms `TRAP`'s family, `POP`, `PUSHJ` and `PUSHJB`
+    /// each resolve a combined field into.
+    fn split_hi_lo_byte(value: u16) -> (u8, u8) {
+        ((value >> 8) as u8, (value & 0xFF) as u8)
+    }
+
+    /// Splits a pure 24-bit value into X, Y and Z: the one-operand form
+    /// `TRAP`'s family and `POP` both resolve a combined field into.
+    fn split_xyz_bytes(value: u32) -> (u8, u8, u8) {
+        (
+            (value >> 16) as u8,
+            ((value >> 8) & 0xFF) as u8,
+            (value & 0xFF) as u8,
+        )
     }
 
     /// `TRAP`/`TRIP`/`SWYM`'s shared operand shapes: three fields (each a
@@ -4147,16 +4190,14 @@ impl MMixAssembler {
                 let mut ops = operands.into_inner();
                 let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
                 let yz = self.parse_number(ops.next().unwrap())? as u16;
-                Ok((x, (yz >> 8) as u8, (yz & 0xFF) as u8))
+                let (y, z) = Self::split_hi_lo_byte(yz);
+                Ok((x, y, z))
             }
             Rule::operand_list_one => {
                 let mut ops = operands.into_inner();
                 let xyz = self.parse_number(ops.next().unwrap())? as u32;
-                Ok((
-                    (xyz >> 16) as u8,
-                    ((xyz >> 8) & 0xFF) as u8,
-                    (xyz & 0xFF) as u8,
-                ))
+                let (x, y, z) = Self::split_xyz_bytes(xyz);
+                Ok((x, y, z))
             }
             _ => unreachable!("TRAP/TRIP/SWYM take zero, one, two or three operands"),
         }
@@ -4202,8 +4243,7 @@ impl MMixAssembler {
         let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJ")?;
         let addr = self.parse_number(ops.next().unwrap())?;
         let resolved = self.relative_field("PUSHJ", addr, 16, (line, col), "")?;
-        let y = (resolved.field >> 8) as u8;
-        let z = (resolved.field & 0xFF) as u8;
+        let (y, z) = Self::split_hi_lo_byte(resolved.field as u16);
         Ok(if resolved.backward {
             MMixInstruction::PUSHJB(x, y, z)
         } else {
@@ -4223,8 +4263,7 @@ impl MMixAssembler {
         let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJB")?;
         let addr = self.parse_number(ops.next().unwrap())?;
         let resolved = self.relative_field("PUSHJB", addr, 16, (line, col), "")?;
-        let y = (resolved.field >> 8) as u8;
-        let z = (resolved.field & 0xFF) as u8;
+        let (y, z) = Self::split_hi_lo_byte(resolved.field as u16);
         Ok(MMixInstruction::PUSHJB(x, y, z))
     }
 
@@ -4286,16 +4325,14 @@ impl MMixAssembler {
                 let mut ops = operands.into_inner();
                 let x = self.parse_number(ops.next().unwrap())? as u8;
                 let yz = self.parse_number(ops.next().unwrap())? as u16;
-                Ok(MMixInstruction::POP(x, (yz >> 8) as u8, (yz & 0xFF) as u8))
+                let (y, z) = Self::split_hi_lo_byte(yz);
+                Ok(MMixInstruction::POP(x, y, z))
             }
             Rule::operand_list_one => {
                 let mut ops = operands.into_inner();
                 let xyz = self.parse_number(ops.next().unwrap())? as u32;
-                Ok(MMixInstruction::POP(
-                    (xyz >> 16) as u8,
-                    ((xyz >> 8) & 0xFF) as u8,
-                    (xyz & 0xFF) as u8,
-                ))
+                let (x, y, z) = Self::split_xyz_bytes(xyz);
+                Ok(MMixInstruction::POP(x, y, z))
             }
             _ => unreachable!("POP takes zero, one or two operands"),
         }
@@ -5579,12 +5616,12 @@ mod tests {
 
     #[test]
     fn test_swym_rejects_a_partial_operand_list() {
-        // SWYM 1,2 is now the two-operand form, SWYM(1,0,2). A trailing
-        // comma with nothing after it stays a partial list: no operand
-        // count SWYM takes matches "1,2,", so it falls back to the
-        // one-operand form on "1", leaving ",2," -- a leading comma reads
-        // as a dropped operand, not commentary, so this stays a syntax
-        // error rather than silently becoming SWYM 1.
+        // SWYM 1,2 is the two-operand form, SWYM(1,0,2). A trailing
+        // comma with nothing after it is a partial list: no operand count
+        // SWYM takes matches "1,2,", so it falls back to the one-operand
+        // form on "1", leaving ",2," -- a leading comma reads as a dropped
+        // operand, not commentary, so this is a syntax error rather than
+        // silently becoming SWYM 1.
         let mut asm = MMixAssembler::new("SWYM 1,2,", "<test>");
         assert!(
             asm.parse().is_err(),
@@ -8472,7 +8509,7 @@ Main    SETI    $1,7
 
     #[test]
     fn resolve_includes_recognizes_comment_case() {
-        // INCLUDE matches in upper case only (LEX-1); a lower-case
+        // INCLUDE matches in upper case only; a lower-case
         // `include` is ordinary source text, never expanded.
         let reader = fixture_reader(vec![("lib.mms", "OCTA 1\n")]);
 
@@ -9153,9 +9190,9 @@ Main    SETI    $1,7
         // missing what must follow it. The branch that rejects a truly
         // unrecognized opcode must not fire here -- these are malformed,
         // not unknown -- so pest's own "expected ..." diagnostic surfaces
-        // instead, the same shape base reports. `GREG`'s operand is now
+        // instead, the same shape base reports. `GREG`'s operand is
         // optional (an empty field holds 0), so `Foo GREG` assembles and
-        // no longer belongs in this list.
+        // does not belong in this list.
         for source in ["Foo IS", "Foo LOC", "Foo SET"] {
             let err = assemble_err(source);
             assert!(
@@ -9587,7 +9624,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_trailing_semicolon_lone_word_defines_an_is_constant() {
-        // IS matches in upper case only (LEX-1); lower-case `is` is not the
+        // IS matches in upper case only; lower-case `is` is not the
         // directive.
         let mut asm = MMixAssembler::new("SET $1,0 ; offset IS 8\nSET $2,offset", "<test>");
         asm.parse()
@@ -9603,7 +9640,7 @@ Main    SETI    $1,7
 
     #[test]
     fn test_trailing_semicolon_prose_that_reads_as_a_bad_expression_is_an_error() {
-        // IS matches in upper case only (LEX-1).
+        // IS matches in upper case only.
         assert!(assemble_err("SET $1,0 ; this IS invalid").contains("Undefined symbol: invalid"));
     }
 
@@ -10262,7 +10299,7 @@ Main    SETI    $1,7
         assert!(assemble_err("x IS $1\nx IS 1\nMain HALT\n").contains("symbol 'x' redefined"));
     }
 
-    // ---- C9.4: the two-operand memory form (base-address search) -------
+    // ---- The two-operand memory form (base-address search) -------------
 
     #[test]
     fn test_base_address_form_resolves_against_preceding_greg() {
@@ -10387,7 +10424,7 @@ Main    SETI    $1,7
         );
     }
 
-    // ---- C9.4: operand counts and kinds ---------------------------------
+    // ---- Operand counts and kinds ----------------------------------------
 
     #[test]
     fn test_trap_two_operand_form_splits_yz() {
@@ -10488,10 +10525,13 @@ Main    SETI    $1,7
 
     #[test]
     fn test_go_pure_x_is_still_an_error() {
-        assert!(MMixAssembler::new("GO 2,$3,0", "<test>").parse().is_err());
+        assert!(
+            assemble_err("GO 2,$3,0")
+                .contains("pure value 2 cannot be used where a register is required")
+        );
     }
 
-    // ---- C9.4: no bare mnemonic is a silent label -----------------------
+    // ---- No bare mnemonic is a silent label --------------------------------
 
     #[test]
     fn test_bare_pop_between_instructions_is_the_zero_form() {
@@ -10539,7 +10579,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_bare_save_between_instructions_is_the_owner_ruled_error() {
+    fn test_bare_save_between_instructions_is_unknown_operation() {
         assert_eq!(
             assemble_err("SET $1,0\n\tSAVE\nSET $2,0"),
             "<test>:2:2: syntax error: unknown operation: SAVE"
@@ -10547,7 +10587,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_bare_unsave_between_instructions_is_the_owner_ruled_error() {
+    fn test_bare_unsave_between_instructions_requires_a_register() {
         assert_eq!(
             assemble_err("SET $1,0\n\tUNSAVE\nSET $2,0"),
             "<test>:2:2: pure value 0 cannot be used where a register is required"
@@ -10555,7 +10595,7 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_save_after_semicolon_is_the_owner_ruled_error_not_a_label() {
+    fn test_save_after_semicolon_is_unknown_operation_not_a_label() {
         assert!(assemble_err("SET $2,2 ; SAVE").contains("unknown operation: SAVE"));
     }
 
@@ -10568,7 +10608,7 @@ Main    SETI    $1,7
         assert!(!asm.labels.contains_key("POP"));
     }
 
-    // ---- C9.4: upper-case opcodes and the indented line -----------------
+    // ---- Upper-case opcodes and the indented line --------------------------
 
     #[test]
     fn test_lowercase_loc_prefix_defines_a_register_label() {
@@ -10609,6 +10649,30 @@ Main    SETI    $1,7
     }
 
     #[test]
+    fn test_indented_lone_local_label_is_unknown_operation() {
+        assert_eq!(
+            assemble_err("\tSET $1,0\n\t2H\nSET $2,0"),
+            "<test>:2:2: syntax error: unknown operation: 2H"
+        );
+    }
+
+    #[test]
+    fn test_indented_lone_word_with_trailing_blanks_drops_them() {
+        assert_eq!(
+            assemble_err("SET $1,0\n\tFoo  \nSET $2,0"),
+            "<test>:2:2: syntax error: unknown operation: Foo"
+        );
+    }
+
+    #[test]
+    fn test_bare_save_with_a_colon_keeps_it() {
+        assert_eq!(
+            assemble_err("SET $1,0\n\tSAVE:\nSET $2,0"),
+            "<test>:2:2: syntax error: unknown operation: SAVE:"
+        );
+    }
+
+    #[test]
     fn test_semicolon_lone_word_still_defines_a_label() {
         let mut asm = MMixAssembler::new("SET $2,2 ; loop\nSET $3,loop", "<test>");
         asm.parse()
@@ -10624,7 +10688,7 @@ Main    SETI    $1,7
         assert!(asm.labels.contains_key("Loop"));
     }
 
-    // ---- C9.4: longest form wins, partial lists still error ------------
+    // ---- Longest form wins, partial lists still error ----------------------
 
     #[test]
     fn test_trap_three_operand_form_is_not_swallowed_by_shorter_forms() {
@@ -10638,15 +10702,21 @@ Main    SETI    $1,7
 
     #[test]
     fn test_trap_partial_operand_list_is_an_error() {
-        assert!(MMixAssembler::new("TRAP 0,", "<test>").parse().is_err());
+        assert!(
+            assemble_err("TRAP 0,")
+                .contains("a remark must be separated from the statement by a blank")
+        );
     }
 
     #[test]
     fn test_pop_partial_operand_list_is_an_error() {
-        assert!(MMixAssembler::new("POP 1,", "<test>").parse().is_err());
+        assert!(
+            assemble_err("POP 1,")
+                .contains("a remark must be separated from the statement by a blank")
+        );
     }
 
-    // ---- C9.4: the remark boundary moves with the new operand counts ---
+    // ---- The remark boundary and the new operand counts --------------------
 
     #[test]
     fn test_swym_one_operand_then_digit_is_a_dropped_operand_error() {
@@ -10681,11 +10751,11 @@ Main    SETI    $1,7
         assert_eq!(asm.instructions[2].1, MMixInstruction::SWYM(0, 0, 4));
     }
 
-    // ---- C9.4: arity unchanged where the prompt's Out section says so --
+    // ---- Arity unchanged for instructions this unit does not widen ---------
 
     #[test]
     fn test_save_one_operand_is_still_an_error() {
-        assert!(MMixAssembler::new("SAVE $2", "<test>").parse().is_err());
+        assert!(assemble_err("SAVE $2").contains("unknown operation: SAVE $2"));
     }
 
     #[test]

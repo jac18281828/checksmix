@@ -174,7 +174,7 @@ INCLUDE is a preprocessor stage outside the grammar."
 (ert-deftest mmix-single-operand-statements-take-a-keyword-named-operand ()
   "A lone keyword-named word after a single-operand keyword is its operand.
 checksmix assembles `JMP ADD' as a jump to ADD; `Loc HALT' and `Set
-HALT' both read as a label (Loc, Set) on a HALT, since LOC now matches
+HALT' both read as a label (Loc, Set) on a HALT, since LOC matches
 only its own upper-case spelling."
   (mmix-test--with-buffer
       (concat "\tJMP\tADD\n"

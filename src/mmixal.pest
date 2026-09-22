@@ -714,7 +714,8 @@ inst_stsf_rri = { mnemonic_stsfi ~ operand_list_three }
 inst_ldvts_rri = { mnemonic_ldvtsi ~ operand_list_three }
 inst_cswap_rri = { mnemonic_cswapi ~ operand_list_three }
 
-// STCO's X is an immediate byte, never a register; only Z auto-selects.
+// STCO's X may be a pure byte or a register, whose number fills the byte;
+// only Z auto-selects between the register and immediate opcode.
 inst_stco_auto = { mnemonic_stco ~ (operand_list_three | operand_list_two) }
 inst_stco_rri = { mnemonic_stcoi ~ operand_list_three }
 

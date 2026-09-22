@@ -4062,7 +4062,7 @@ Test284b
         PBZ     Temp,Test284c
         JMP     TestFail
 Test284c
-        SETI    $255,0
+        SET     $255,0
         TRAP    0,#0200           % two-operand form reaching the same trap: Y=Fclose(2), Z=0
         SET     Result,$255
         SETI    Expect,-1
@@ -4081,7 +4081,7 @@ Test284e
 % cannot hand a result back through Result ($2) the way the other checks
 % do; $100 is global (above rG), untouched by the push, so it carries the
 % callee's mark across a bare POP -- every field 0, no return value taken.
-        SETI    $100,0
+        SET     $100,0
         PUSHJ   $5,Test284Callee  % register X
         SET     Result,$100
         SET     Expect,1
@@ -4089,10 +4089,10 @@ Test284e
         PBZ     Temp,Test284f
         JMP     TestFail
 Test284Callee
-        SETI    $100,1
+        SET     $100,1
         POP                       % bare POP: returns with every field 0
 Test284f
-        SETI    $100,0
+        SET     $100,0
         PUSHJ   5,Test284Callee2  % pure X, the same bytes as $5
         SET     Result,$100
         SET     Expect,1
@@ -4100,7 +4100,7 @@ Test284f
         PBZ     Temp,TestPass
         JMP     TestFail
 Test284Callee2
-        SETI    $100,1
+        SET     $100,1
         POP
 
 % ========================================

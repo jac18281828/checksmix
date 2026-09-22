@@ -240,9 +240,11 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
 // The one operand form AGENTS.md's corpus rule excuses from
 // examples/all_instructions_test.mms (see its "Intentional coverage
 // exceptions" block): it needs a GREG holding a base address, which that
-// file's harness cannot admit without a register-numbering rework. `run`
-// exits 0 even when the machine halts on an error, so both the printed
-// message and the exit status must be checked.
+// file's harness cannot admit without a register-numbering rework. The
+// fixture halts only through `TRAP 0,Halt,X`, whose exit status is `$255`'s
+// own value rather than the 1 every other halt exits with, so checking it
+// alongside the printed message confirms the run reached the fixture's own
+// Pass or Fail branch rather than some other halt.
 
 #[test]
 fn run_greg_base_address_fixture_passes() {

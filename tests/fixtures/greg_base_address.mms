@@ -39,12 +39,12 @@ Check2  LDO     Result,DataB    % a second base-relative load
 Check3  GO      $9,Sub          % the two-operand form of GO
         JMP     Fail            % unreached: Sub falls through to Pass
 
-Pass    SETI    $255,PassMsg
+Pass    SET     $255,PassMsg
         TRAP    0,Fputs,StdOut
-        SETI    $255,0
+        SET     $255,0
         TRAP    0,Halt,0
 
-Fail    SETI    $255,FailMsg
+Fail    SET     $255,FailMsg
         TRAP    0,Fputs,StdOut
-        SETI    $255,1
+        SET     $255,1
         TRAP    0,Halt,0
