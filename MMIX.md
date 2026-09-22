@@ -345,8 +345,9 @@ rather than spellings a program must supply itself.
 There is no denormalized-operand event: a subnormal operand raises nothing.
 A rounded result below the normal range raises `U` only when the exact
 result is not itself an exact subnormal, or when `U`'s enable bit is set (an
-enabled `U` always trips on any subnormal or zero result, exact or not); an
-underflow with the bit clear always raises `U` and `X` together. `FREM` and
+enabled `U` trips on a subnormal or zero result, exact or not, except an
+`FADD`/`FSUB` with a zero operand or a zero sum); an underflow with the bit
+clear always raises `U` and `X` together. `FREM` and
 `FSQRT` raise `U` in no case — the IEEE remainder is exact by definition,
 and the square root of a nonzero finite operand is neither zero nor
 subnormal. `DIVU` raises no divide check, because `u($Z) ≤ u(rD)` — which
