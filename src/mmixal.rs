@@ -1864,13 +1864,18 @@ impl MMixAssembler {
 
     /// Whether the line whose `Rule::line` pair starts at byte `start` in
     /// `source` opens with a blank or a tab. `program` is not atomic, so
-    /// pest already skipped any leading blank before handing the pair its
-    /// span; the byte just behind `start` is that blank's last character
-    /// when there was one, or the newline (or start of file) that closed
-    /// the previous line when there was none -- so one lookback byte
-    /// answers it, with no rescan of the line's own text.
+    /// pest already skipped the run of blanks, tabs and carriage returns
+    /// `WHITESPACE` consumes ahead of the pair's own span; walking that run
+    /// back from `start` to the previous newline (or the start of file)
+    /// finds the line's own first byte, with no rescan of the line's text
+    /// beyond its own leading run.
     fn line_opens_indented(source: &str, start: usize) -> bool {
-        start > 0 && matches!(source.as_bytes()[start - 1], b' ' | b'\t')
+        let bytes = source.as_bytes();
+        let mut first = start;
+        while first > 0 && matches!(bytes[first - 1], b' ' | b'\t' | b'\r') {
+            first -= 1;
+        }
+        first < bytes.len() && matches!(bytes[first], b' ' | b'\t')
     }
 
     /// The label-shaped pair that opens `stmt_pair`'s match, and the pair
@@ -1972,8 +1977,8 @@ impl MMixAssembler {
     /// `SAVE` and `UNSAVE` are the two of the seven bare mnemonics the
     /// reference's empty-field-is-0 rule does not cover: `SAVE` takes
     /// exactly two operands, so the one implicit operand an empty field
-    /// gives is not enough to assemble it, and `UNSAVE`'s new one-operand
-    /// form reads that implicit operand as a register, which 0 is not.
+    /// gives is not enough to assemble it, and `UNSAVE`'s one-operand form
+    /// reads that implicit operand as a register, which 0 is not.
     /// Both are errors in every position a bare word can
     /// appear -- indented, column 1, or after `;` -- never a silently
     /// defined label. `None` when `label_pair`'s name is neither. `SAVE`'s
@@ -10416,8 +10421,8 @@ Main    SETI    $1,7
 
     #[test]
     fn test_lda_two_operand_form_never_takes_the_base_address_path() {
-        // A preceding GREG close to Data must not change LDA's own sizing:
-        // it still expands to SET when the address exceeds one byte.
+        // A preceding GREG close to Data does not change LDA's own sizing:
+        // LDA expands to SET when the address exceeds one byte.
         assert_first_instruction(
             "Base GREG #1000\nLDA $1,Data\nData IS #1000",
             MMixInstruction::SET(1, 0x1000),
@@ -10641,6 +10646,13 @@ Main    SETI    $1,7
     }
 
     #[test]
+    fn test_tab_then_carriage_return_still_opens_indented() {
+        assert!(
+            assemble_err("SET $1,0\n\t\rFoo SET $1,0").contains("unknown operation: Foo SET $1,0")
+        );
+    }
+
+    #[test]
     fn test_indented_lone_word_is_unknown_operation() {
         assert_eq!(
             assemble_err("SET $1,0\n\tFoo\nSET $2,0"),
@@ -10653,6 +10665,30 @@ Main    SETI    $1,7
         assert_eq!(
             assemble_err("\tSET $1,0\n\t2H\nSET $2,0"),
             "<test>:2:2: syntax error: unknown operation: 2H"
+        );
+    }
+
+    #[test]
+    fn test_column_one_local_label_with_text_is_unknown_operation() {
+        assert_eq!(
+            assemble_err("2H note text\n\tTRAP 0,Halt,0"),
+            "<test>:1:4: syntax error: unknown operation: 2H note text"
+        );
+    }
+
+    #[test]
+    fn test_column_one_local_label_with_a_digit_is_unknown_operation() {
+        assert_eq!(
+            assemble_err("2H 5\n\tTRAP 0,Halt,0"),
+            "<test>:1:4: syntax error: unknown operation: 2H 5"
+        );
+    }
+
+    #[test]
+    fn test_column_one_local_label_with_a_remark_marker_is_unknown_operation() {
+        assert_eq!(
+            assemble_err("2H * note\n\tTRAP 0,Halt,0"),
+            "<test>:1:4: syntax error: unknown operation: 2H * note"
         );
     }
 
@@ -10688,7 +10724,7 @@ Main    SETI    $1,7
         assert!(asm.labels.contains_key("Loop"));
     }
 
-    // ---- Longest form wins, partial lists still error ----------------------
+    // ---- Longest form wins; a partial operand list is an error -------------
 
     #[test]
     fn test_trap_three_operand_form_is_not_swallowed_by_shorter_forms() {
@@ -10716,7 +10752,7 @@ Main    SETI    $1,7
         );
     }
 
-    // ---- The remark boundary and the new operand counts --------------------
+    // ---- The remark boundary against multi-operand counts -------------------
 
     #[test]
     fn test_swym_one_operand_then_digit_is_a_dropped_operand_error() {
