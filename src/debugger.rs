@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 /// the first instruction address below this boundary.
 const SEGMENT_BOUNDARY: u64 = 0x2000000000000000;
 
+/// `print`'s error for a command word with no argument -- plain, attached
+/// (`p/f`) and detached (`p /f`) all reach it.
+const PRINT_REQUIRES_ARGUMENT: &str = "print requires an argument";
+
 /// Per-instruction cap on every multi-instruction step loop (`do_step`,
 /// `do_next`, `do_continue`), so a subroutine or program that never
 /// returns/halts can't hang the debugger. Not configurable from the public
@@ -74,6 +78,12 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         Some((h, r)) => (h, r.trim()),
         None => (trimmed, ""),
     };
+    if let Some(suffix) = head
+        .strip_prefix("p/")
+        .or_else(|| head.strip_prefix("print/"))
+    {
+        return parse_print_as(suffix, rest);
+    }
     match head {
         "s" | "step" => Ok(Command::Step),
         "si" | "stepi" => Ok(Command::Stepi),
@@ -97,16 +107,9 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
                 let (suffix, arg) = split_format_suffix(after_slash);
                 parse_print_as(suffix, arg)
             }
-            None if rest.is_empty() => Err("print requires an argument".to_string()),
+            None if rest.is_empty() => Err(PRINT_REQUIRES_ARGUMENT.to_string()),
             None => Ok(Command::Print(rest.to_string())),
         },
-        head if head.starts_with("p/") || head.starts_with("print/") => {
-            let suffix = head
-                .strip_prefix("p/")
-                .or_else(|| head.strip_prefix("print/"))
-                .expect("head matched one of the two prefixes just tested");
-            parse_print_as(suffix, rest)
-        }
         "set" => match rest.split_once(char::is_whitespace) {
             Some((target, value)) if !target.is_empty() && !value.trim().is_empty() => {
                 Ok(Command::Set(target.to_string(), value.trim().to_string()))
@@ -147,7 +150,7 @@ fn parse_print_as(suffix: &str, arg: &str) -> Result<Command, String> {
         _ => return Err(format!("Undefined output format \"{suffix}\".")),
     };
     if arg.is_empty() {
-        Err("print requires an argument".to_string())
+        Err(PRINT_REQUIRES_ARGUMENT.to_string())
     } else {
         Ok(Command::PrintAs(format, arg.to_string()))
     }
@@ -178,6 +181,13 @@ fn format_value(value: u64, format: ValueFormat) -> String {
     }
 }
 
+/// gdb's error for a `print` argument `resolve_print_argument` cannot
+/// resolve, shared by `do_print` and `do_print_as` so plain and formatted
+/// printing report an unresolved argument identically.
+fn no_symbol_in_context(arg: &str) -> String {
+    format!("No symbol \"{}\" in current context.", arg.trim())
+}
+
 /// Render an octabyte for `p/f` or `p/x`, independent of `ValueFormat` --
 /// `set_format`'s signed/unsigned choice governs plain `print` only.
 fn format_as(value: u64, format: PrintFormat) -> String {
@@ -196,28 +206,15 @@ fn format_hex(value: u64) -> String {
 /// `p/f`: the octabyte read as an IEEE 754 double, in shortest round-trip
 /// digits. Positional notation for zero and for finite magnitudes in
 /// `[1e-4, 1e16)`; scientific otherwise -- Rust's `{}` never switches to
-/// scientific notation on its own, so the cutoff is applied here.
+/// scientific notation on its own, so the cutoff is applied here. `{:e}`
+/// renders an infinity as `inf`/`-inf`.
 fn format_float(bits: u64) -> String {
     let value = f64::from_bits(bits);
     if value.is_nan() {
         return format_nan(bits);
     }
-    if value.is_infinite() {
-        return if value.is_sign_negative() {
-            "-inf".to_string()
-        } else {
-            "inf".to_string()
-        };
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() {
-            "-0".to_string()
-        } else {
-            "0".to_string()
-        };
-    }
     let magnitude = value.abs();
-    if (1e-4..1e16).contains(&magnitude) {
+    if magnitude == 0.0 || (1e-4..1e16).contains(&magnitude) {
         format!("{value}")
     } else {
         format!("{value:e}")
@@ -633,10 +630,14 @@ impl Debugger {
             .map(|addr| self.mmix.read_octa(addr))
     }
 
+    /// `print <arg>`: resolve `arg` via `resolve_print_argument` and render
+    /// it as `self.format`. Accepts a general register (`$N`/bare `N`), a
+    /// special-register name, a label, a register-valued (`GREG`) or
+    /// constant-valued (`IS`) symbol, or a hex memory address.
     fn do_print(&self, arg: &str) -> String {
         match self.resolve_print_argument(arg) {
             Some(value) => format_value(value, self.format),
-            None => format!("No symbol \"{}\" in current context.", arg.trim()),
+            None => no_symbol_in_context(arg),
         }
     }
 
@@ -645,7 +646,7 @@ impl Debugger {
     fn do_print_as(&self, format: PrintFormat, arg: &str) -> String {
         match self.resolve_print_argument(arg) {
             Some(value) => format_as(value, format),
-            None => format!("No symbol \"{}\" in current context.", arg.trim()),
+            None => no_symbol_in_context(arg),
         }
     }
 
@@ -1473,42 +1474,39 @@ Gap     LOC     #300
 
     #[test]
     fn print_f_formats_every_float_table_row() {
-        assert_eq!(format_as(0x3FE0000000000000, PrintFormat::Float), "0.5");
-        assert_eq!(format_as(0x3FF0000000000000, PrintFormat::Float), "1");
-        assert_eq!(format_as(0x4059000000000000, PrintFormat::Float), "100");
-        assert_eq!(format_as(0xC004000000000000, PrintFormat::Float), "-2.5");
-        assert_eq!(format_as(0x3F1A36E2EB1C432D, PrintFormat::Float), "0.0001");
-        assert_eq!(format_as(0x3EE4F8B588E368F1, PrintFormat::Float), "1e-5");
-        assert_eq!(format_as(0x4341C37937E08000, PrintFormat::Float), "1e16");
-        assert_eq!(
-            format_as(0x7FEFFFFFFFFFFFFF, PrintFormat::Float),
-            "1.7976931348623157e308"
-        );
-        assert_eq!(
-            format_as(0x0010000000000000, PrintFormat::Float),
-            "2.2250738585072014e-308"
-        );
-        assert_eq!(format_as(0x0000000000000001, PrintFormat::Float), "5e-324");
-        assert_eq!(format_as(0, PrintFormat::Float), "0");
-        assert_eq!(format_as(0x8000000000000000, PrintFormat::Float), "-0");
-        assert_eq!(format_as(0x7FF0000000000000, PrintFormat::Float), "inf");
-        assert_eq!(format_as(0xFFF0000000000000, PrintFormat::Float), "-inf");
-        assert_eq!(
-            format_as(0x7FF8000000000000, PrintFormat::Float),
-            "nan(#8000000000000)"
-        );
-        assert_eq!(
-            format_as(0xFFF8000000000001, PrintFormat::Float),
-            "-nan(#8000000000001)"
-        );
-        assert_eq!(format_as(0x7FF0000000000001, PrintFormat::Float), "nan(#1)");
+        let mut dbg = Debugger::load(assemble(MINIMAL_PROGRAM, "float.mms"));
+        let rows: [(u64, &str); 17] = [
+            (0x3FE0000000000000, "0.5"),
+            (0x3FF0000000000000, "1"),
+            (0x4059000000000000, "100"),
+            (0xC004000000000000, "-2.5"),
+            (0x3F1A36E2EB1C432D, "0.0001"),
+            (0x3EE4F8B588E368F1, "1e-5"),
+            (0x4341C37937E08000, "1e16"),
+            (0x7FEFFFFFFFFFFFFF, "1.7976931348623157e308"),
+            (0x0010000000000000, "2.2250738585072014e-308"),
+            (0x0000000000000001, "5e-324"),
+            (0, "0"),
+            (0x8000000000000000, "-0"),
+            (0x7FF0000000000000, "inf"),
+            (0xFFF0000000000000, "-inf"),
+            (0x7FF8000000000000, "nan(#8000000000000)"),
+            (0xFFF8000000000001, "-nan(#8000000000001)"),
+            (0x7FF0000000000001, "nan(#1)"),
+        ];
+        for (bits, expected) in rows {
+            dbg.mmix.set_register(1, bits);
+            assert_eq!(
+                dbg.do_print_as(PrintFormat::Float, "$1"),
+                expected,
+                "mismatch for {bits:#018x}"
+            );
+        }
     }
 
     /// A general register, a special register, a label, a register-valued
     /// (`GREG`) symbol, a constant-valued (`IS`) symbol and a hex address --
-    /// every form `do_print` resolves. `Limit` and `Sp` mirror
-    /// `CONSTANT_SYMBOL_PROGRAM` and `STACK_PROGRAM`'s ordering, the shape
-    /// the assembler expects.
+    /// every form `do_print` resolves.
     const ARG_FORMS_PROGRAM: &str = "\
         LOC     Data_Segment
 Cells   OCTA    0
