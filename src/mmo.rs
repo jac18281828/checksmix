@@ -29,13 +29,15 @@
 //! best-effort guess. That covers a lopcode other than `lop_quote`,
 //! `lop_loc`, `lop_spec` or `lop_post` after the preamble; any of those four
 //! in a shape the writer doesn't produce (a `lop_quote` count other than 1,
-//! a `lop_loc` other than `#98010002`, a `lop_spec` of any type but the
-//! debug-string one, a `lop_post` with a nonzero Y or a *G* below 32); a
-//! preamble whose version isn't 1; and a file that ends mid-record. Reading
-//! stops once the postamble's octabytes are consumed -- a symbol table
-//! after them, or `lop_file`/`lop_line`/fixup records from an MMIXAL build,
-//! are never read. A `.mmo` from before this reader (its preamble reads
-//! `#98090001`, version 0) is rejected and must be rebuilt.
+//! a `lop_loc` other than `#98010002` or whose address isn't a multiple of
+//! 4, a `lop_spec` payload tetra starting `#98` that isn't the `#98000001`
+//! escape, a `lop_spec` of any type but the debug-string one, a `lop_post`
+//! with a nonzero Y or a *G* below 32); a preamble whose version isn't 1;
+//! and a file that ends mid-record. Reading stops once the postamble's
+//! octabytes are consumed -- a symbol table after them, or
+//! `lop_file`/`lop_line`/fixup records from an MMIXAL build, are never
+//! read. A `.mmo` whose preamble reads `#98090001` (version 0) is rejected
+//! and must be rebuilt.
 
 use crate::mmix::{MMix, SpecialReg};
 use crate::mmixal::MMixInstruction;
@@ -160,7 +162,7 @@ impl MmoGenerator {
     /// *G*, the postamble's starting register, becomes the rG
     /// [`crate::write_image`] would derive from the same pairs; `$G..$254`
     /// carry their values and `$255` the entry point. With none supplied,
-    /// *G* stays 255 and the postamble carries only the entry, as before.
+    /// *G* stays 255 and the postamble carries only the entry.
     pub fn with_greg_inits(mut self, inits: Vec<(u8, u64)>) -> Self {
         self.greg_inits = inits;
         self
@@ -169,7 +171,10 @@ impl MmoGenerator {
     /// Generate the object file: preamble, one `lop_loc` per contiguous run
     /// of assembled bytes followed by that run's data tetras (escaped where
     /// a tetra would otherwise collide with `MM`), the `debug` string
-    /// table, then the postamble.
+    /// table, then the postamble. A run's `lop_loc` address is its first
+    /// byte's address rounded down to a multiple of 4, the reference's own
+    /// rule; the bytes between that address and the run's real start are
+    /// zero, so the run's own data still lands where it was assembled.
     pub fn generate(&self) -> Vec<u8> {
         debug!("Generating MMIX object code (.mmo format)");
         let mut mmo = Vec::new();
@@ -193,7 +198,9 @@ impl MmoGenerator {
                     self.emit_data_tetras(&mut mmo, &pending_bytes);
                     pending_bytes.clear();
                 }
-                self.emit_lop_loc(&mut mmo, addr);
+                let aligned = addr & !3;
+                self.emit_lop_loc(&mut mmo, aligned);
+                pending_bytes.resize((addr - aligned) as usize, 0);
             }
 
             pending_bytes.extend_from_slice(&bytes);
@@ -237,29 +244,32 @@ impl MmoGenerator {
         mmo.extend_from_slice(&0u32.to_be_bytes());
     }
 
+    /// Emit one data tetra, preceded by `#98000001` (`lop_quote`, count 1)
+    /// when its first byte would otherwise read as `MM`.
+    fn emit_tetra(mmo: &mut Vec<u8>, tetra: &[u8; 4]) {
+        if tetra[0] == MM {
+            mmo.push(MM);
+            mmo.push(MmoRecordType::LopQuote as u8);
+            mmo.push(0x00);
+            mmo.push(0x01);
+        }
+        mmo.extend_from_slice(tetra);
+    }
+
     /// Emit `bytes` (already assembled, contiguous from the current
-    /// address) as plain data tetras: no `MM` prefix, except a tetra whose
-    /// first byte is `MM`, which `#98000001` (`lop_quote`, count 1) escapes.
-    /// A trailing partial tetra is zero-padded.
+    /// address) as plain data tetras. A trailing partial tetra is
+    /// zero-padded.
     fn emit_data_tetras(&self, mmo: &mut Vec<u8>, bytes: &[u8]) {
         for chunk in bytes.chunks(4) {
             let mut tetra = [0u8; 4];
             tetra[..chunk.len()].copy_from_slice(chunk);
-            if tetra[0] == MM {
-                mmo.push(MM);
-                mmo.push(MmoRecordType::LopQuote as u8);
-                mmo.push(0x00);
-                mmo.push(0x01);
-            }
-            mmo.extend_from_slice(&tetra);
+            Self::emit_tetra(mmo, &tetra);
         }
     }
 
     /// Emit one `debug` directive's string as a `lop_spec` record: the type
     /// field `LOP_SPEC_DEBUG_STRING`, then a payload tetra holding the byte
-    /// length, then the bytes zero-padded to a tetra boundary. A payload
-    /// tetra whose first byte collides with `MM` is preceded by `lop_quote`,
-    /// as the object format requires of every data tetra.
+    /// length, then the bytes zero-padded to a tetra boundary.
     fn emit_debug_string(&self, mmo: &mut Vec<u8>, text: &[u8]) {
         mmo.push(MM);
         mmo.push(MmoRecordType::LopSpec as u8);
@@ -273,19 +283,12 @@ impl MmoGenerator {
         }
 
         for tetra in payload.as_chunks::<4>().0 {
-            if tetra[0] == MM {
-                mmo.push(MM);
-                mmo.push(MmoRecordType::LopQuote as u8);
-                mmo.push(0x00);
-                mmo.push(0x01);
-            }
-            mmo.extend_from_slice(tetra);
+            Self::emit_tetra(mmo, tetra);
         }
     }
 
-    /// Emit lop_loc: set current loading address
-    /// Format: MM lop_loc YZ X (4 bytes), followed by 2 tetras (8 bytes) for 64-bit address
-    /// Total: 12 bytes
+    /// Emit `lop_loc`: `#98010002`, then `addr`'s high and low tetras.
+    /// `addr` is always a multiple of 4, `generate`'s own invariant.
     fn emit_lop_loc(&self, mmo: &mut Vec<u8>, addr: u64) {
         // Record header: MM lop_loc with YZ=2 (two tetras of address data follow)
         mmo.push(MM); // MM escape code
@@ -349,39 +352,46 @@ impl MmoDecoder {
     }
 
     /// Big-endian decode of exactly 4 bytes. Every call site has already
-    /// bounds-checked its slice to length 4, so the conversion cannot fail.
+    /// bounds-checked its slice to length 4, so the lookup cannot fail.
     fn be_u32(bytes: &[u8]) -> u32 {
-        u32::from_be_bytes(bytes.try_into().expect("caller passes exactly 4 bytes"))
+        u32::from_be_bytes(
+            *bytes
+                .first_chunk::<4>()
+                .expect("caller passes exactly 4 bytes"),
+        )
     }
 
-    /// Read one payload tetra of a `lop_spec` record at `self.data[pos..]`,
-    /// honoring the `lop_quote` escape a tetra whose first byte collides
-    /// with `MM` requires. Returns the tetra and how many bytes it and any
-    /// escape consumed, or `None` past the end of the file.
-    fn read_payload_tetra(&self, pos: usize) -> Option<([u8; 4], usize)> {
-        if pos + 4 > self.data.len() {
-            return None;
+    /// Write one data tetra's four bytes through `write_byte`, `data[i..i+4]`
+    /// landing at `addr..=addr+3`.
+    fn write_tetra<F: FnMut(u64, u8)>(write_byte: &mut F, data: &[u8], i: usize, addr: u64) {
+        for k in 0..4u64 {
+            write_byte(addr + k, data[i + k as usize]);
         }
-        if self.data[pos] == MM {
-            let quoted = pos + 4;
-            if quoted + 4 > self.data.len() {
-                return None;
+    }
+
+    /// Read one payload tetra of a `lop_spec` record at `data[pos..]`,
+    /// honoring the `lop_quote` escape a tetra whose first byte collides
+    /// with `MM` requires: exactly `#98000001`, nothing else starting `#98`.
+    /// Returns the tetra and how many bytes it and any escape consumed, or
+    /// `Ok(None)` past the end of the file.
+    fn read_payload_tetra(data: &[u8], pos: usize) -> Result<Option<([u8; 4], usize)>, String> {
+        if pos + 4 > data.len() {
+            return Ok(None);
+        }
+        let tetra_at = |offset: usize| *data[offset..offset + 4].first_chunk::<4>().unwrap();
+        if data[pos] == MM {
+            let lopcode_byte = data[pos + 1];
+            let (y, z) = (data[pos + 2], data[pos + 3]);
+            if lopcode_byte != MmoRecordType::LopQuote as u8 || y != 0x00 || z != 0x01 {
+                return Err(Self::unsupported_lopcode(lopcode_byte, pos));
             }
-            let tetra = [
-                self.data[quoted],
-                self.data[quoted + 1],
-                self.data[quoted + 2],
-                self.data[quoted + 3],
-            ];
-            Some((tetra, 8))
+            let quoted = pos + 4;
+            if quoted + 4 > data.len() {
+                return Ok(None);
+            }
+            Ok(Some((tetra_at(quoted), 8)))
         } else {
-            let tetra = [
-                self.data[pos],
-                self.data[pos + 1],
-                self.data[pos + 2],
-                self.data[pos + 3],
-            ];
-            Some((tetra, 4))
+            Ok(Some((tetra_at(pos), 4)))
         }
     }
 
@@ -395,6 +405,177 @@ impl MmoDecoder {
     /// record (or data tetra) that ran out of bytes.
     fn truncated(offset: usize) -> String {
         format!(".mmo: file ends inside a record at offset {offset:#x}")
+    }
+
+    /// Validate the preamble: `#98090101`, then a length check for the
+    /// creation-time tetra that follows (never read; it is always 0).
+    fn parse_preamble(data: &[u8]) -> Result<(), String> {
+        if data.len() < 4 || data[0] != MM || data[1] != MmoRecordType::LopPre as u8 {
+            return Err(".mmo: file does not begin with lop_pre".to_string());
+        }
+        let (version, pre_z) = (data[2], data[3]);
+        if version != 1 {
+            return Err(format!(".mmo: lop_pre version {version}, expected 1"));
+        }
+        if pre_z != 1 {
+            return Err(Self::unsupported_lopcode(MmoRecordType::LopPre as u8, 0));
+        }
+        if data.len() < 8 {
+            return Err(Self::truncated(0));
+        }
+        Ok(())
+    }
+
+    /// A plain data tetra: no `MM` prefix. Returns the bytes consumed (4).
+    fn parse_data_tetra<F: FnMut(u64, u8)>(
+        data: &[u8],
+        i: usize,
+        current_addr: u64,
+        write_byte: &mut F,
+    ) -> Result<usize, String> {
+        if i + 4 > data.len() {
+            return Err(Self::truncated(i));
+        }
+        Self::write_tetra(write_byte, data, i, current_addr);
+        Ok(4)
+    }
+
+    /// `lop_quote`: an escaped data tetra, count exactly 1. Returns the
+    /// bytes consumed from `record_offset` (the header and the tetra).
+    fn parse_lop_quote<F: FnMut(u64, u8)>(
+        data: &[u8],
+        record_offset: usize,
+        y: u8,
+        z: u8,
+        current_addr: u64,
+        write_byte: &mut F,
+    ) -> Result<usize, String> {
+        let yz = ((y as u16) << 8) | z as u16;
+        if yz != 1 {
+            return Err(format!(
+                ".mmo: lop_quote count {yz}, expected 1 at offset {record_offset:#x}"
+            ));
+        }
+        let i = record_offset + 4;
+        if i + 4 > data.len() {
+            return Err(Self::truncated(record_offset));
+        }
+        Self::write_tetra(write_byte, data, i, current_addr);
+        Ok(8)
+    }
+
+    /// `lop_loc`: `#98010002`, then an address that must be a multiple of
+    /// 4. Returns the new current address and the bytes consumed (12).
+    fn parse_lop_loc(
+        data: &[u8],
+        record_offset: usize,
+        y: u8,
+        z: u8,
+    ) -> Result<(u64, usize), String> {
+        if y != 0x00 || z != 0x02 {
+            return Err(Self::unsupported_lopcode(
+                MmoRecordType::LopLoc as u8,
+                record_offset,
+            ));
+        }
+        let i = record_offset + 4;
+        if i + 8 > data.len() {
+            return Err(Self::truncated(record_offset));
+        }
+        let high = Self::be_u32(&data[i..i + 4]);
+        let low = Self::be_u32(&data[i + 4..i + 8]);
+        let addr = ((high as u64) << 32) | low as u64;
+        if !addr.is_multiple_of(4) {
+            return Err(Self::unsupported_lopcode(
+                MmoRecordType::LopLoc as u8,
+                record_offset,
+            ));
+        }
+        Ok((addr, 12))
+    }
+
+    /// `lop_spec`: the `debug` string table's own record type, length
+    /// prefixed and zero-padded to a tetra boundary. Appends the decoded
+    /// string and returns the bytes consumed from `record_offset`.
+    fn parse_lop_spec(
+        &self,
+        data: &[u8],
+        record_offset: usize,
+        y: u8,
+        z: u8,
+    ) -> Result<usize, String> {
+        let record_type = ((y as u16) << 8) | z as u16;
+        if record_type != LOP_SPEC_DEBUG_STRING {
+            return Err(Self::unsupported_lopcode(
+                MmoRecordType::LopSpec as u8,
+                record_offset,
+            ));
+        }
+        let mut i = record_offset + 4;
+        let (len_tetra, consumed) = match Self::read_payload_tetra(data, i)? {
+            Some(pair) => pair,
+            None => return Err(Self::truncated(record_offset)),
+        };
+        i += consumed;
+        let byte_len = u32::from_be_bytes(len_tetra) as usize;
+        let padded_len = byte_len.div_ceil(4) * 4;
+
+        let mut payload = Vec::with_capacity(padded_len);
+        let mut remaining = padded_len;
+        while remaining > 0 {
+            let (tetra, consumed) = match Self::read_payload_tetra(data, i)? {
+                Some(pair) => pair,
+                None => return Err(Self::truncated(record_offset)),
+            };
+            i += consumed;
+            payload.extend_from_slice(&tetra);
+            remaining -= 4;
+        }
+        payload.truncate(byte_len);
+        self.debug_strings.borrow_mut().push(payload);
+        Ok(i - record_offset)
+    }
+
+    /// `lop_post`: `#980A00`*G*, then one octabyte per register from *G*
+    /// through `$255`. Returns the entry point (`$255`), *G*, and every
+    /// register in that range.
+    fn parse_lop_post(
+        data: &[u8],
+        record_offset: usize,
+        y: u8,
+        z: u8,
+    ) -> Result<(u64, u8, HashMap<u8, u64>), String> {
+        if y != 0x00 {
+            return Err(Self::unsupported_lopcode(
+                MmoRecordType::LopPost as u8,
+                record_offset,
+            ));
+        }
+        let g = z;
+        if g < 32 {
+            return Err(format!(
+                ".mmo: lop_post G={g}, below 32 at offset {record_offset:#x}"
+            ));
+        }
+        let mut i = record_offset + 4;
+        let mut registers = HashMap::new();
+        let mut reg = g;
+        loop {
+            if i + 8 > data.len() {
+                return Err(Self::truncated(record_offset));
+            }
+            let high = Self::be_u32(&data[i..i + 4]);
+            let low = Self::be_u32(&data[i + 4..i + 8]);
+            registers.insert(reg, ((high as u64) << 32) | low as u64);
+            i += 8;
+            if reg == 255 {
+                break;
+            }
+            reg += 1;
+        }
+        let entry_point = registers.get(&255).copied().unwrap_or(0);
+        debug!("Decoded .mmo file, entry point: 0x{:X}", entry_point);
+        Ok((entry_point, g, registers))
     }
 
     /// Parse the file, calling `write_byte` for every loaded byte in file
@@ -411,20 +592,7 @@ impl MmoDecoder {
         self.debug_strings.borrow_mut().clear();
         let data = &self.data;
 
-        if data.len() < 4 || data[0] != MM || data[1] != MmoRecordType::LopPre as u8 {
-            return Err(".mmo: file does not begin with lop_pre".to_string());
-        }
-        let version = data[2];
-        let pre_z = data[3];
-        if version != 1 {
-            return Err(format!(".mmo: lop_pre version {version}, expected 1"));
-        }
-        if pre_z != 1 {
-            return Err(Self::unsupported_lopcode(MmoRecordType::LopPre as u8, 0));
-        }
-        if data.len() < 8 {
-            return Err(Self::truncated(0));
-        }
+        Self::parse_preamble(data)?;
         // Bytes 4..8: the creation-time tetra, always 0, never read.
         let mut i = 8usize;
         let mut current_addr = 0u64;
@@ -435,14 +603,9 @@ impl MmoDecoder {
             }
 
             if data[i] != MM {
-                if i + 4 > data.len() {
-                    return Err(Self::truncated(i));
-                }
-                for k in 0..4u64 {
-                    write_byte(current_addr + k, data[i + k as usize]);
-                }
-                current_addr += 4;
-                i += 4;
+                let consumed = Self::parse_data_tetra(data, i, current_addr, write_byte)?;
+                current_addr += consumed as u64;
+                i += consumed;
                 continue;
             }
 
@@ -451,95 +614,25 @@ impl MmoDecoder {
                 return Err(Self::truncated(record_offset));
             }
             let lopcode_byte = data[i + 1];
-            let y = data[i + 2];
-            let z = data[i + 3];
+            let (y, z) = (data[i + 2], data[i + 3]);
 
             match MmoRecordType::try_from(lopcode_byte) {
                 Ok(MmoRecordType::LopQuote) => {
-                    let yz = ((y as u16) << 8) | z as u16;
-                    if yz != 1 {
-                        return Err(format!(
-                            ".mmo: lop_quote count {yz}, expected 1 at offset {record_offset:#x}"
-                        ));
-                    }
-                    i += 4;
-                    if i + 4 > data.len() {
-                        return Err(Self::truncated(record_offset));
-                    }
-                    for k in 0..4u64 {
-                        write_byte(current_addr + k, data[i + k as usize]);
-                    }
+                    let consumed =
+                        Self::parse_lop_quote(data, record_offset, y, z, current_addr, write_byte)?;
                     current_addr += 4;
-                    i += 4;
+                    i = record_offset + consumed;
                 }
                 Ok(MmoRecordType::LopLoc) => {
-                    if y != 0x00 || z != 0x02 {
-                        return Err(Self::unsupported_lopcode(lopcode_byte, record_offset));
-                    }
-                    i += 4;
-                    if i + 8 > data.len() {
-                        return Err(Self::truncated(record_offset));
-                    }
-                    let high = Self::be_u32(&data[i..i + 4]);
-                    let low = Self::be_u32(&data[i + 4..i + 8]);
-                    current_addr = ((high as u64) << 32) | low as u64;
-                    i += 8;
+                    let (addr, consumed) = Self::parse_lop_loc(data, record_offset, y, z)?;
+                    current_addr = addr;
+                    i = record_offset + consumed;
                 }
                 Ok(MmoRecordType::LopSpec) => {
-                    let record_type = ((y as u16) << 8) | z as u16;
-                    if record_type != LOP_SPEC_DEBUG_STRING {
-                        return Err(Self::unsupported_lopcode(lopcode_byte, record_offset));
-                    }
-                    i += 4;
-                    let Some((len_tetra, consumed)) = self.read_payload_tetra(i) else {
-                        return Err(Self::truncated(record_offset));
-                    };
-                    i += consumed;
-                    let byte_len = u32::from_be_bytes(len_tetra) as usize;
-                    let padded_len = byte_len.div_ceil(4) * 4;
-
-                    let mut payload = Vec::with_capacity(padded_len);
-                    let mut remaining = padded_len;
-                    while remaining > 0 {
-                        let Some((tetra, consumed)) = self.read_payload_tetra(i) else {
-                            return Err(Self::truncated(record_offset));
-                        };
-                        i += consumed;
-                        payload.extend_from_slice(&tetra);
-                        remaining -= 4;
-                    }
-                    payload.truncate(byte_len);
-                    self.debug_strings.borrow_mut().push(payload);
+                    i = record_offset + self.parse_lop_spec(data, record_offset, y, z)?;
                 }
                 Ok(MmoRecordType::LopPost) => {
-                    if y != 0x00 {
-                        return Err(Self::unsupported_lopcode(lopcode_byte, record_offset));
-                    }
-                    let g = z;
-                    if g < 32 {
-                        return Err(format!(
-                            ".mmo: lop_post G={g}, below 32 at offset {record_offset:#x}"
-                        ));
-                    }
-                    i += 4;
-                    let mut registers = HashMap::new();
-                    let mut reg = g;
-                    loop {
-                        if i + 8 > data.len() {
-                            return Err(Self::truncated(record_offset));
-                        }
-                        let high = Self::be_u32(&data[i..i + 4]);
-                        let low = Self::be_u32(&data[i + 4..i + 8]);
-                        registers.insert(reg, ((high as u64) << 32) | low as u64);
-                        i += 8;
-                        if reg == 255 {
-                            break;
-                        }
-                        reg += 1;
-                    }
-                    let entry_point = registers.get(&255).copied().unwrap_or(0);
-                    debug!("Decoded .mmo file, entry point: 0x{:X}", entry_point);
-                    return Ok((entry_point, g, registers));
+                    return Self::parse_lop_post(data, record_offset, y, z);
                 }
                 _ => return Err(Self::unsupported_lopcode(lopcode_byte, record_offset)),
             }
@@ -565,13 +658,11 @@ impl MmoDecoder {
     /// range is `>= rG`). Returns the entry point. On `Err`, `mmix` is
     /// untouched -- parsing runs to completion before anything is applied.
     pub fn load(&self, mmix: &mut MMix) -> Result<u64, String> {
-        let mut combined: HashMap<u64, u8> = HashMap::new();
-        let mut collect = |addr: u64, byte: u8| {
-            *combined.entry(addr).or_insert(0) ^= byte;
-        };
+        let mut buffered: Vec<(u64, u8)> = Vec::new();
+        let mut collect = |addr: u64, byte: u8| buffered.push((addr, byte));
         let (entry, g, registers) = self.parse(&mut collect)?;
 
-        for (addr, byte) in combined {
+        for (addr, byte) in buffered {
             mmix.write_loaded_byte(addr, byte);
         }
         mmix.set_debug_strings(self.debug_strings());
@@ -610,8 +701,8 @@ mod tests {
     }
 
     /// The preamble the writer emits: `#98090101`, then a zero timestamp
-    /// tetra -- byte-exact, since C9's proofs compare `.mmo` files built at
-    /// different times.
+    /// tetra -- byte-exact, since a build's timestamp is always 0 and two
+    /// builds of the same source produce identical bytes.
     #[test]
     fn preamble_is_version_one_with_a_zero_timestamp() {
         let mmo_data = MmoGenerator::new(Vec::new(), HashMap::new()).generate();
@@ -893,6 +984,77 @@ mod tests {
         assert_eq!(memory.get(&0x103), Some(&0xAB));
     }
 
+    /// Every `lop_loc` the writer emits is a multiple of 4, even when the
+    /// run it opens starts at an unaligned address: the record rounds the
+    /// address down, and leading zero bytes carry the run's own data to
+    /// its real address.
+    #[test]
+    fn every_lop_loc_the_writer_emits_is_aligned() {
+        let instructions = vec![
+            (0x101, MMixInstruction::BYTE(1)),
+            (0x203, MMixInstruction::BYTE(2)),
+        ];
+        let generator = MmoGenerator::new(instructions, HashMap::new());
+        let mmo_data = generator.generate();
+
+        let loc_positions: Vec<usize> = mmo_data
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[0] == MM && w[1] == MmoRecordType::LopLoc as u8)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(loc_positions.len(), 2, "one lop_loc per unaligned BYTE");
+
+        for pos in loc_positions {
+            let high = u32::from_be_bytes(mmo_data[pos + 4..pos + 8].try_into().unwrap());
+            let low = u32::from_be_bytes(mmo_data[pos + 8..pos + 12].try_into().unwrap());
+            let addr = ((high as u64) << 32) | low as u64;
+            assert_eq!(addr % 4, 0, "lop_loc address {addr:#x} is not aligned");
+        }
+    }
+
+    /// After `LOC #1001; BYTE 5; LOC #1006; BYTE 1,2,3,4`, the assembled
+    /// bytes sit at `#1001` and `#1006`-`#1009` on both the direct `.mms`
+    /// path and a `.mmo` round trip.
+    #[test]
+    fn an_unaligned_loc_run_lands_at_its_addresses_on_both_paths() {
+        use crate::mmixal::MMixAssembler;
+
+        const SOURCE: &str = "\
+\tLOC\t#1001
+\tBYTE\t5
+\tLOC\t#1006
+\tBYTE\t1,2,3,4
+\tLOC\t#100
+Main\tTRAP\t0,Halt,0
+";
+        let mut asm = MMixAssembler::new(SOURCE, "<test>");
+        asm.parse().expect("program must assemble");
+
+        let mut mms_mmix = MMix::new();
+        for (addr, inst) in &asm.instructions {
+            let bytes = asm.encode_instruction_bytes(inst);
+            for (offset, &byte) in bytes.iter().enumerate() {
+                mms_mmix.write_loaded_byte(addr + offset as u64, byte);
+            }
+        }
+
+        let mmo_data = MmoGenerator::new(asm.instructions.clone(), asm.labels.clone()).generate();
+        let decoder = MmoDecoder::new(mmo_data);
+        let mut mmo_mmix = MMix::new();
+        decoder
+            .load(&mut mmo_mmix)
+            .expect("well-formed object code");
+
+        for mmix in [&mms_mmix, &mmo_mmix] {
+            assert_eq!(mmix.read_byte(0x1001), 5);
+            assert_eq!(mmix.read_byte(0x1006), 1);
+            assert_eq!(mmix.read_byte(0x1007), 2);
+            assert_eq!(mmix.read_byte(0x1008), 3);
+            assert_eq!(mmix.read_byte(0x1009), 4);
+        }
+    }
+
     #[test]
     fn test_mmo_roundtrip() {
         // Test that encode -> decode produces the same memory layout
@@ -1005,9 +1167,9 @@ mod tests {
     }
 
     /// A hand-built object file in the reference's format -- preamble, one
-    /// `lop_loc` and a data tetra, a postamble with *G* = 254 -- loads
-    /// through `load` into the memory, rG, `$254`, `$255` and entry it
-    /// describes, without raising rL.
+    /// `lop_loc`, a plain data tetra, an escaped one, a postamble with
+    /// *G* = 254 -- loads through `load` into the memory, rG, `$254`,
+    /// `$255` and entry it describes, without raising rL.
     #[test]
     fn load_applies_a_hand_built_object_files_full_contents() {
         let mut data = vec![MM, MmoRecordType::LopPre as u8, 0x01, 0x01];
@@ -1016,6 +1178,8 @@ mod tests {
         data.extend_from_slice(&0u32.to_be_bytes()); // address high
         data.extend_from_slice(&0x100u32.to_be_bytes()); // address low
         data.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // one plain data tetra
+        data.extend_from_slice(&[MM, MmoRecordType::LopQuote as u8, 0x00, 0x01]); // escape
+        data.extend_from_slice(&[0x98, 0x01, 0x02, 0x03]); // the escaped tetra
         data.extend_from_slice(&[MM, MmoRecordType::LopPost as u8, 0x00, 254]);
         data.extend_from_slice(&1234u64.to_be_bytes()); // $254
         data.extend_from_slice(&0x100u64.to_be_bytes()); // $255 = entry
@@ -1030,6 +1194,7 @@ mod tests {
         assert_eq!(mmix.get_register(255), 0x100);
         assert_eq!(mmix.get_special(SpecialReg::RL), 0);
         assert_eq!(mmix.read_tetra(0x100), 0xAABBCCDD);
+        assert_eq!(mmix.read_tetra(0x104), 0x98010203);
     }
 
     /// A program assembling two `BYTE`s to the same address (`#0f` then
@@ -1145,6 +1310,25 @@ Main\tTRAP\t0,Halt,0
         assert_machine_untouched(&mmix);
     }
 
+    /// A `lop_loc` address that isn't a multiple of 4 is a shape the
+    /// writer never emits.
+    #[test]
+    fn decode_rejects_an_unaligned_lop_loc() {
+        let mut data = valid_preamble();
+        let loc_offset = data.len();
+        data.extend_from_slice(&[MM, MmoRecordType::LopLoc as u8, 0x00, 0x02]);
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0x101u32.to_be_bytes());
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: unsupported lopcode #01 at offset {loc_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
     #[test]
     fn decode_rejects_a_postamble_g_below_32() {
         let mut data = valid_preamble();
@@ -1192,9 +1376,8 @@ Main\tTRAP\t0,Halt,0
     }
 
     /// A `lop_spec` of a type other than the debug-string one is a shape the
-    /// writer never emits, so the reader now rejects it instead of skipping
-    /// it -- unlike before this unit, when an unrelated `lop_spec` record
-    /// was read and discarded without disturbing the string table.
+    /// writer never emits, so the reader rejects it rather than reading and
+    /// discarding it.
     #[test]
     fn decode_rejects_a_lop_spec_of_another_type() {
         let mut data = valid_preamble();
@@ -1210,5 +1393,81 @@ Main\tTRAP\t0,Halt,0
         let mut mmix = MMix::new();
         assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
         assert_machine_untouched(&mmix);
+    }
+
+    /// A `lop_spec` payload tetra beginning `#98` that isn't the exact
+    /// `#98000001` escape is a shape the writer never emits.
+    #[test]
+    fn decode_rejects_a_lop_spec_payload_tetra_with_a_malformed_escape() {
+        let mut data = valid_preamble();
+        data.extend_from_slice(&[MM, MmoRecordType::LopSpec as u8, 0x44, 0x42]);
+        data.extend_from_slice(&[0, 0, 0, 4]); // byte_len = 4
+        let bad_offset = data.len();
+        data.extend_from_slice(&[0x98, 0x12, 0x34, 0x56]);
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: unsupported lopcode #12 at offset {bad_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    /// A `lop_pre` whose Z field (tetra count) isn't 1 is a shape the
+    /// writer never emits.
+    #[test]
+    fn decode_rejects_a_lop_pre_with_a_tetra_count_other_than_one() {
+        let mut data = vec![MM, MmoRecordType::LopPre as u8, 0x01, 0x02];
+        data.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // two tetras
+        data.extend_from_slice(&[MM, MmoRecordType::LopPost as u8, 0x00, 0xFF]);
+        data.extend_from_slice(&0x100u64.to_be_bytes());
+        let decoder = MmoDecoder::new(data);
+        let expected = ".mmo: unsupported lopcode #09 at offset 0x0";
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    /// A `lop_post` with a nonzero Y is a shape the writer never emits.
+    #[test]
+    fn decode_rejects_a_lop_post_with_a_nonzero_y() {
+        let mut data = valid_preamble();
+        let post_offset = data.len();
+        data.extend_from_slice(&[MM, MmoRecordType::LopPost as u8, 0x01, 0xFF]);
+        data.extend_from_slice(&0x100u64.to_be_bytes());
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: unsupported lopcode #0a at offset {post_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    /// With no `GREG` initializers, the postamble starts at *G* = 255 and
+    /// carries exactly one octabyte: the entry point.
+    #[test]
+    fn generate_with_no_greg_postamble_is_one_octabyte() {
+        let instructions = vec![(0x100, MMixInstruction::TRAP(0, 0, 0))];
+        let mmo_data = MmoGenerator::new(instructions, HashMap::new()).generate();
+
+        let post_pos = mmo_data
+            .windows(2)
+            .position(|w| w[0] == MM && w[1] == MmoRecordType::LopPost as u8)
+            .expect("must have a lop_post record");
+        assert_eq!(&mmo_data[post_pos..post_pos + 4], &[0x98, 0x0A, 0x00, 0xFF]);
+        assert_eq!(
+            mmo_data.len(),
+            post_pos + 12,
+            "exactly one octabyte follows"
+        );
+
+        let entry = u64::from_be_bytes(mmo_data[post_pos + 4..post_pos + 12].try_into().unwrap());
+        assert_eq!(entry, 0x100);
     }
 }
