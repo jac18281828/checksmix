@@ -181,29 +181,16 @@ Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 ## Examples
 
 - [`leapyear.mms`](examples/leapyear.mms): the perpetual leap year above.
-- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt. One instruction, a
-  starting point for your own.
-- [`exit_code.mms`](examples/exit_code.mms): two instructions. `TRAP 0,Halt,0` returns
-  `$255` as the process exit status.
-- [`hello_world.mms`](examples/hello_world.mms): prints a string via `TRAP 0,Fputs,StdOut`.
-- [`subroutine.mms`](examples/subroutine.mms): the MMIX calling convention. `PUSHJ`
-  slides the register window so the caller's `$X+1,$X+2` arrive as the callee's
-  `$0,$1`, and `POP 1` returns a value to the caller's hole.
-- [`fibonacci.mms`](examples/fibonacci.mms): fib(20) = 6765 in a two-register loop,
-  returned as the exit code; the shell sees 109, 6765 mod 256.
-- [`big_fib.mms`](examples/big_fib.mms): fib(100) in multi-precision arithmetic,
-  printing `354224848179261915075`. It shows nested calls: saving `rJ` with
-  `GET`/`PUT`, keeping live locals below a call's hole, and passing arguments in
-  `GREG` registers.
-- [`prime.mms`](examples/prime.mms): trial-division primality test that prints its
-  verdict and exits 0 if prime, 1 if composite. It bounds the scan with `D > N/D`,
-  reusing the quotient `DIVU` already computed, so the test cannot overflow the way
-  `D*D > N` does.
-- [`linked_list.mms`](examples/linked_list.mms): walks a statically allocated list and
-  sums node values.
-- [`time.mms`](examples/time.mms): reads the host clock through `TRAP 0,Time,2`.
-- [`all_instructions_test.mms`](examples/all_instructions_test.mms): every mnemonic the
-  assembler accepts, run as a regression suite.
+- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt. The smallest program that runs.
+- [`exit_code.mms`](examples/exit_code.mms): return a value to the shell.
+- [`hello_world.mms`](examples/hello_world.mms): print a string to standard output.
+- [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
+- [`fibonacci.mms`](examples/fibonacci.mms): fib(20), returned as the exit code.
+- [`big_fib.mms`](examples/big_fib.mms): fib(100) in multi-precision arithmetic.
+- [`prime.mms`](examples/prime.mms): trial-division primality test that prints its verdict.
+- [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
+- [`time.mms`](examples/time.mms): read the host clock.
+- [`all_instructions_test.mms`](examples/all_instructions_test.mms): every mnemonic, run as a regression suite.
 
 ## mmixdb — the interactive debugger
 
