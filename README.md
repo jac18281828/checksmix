@@ -351,3 +351,6 @@ and new work belongs in `.mms`.
 
 Donald Knuth's art and craft inspire my work. I once reported a "bug" in *The Art
 of Computer Programming*, but I never earned my hexadecimal dollar.
+
+This project carries a little of that spirit forward: curiosity, precision and the
+belief that programming can be serious fun.
