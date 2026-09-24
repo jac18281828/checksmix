@@ -1,59 +1,190 @@
-# ChecksMix - Blazing Fast MMIX Emulator
+# checksmix
 
-MMIX assembler and emulator with fast feedback for learning, experimenting, and debugging Knuth’s 64-bit machine. MIX source still parses and emulates, but the checksmix now focuses on MMIX with `.mms` and `.mmo` workflows.
+An assembler, emulator and source-level debugger for Knuth's MMIX, the 64-bit
+RISC machine of *The Art of Computer Programming*. Write MMIXAL, run it, and
+read the machine state it leaves behind.
 
-**Try it in your browser: [playmmix.2ad.com](https://playmmix.2ad.com).** A playground built on this crate — edit MMIX assembly, run it, step through with breakpoints, and watch the registers and memory change. No toolchain to install.
+[![crates.io](https://img.shields.io/crates/v/checksmix)](https://crates.io/crates/checksmix)
+[![docs.rs](https://img.shields.io/docsrs/checksmix)](https://docs.rs/checksmix)
+[![CI/CD Pipeline](https://github.com/jac18281828/checksmix/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/jac18281828/checksmix/actions/workflows/ci-cd.yml)
 
-## What’s inside
-- `checksmix`: execute `.mms` assembly directly or run prebuilt `.mmo` object files.
-- `mmixasm`: assemble `.mms` to `.mmo` for reuse or distribution.
-- `mmixdb`: interactive source-level debugger for `.mms` programs (step, breakpoints, print, Emacs GUD mode).
-- Emulator: 256 general-purpose registers, 32 special registers, sparse 64-bit address space, and the MMIXAL reference's TRAP file-I/O ABI (`Halt`, `Fopen`/`Fclose`/`Fread`/`Fwrite`/`Fgets`/`Fgetws`/`Fputs`/`Fputws`/`Fseek`/`Ftell`), plus checksmix's own `Fputc`, `Time`, and `Debug` (backing the `debug "text"` directive).
-
-## Quick start
-1) Install Rust (stable toolchain).  
-2) From the repo root, run an example immediately:
+## Install
 
 ```bash
-cargo run --bin checksmix -- examples/hello_world.mms
+cargo install checksmix
 ```
 
-Or build once for repeat runs:
+This installs `checksmix`, `mmixasm` and `mmixdb`. It needs a stable Rust
+toolchain ([rustup.rs](https://rustup.rs)).
+
+To build from source:
 
 ```bash
-cargo build --release
-./target/release/checksmix examples/hello_world.mms
+git clone https://github.com/jac18281828/checksmix.git
+cd checksmix
+cargo build --release          # binaries land in target/release/
 ```
 
-Set `RUST_LOG=checksmix=debug` to see instruction decoding and TRAP handling while you experiment.
+## Perpetual Leap Year
 
-## Common workflows
+The Gregorian rule, which holds for any year: 4 divides it, unless 100 does,
+unless 400 does too.
 
-### Run MMIX assembly directly
-`checksmix` parses and executes `.mms` without producing an object file:
+### Listing — `leapyear.mms`
+
+```mmix
+% leapyear.mms -- the first leap year after Year, by the Gregorian rule.
+
+Year    IS      2026
+
+        LOC     Data_Segment
+        GREG    @
+Digits  BYTE    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+End     BYTE    0
+After   BYTE    "The first leap year after ",0
+Is      BYTE    " is ",0
+Newline BYTE    10,0
+
+        LOC     #100
+Main    SET     $1,Year
+        ADDU    $2,$1,1                 % the candidate year
+        SET     $6,400
+        SET     $7,100
+1H      DIVU    $3,$2,$6
+        GET     $3,rR
+        BZ      $3,Found                % every 400th year is leap
+        DIVU    $3,$2,$7
+        GET     $3,rR
+        BZ      $3,2F                   % any other century is not
+        AND     $3,$2,3
+        BZ      $3,Found                % otherwise every 4th year is
+2H      ADDU    $2,$2,1
+        JMP     1B
+
+Found   LDA     $255,After
+        TRAP    0,Fputs,StdOut
+        SET     $5,$1
+        PUSHJ   $4,PrintNum
+        LDA     $255,Is
+        TRAP    0,Fputs,StdOut
+        SET     $5,$2
+        PUSHJ   $4,PrintNum
+        LDA     $255,Newline
+        TRAP    0,Fputs,StdOut
+        SET     $255,0
+        TRAP    0,Halt,0
+
+% PrintNum: write $0 in decimal, filling Digits from the right.
+PrintNum LDA    $1,End
+        SET     $2,10
+1H      DIVU    $0,$0,$2
+        GET     $3,rR
+        ADDU    $3,$3,'0'
+        SUBU    $1,$1,1
+        STBU    $3,$1,0
+        PBNZ    $0,1B
+        SET     $255,$1
+        TRAP    0,Fputs,StdOut
+        POP     0,0
+```
+
+### Run
+
+```console
+$ checksmix leapyear.mms
+=== MMIX Assembler ===
+=== Parsing assembly from: leapyear.mms ===
+
+Assembly parsed successfully
+
+=== Initial Machine State ===
+MMIX Computer State:
+  PC = 0x0000000000000100
+
+General Registers:
+  $254 = 0x2000000000000000 (2305843009213693952)
+  $255 = 0x0000000000000100 (256)
+
+Special Registers:
+  rN   = 0x00000000000007d9 (2009)
+  rO   = 0x6000000000000000 (6917529027641081856)
+  rS   = 0x6000000000000000 (6917529027641081856)
+  rT   = 0x8000000500000000 (-9223372015379939328)
+  rTT  = 0x8000000600000000 (-9223372011084972032)
+  rK   = 0xffffffffffffffff (-1)
+  rV   = 0x369c200400000000 (3935055375966928896)
+  rG   = 0x00000000000000fe (254)
+
+Memory: 169 bytes used
+
+
+=== Executing Program ===
+The first leap year after 2026 is 2028
+HALT trap at PC=0x0000000000000188, exit code=0
+Execution stopped at PC=0x000000000000018c after 106 instructions
+
+Executed 106 instructions
+
+=== Final Machine State ===
+MMIX Computer State:
+  PC = 0x000000000000018c
+
+General Registers:
+  $1   = 0x00000000000007ea (2026)
+  $2   = 0x00000000000007ec (2028)
+  $254 = 0x2000000000000000 (2305843009213693952)
+
+Special Registers:
+  rJ   = 0x0000000000000170 (368)
+  rR   = 0x0000000000000002 (2)
+  rN   = 0x00000000000007d9 (2009)
+  rO   = 0x6000000000000000 (6917529027641081856)
+  rS   = 0x6000000000000000 (6917529027641081856)
+  rT   = 0x8000000500000000 (-9223372015379939328)
+  rTT  = 0x8000000600000000 (-9223372011084972032)
+  rK   = 0xffffffffffffffff (-1)
+  rV   = 0x369c200400000000 (3935055375966928896)
+  rG   = 0x00000000000000fe (254)
+  rL   = 0x0000000000000004 (4)
+
+Memory: 178 bytes used
+
+
+Execution completed.
+```
+
+With `Year IS 2099`, the century rule skips 2100: `2104`.
+
+More MMIX, less installation: [playmmix](https://playmmix.2ad.com), the
+browser playground built on checksmix.
+
+## The tools
+
+- `checksmix` runs `.mms` source directly, or a `.mmo` object file.
+  `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
+- `mmixasm` assembles `.mms` to `.mmo` and lists the symbols, labels and code it produced.
+- `mmixdb` steps through `.mms` source with breakpoints, register and memory
+  inspection, and Emacs GUD support.
+
+The emulator has 256 general-purpose registers, 32 special registers, a sparse
+64-bit address space, and the MMIXAL reference's TRAP file-I/O ABI (`Halt`,
+`Fopen`/`Fclose`/`Fread`/`Fwrite`/`Fgets`/`Fgetws`/`Fputs`/`Fputws`/`Fseek`/`Ftell`),
+plus checksmix's own `Fputc`, `Time`, and `Debug` (backing the `debug "text"`
+directive).
+
+Assemble once and run the object file:
 
 ```bash
-cargo run --bin checksmix -- examples/linked_list.mms
+checksmix build examples/prime.mms -o prime.mmo
+checksmix prime.mmo
 ```
 
-### Assemble to MMO, then emulate
-Generate a reusable object file with `mmixasm`, then run it with `checksmix`:
+Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 
-```bash
-# Assemble
-cargo run --bin mmixasm -- examples/hello_world.mms -o target/hello_world.mmo
+## Examples
 
-# Execute the MMO
-cargo run --bin checksmix -- target/hello_world.mmo
-```
-
-### Use your own program
-1) Write MMIX assembly (see the snippet below).  
-2) Run it directly with `checksmix` **or** assemble with `mmixasm` and run the resulting `.mmo`.  
-3) Inspect register and memory dumps printed before and after execution.
-
-## Example programs
-
+- `examples/leapyear.mms`: the Perpetual Leap Year above.
+- `examples/mmmix.mms`: the smallest complete program, a starting point for your own.
 - `examples/exit_code.mms`: two instructions. `TRAP 0,Halt,0` returns `$255` as the
   process exit status.
 - `examples/hello_world.mms`: prints a string via `TRAP 0,Fputs,StdOut`.
@@ -61,29 +192,16 @@ cargo run --bin checksmix -- target/hello_world.mmo
   so the caller's `$X+1,$X+2` arrive as the callee's `$0,$1`, and `POP 1` returns a value
   to the caller's hole.
 - `examples/fibonacci.mms`: that convention applied to an iterative `fib(20)`.
-- `examples/big_fib.mms`: fib(100) in multi-precision arithmetic. It shows nested calls:
-  saving `rJ` with `GET`/`PUT`, keeping live locals below a call's hole, and passing
-  arguments in `GREG` registers.
+- `examples/big_fib.mms`: fib(100) in multi-precision arithmetic, printing
+  `354224848179261915075`. It shows nested calls: saving `rJ` with `GET`/`PUT`, keeping
+  live locals below a call's hole, and passing arguments in `GREG` registers.
 - `examples/prime.mms`: trial-division primality test that prints its verdict and exits
   0 if prime, 1 if composite. It bounds the scan with `D > N/D`, reusing the quotient
   `DIVU` already computed, so the test cannot overflow the way `D*D > N` does.
 - `examples/linked_list.mms`: walks a statically allocated list and sums node values.
 - `examples/time.mms`: reads the host clock through `TRAP 0,Time,2`.
-- `examples/all_instructions_test.mms`: broad instruction coverage for regression checks.
-- `examples/example.mix`: a MIXAL program, for the legacy MIX path below.
-
-Hello World (trimmed):
-
-```asm
-        LOC     Data_Segment
-        GREG    @
-Text    BYTE    "Hello world!",10,0
-
-        LOC     #100
-Main    LDA     $0,Text
-        TRAP    0,Fputs,StdOut
-        TRAP    0,Halt,0
-```
+- `examples/all_instructions_test.mms`: every mnemonic the assembler accepts, run as a
+  regression suite.
 
 ## mmixdb — the interactive debugger
 
@@ -155,15 +273,11 @@ repository root:
 emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and-exit
 ```
 
-## Legacy MIX support
-`.mix` and `.mixal` files still run through `checksmix`, but MMIX is the primary target. Prefer `.mms`/`.mmo` for new work.
-
 ## Using checksmix as a library
 `checksmix` is usable as a library, independent of the three binaries above. The
 `clap`, `rustyline`, and `tracing-subscriber` dependencies the CLIs need live behind
 the `cli` feature, which is on by default. A library-only consumer — notably one
 targeting `wasm32-unknown-unknown`, where `rustyline` does not build — turns it off.
-Available from 0.3.0; earlier versions have no features and always pull the CLI tree.
 [playmmix](https://playmmix.2ad.com) is built this way, on `checksmix = { version = "0.3",
 default-features = false }`, and runs the emulator in the browser as wasm.
 
@@ -212,8 +326,7 @@ step through rather than run straight out. `Debugger::load` installs `StdHost`,
 so a debugged program's output goes to the process and never reaches you.
 
 An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
-`UnwindSafe`, or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that — a change from 0.2.23, where it was all
-four. Construct one on the thread that runs it, and wrap it in
+`UnwindSafe`, or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that. Construct one on the thread that runs it, and wrap it in
 `std::panic::AssertUnwindSafe` to put it through `catch_unwind`.
 
 ## Learning MMIX
@@ -239,9 +352,15 @@ runs here — and in [playmmix](https://playmmix.2ad.com) without installing any
 - [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
   — the full definition of MMIX, with an assembler and simulator (Springer LNCS 1750, 1999).
 
+## Legacy MIX
+
+checksmix began as a MIX emulator. `.mix` and `.mixal` files still run through
+`checksmix` (`examples/example.mix` is one), but MMIX is the target and new work
+belongs in `.mms`.
+
 ## Tribute
 
-Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me alot about how to think about programming and system design.
+Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me a lot about how to think about programming and system design.
 
 Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software.  Some time later, I submitted a “bug” in The Art of Computer Programming- to earn the coveted Knuth “hexadecimal dollar.” His reply was short and perfect:
 
