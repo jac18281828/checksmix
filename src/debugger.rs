@@ -1821,7 +1821,7 @@ Main\tTRAP\t0,Halt,0
     fn greg_program_with_pushj_executes_correctly_under_raised_rg() {
         // One GREG directive raises rG to 254 (see the derivation test
         // above); this program then makes a PUSHJ/POP call, modeled on
-        // examples/function.mms, to confirm the register-window slide is
+        // examples/subroutine.mms, to confirm the register-window slide is
         // unaffected by push_frame zeroing the wider `new_rl..rG` range.
         const PROGRAM: &str = "\
 Base\tGREG\t1000

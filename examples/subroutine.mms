@@ -1,5 +1,5 @@
 % ----------------------------------------------------
-% Function call demo: pass two args via the register
+% Subroutine call demo: pass two args via the register
 % window slide; receive a sum at the caller's hole.
 %
 % PUSHJ $X with args staged at $X+1, $X+2 makes them

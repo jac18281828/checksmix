@@ -25,7 +25,7 @@ cd checksmix
 cargo build --release          # binaries land in target/release/
 ```
 
-## Perpetual Leap Year
+## Perpetual leap year
 
 The Gregorian rule, which holds for any year: 4 divides it, unless 100 does,
 unless 400 does too.
@@ -158,7 +158,7 @@ With `Year IS 2099`, the century rule skips 2100: `2104`.
 More MMIX, less installation: [playmmix](https://playmmix.2ad.com), the
 browser playground built on checksmix.
 
-## The tools
+## Commands
 
 - `checksmix` runs `.mms` source directly, or a `.mmo` object file.
   `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
@@ -166,11 +166,8 @@ browser playground built on checksmix.
 - `mmixdb` steps through `.mms` source with breakpoints, register and memory
   inspection, and Emacs GUD support.
 
-The emulator has 256 general-purpose registers, 32 special registers, a sparse
-64-bit address space, and the MMIXAL reference's TRAP file-I/O ABI (`Halt`,
-`Fopen`/`Fclose`/`Fread`/`Fwrite`/`Fgets`/`Fgetws`/`Fputs`/`Fputws`/`Fseek`/`Ftell`),
-plus checksmix's own `Fputc`, `Time`, and `Debug` (backing the `debug "text"`
-directive).
+checksmix has 256 general-purpose registers, 32 special registers, a sparse 64-bit
+address space, and the MMIXAL reference's TRAP file I/O.
 
 Assemble once and run the object file:
 
@@ -183,25 +180,30 @@ Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 
 ## Examples
 
-- `examples/leapyear.mms`: the Perpetual Leap Year above.
-- `examples/mmmix.mms`: the smallest complete program, a starting point for your own.
-- `examples/exit_code.mms`: two instructions. `TRAP 0,Halt,0` returns `$255` as the
-  process exit status.
-- `examples/hello_world.mms`: prints a string via `TRAP 0,Fputs,StdOut`.
-- `examples/function.mms`: the MMIX calling convention. `PUSHJ` slides the register window
-  so the caller's `$X+1,$X+2` arrive as the callee's `$0,$1`, and `POP 1` returns a value
-  to the caller's hole.
-- `examples/fibonacci.mms`: that convention applied to an iterative `fib(20)`.
-- `examples/big_fib.mms`: fib(100) in multi-precision arithmetic, printing
-  `354224848179261915075`. It shows nested calls: saving `rJ` with `GET`/`PUT`, keeping
-  live locals below a call's hole, and passing arguments in `GREG` registers.
-- `examples/prime.mms`: trial-division primality test that prints its verdict and exits
-  0 if prime, 1 if composite. It bounds the scan with `D > N/D`, reusing the quotient
-  `DIVU` already computed, so the test cannot overflow the way `D*D > N` does.
-- `examples/linked_list.mms`: walks a statically allocated list and sums node values.
-- `examples/time.mms`: reads the host clock through `TRAP 0,Time,2`.
-- `examples/all_instructions_test.mms`: every mnemonic the assembler accepts, run as a
-  regression suite.
+- [`leapyear.mms`](examples/leapyear.mms): the perpetual leap year above.
+- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt. One instruction, a
+  starting point for your own.
+- [`exit_code.mms`](examples/exit_code.mms): two instructions. `TRAP 0,Halt,0` returns
+  `$255` as the process exit status.
+- [`hello_world.mms`](examples/hello_world.mms): prints a string via `TRAP 0,Fputs,StdOut`.
+- [`subroutine.mms`](examples/subroutine.mms): the MMIX calling convention. `PUSHJ`
+  slides the register window so the caller's `$X+1,$X+2` arrive as the callee's
+  `$0,$1`, and `POP 1` returns a value to the caller's hole.
+- [`fibonacci.mms`](examples/fibonacci.mms): fib(20) = 6765 in a two-register loop,
+  returned as the exit code; the shell sees 109, 6765 mod 256.
+- [`big_fib.mms`](examples/big_fib.mms): fib(100) in multi-precision arithmetic,
+  printing `354224848179261915075`. It shows nested calls: saving `rJ` with
+  `GET`/`PUT`, keeping live locals below a call's hole, and passing arguments in
+  `GREG` registers.
+- [`prime.mms`](examples/prime.mms): trial-division primality test that prints its
+  verdict and exits 0 if prime, 1 if composite. It bounds the scan with `D > N/D`,
+  reusing the quotient `DIVU` already computed, so the test cannot overflow the way
+  `D*D > N` does.
+- [`linked_list.mms`](examples/linked_list.mms): walks a statically allocated list and
+  sums node values.
+- [`time.mms`](examples/time.mms): reads the host clock through `TRAP 0,Time,2`.
+- [`all_instructions_test.mms`](examples/all_instructions_test.mms): every mnemonic the
+  assembler accepts, run as a regression suite.
 
 ## mmixdb — the interactive debugger
 
@@ -355,7 +357,7 @@ runs here — and in [playmmix](https://playmmix.2ad.com) without installing any
 ## Legacy MIX
 
 checksmix began as a MIX emulator. `.mix` and `.mixal` files still run through
-`checksmix` (`examples/example.mix` is one), but MMIX is the target and new work
+`checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target and new work
 belongs in `.mms`.
 
 ## Tribute
