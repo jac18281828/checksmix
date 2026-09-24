@@ -354,3 +354,6 @@ of Computer Programming*, but I never earned my hexadecimal dollar.
 
 This project carries a little of that spirit forward: curiosity, precision and the
 belief that programming can be serious fun.
+
+> "*e* is as real as any other number."\
+> — Donald E. Knuth
