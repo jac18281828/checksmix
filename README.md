@@ -350,5 +350,4 @@ and new work belongs in `.mms`.
 ## Tribute
 
 Donald Knuth's art and craft inspire my work. I once reported a "bug" in *The Art
-of Computer Programming*, and he replied: "e is as real as any other number." I
-never earned my hexadecimal dollar.
+of Computer Programming*, but I never earned my hexadecimal dollar.
