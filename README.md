@@ -349,12 +349,6 @@ and new work belongs in `.mms`.
 
 ## Tribute
 
-Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me a lot about how to think about programming and system design.
-
-Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software. Some time later, I submitted a “bug” in The Art of Computer Programming to earn the coveted Knuth “hexadecimal dollar.” His reply was short and perfect:
-
-“e is as real as any other number.”
-
-Evidently!
-
-This project carries a little of that spirit forward: curiosity, precision and the belief that programming can be serious fun.
+Donald Knuth's art and craft inspire my work. I once reported a "bug" in *The Art
+of Computer Programming*, and he replied: "e is as real as any other number." I
+never earned my hexadecimal dollar.
