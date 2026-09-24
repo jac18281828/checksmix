@@ -160,14 +160,14 @@ browser playground built on checksmix.
 
 ## Commands
 
-- `checksmix` runs `.mms` source directly, or a `.mmo` object file.
+- `checksmix` runs `.mms` source or a `.mmo` object file.
   `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
 - `mmixasm` assembles `.mms` to `.mmo` and lists the symbols, labels and code it produced.
 - `mmixdb` steps through `.mms` source with breakpoints, register and memory
   inspection, and Emacs GUD support.
 
 checksmix has 256 general-purpose registers, 32 special registers, a sparse 64-bit
-address space, and the MMIXAL reference's TRAP file I/O.
+address space and the MMIXAL reference's TRAP file I/O.
 
 Assemble once and run the object file:
 
@@ -180,30 +180,29 @@ Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 
 ## Examples
 
-- [`leapyear.mms`](examples/leapyear.mms): the perpetual leap year above.
-- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt. The smallest program that runs.
+- [`leapyear.mms`](examples/leapyear.mms): find the first leap year after 2026.
+- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt: the smallest program that runs.
 - [`exit_code.mms`](examples/exit_code.mms): return a value to the shell.
 - [`hello_world.mms`](examples/hello_world.mms): print a string to standard output.
 - [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
-- [`fibonacci.mms`](examples/fibonacci.mms): fib(20), returned as the exit code.
-- [`big_fib.mms`](examples/big_fib.mms): fib(100) in multi-precision arithmetic.
-- [`prime.mms`](examples/prime.mms): trial-division primality test that prints its verdict.
+- [`fibonacci.mms`](examples/fibonacci.mms): return fib(20) as the exit code.
+- [`big_fib.mms`](examples/big_fib.mms): compute fib(100) in multi-precision arithmetic.
+- [`prime.mms`](examples/prime.mms): test a number for primality and print the verdict.
 - [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
 - [`time.mms`](examples/time.mms): read the host clock.
-- [`all_instructions_test.mms`](examples/all_instructions_test.mms): every mnemonic, run as a regression suite.
+- [`all_instructions_test.mms`](examples/all_instructions_test.mms): run every mnemonic as a regression suite.
 
-## mmixdb — the interactive debugger
+## mmixdb
 
-`mmixdb` is an interactive source-level debugger for MMIX `.mms` programs: step, breakpoint,
-inspect registers/memory, and see the current source line as you go.
+Step through `.mms` source, set breakpoints and inspect registers and memory, with
+the current source line shown as you go.
 
 ```bash
-cargo run --bin mmixdb -- examples/fibonacci.mms
-cargo run --bin mmixdb -- --fullname examples/fibonacci.mms   # Emacs GUD marker mode
+mmixdb examples/fibonacci.mms
+mmixdb --fullname examples/fibonacci.mms   # Emacs GUD marker mode
 ```
 
-`mmixdb` handles `.mms` sources only -- source-line debugging requires the
-original source. `.mmo` object files carry no source map and are out of scope.
+`mmixdb` debugs `.mms` source; a `.mmo` carries no source map.
 `--fullname` is auto-enabled when the `INSIDE_EMACS` environment variable is
 set (i.e. when run from Emacs's `gud-mode`).
 
@@ -217,14 +216,14 @@ set (i.e. when run from Emacs's `gud-mode`).
 | break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
 | delete | `d`, `delete`, `d <line>`, `d <label>` | Delete one breakpoint, or every breakpoint given no argument. |
 | print | `p <arg>`, `print <arg>`, `p/f <arg>`, `p/x <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or the memory octa at a hex address's aligned 8-byte base (`0x...`/`#...`). `/f` and `/x`, attached or detached (`p /f <arg>`), print the same octabyte as an IEEE double or in hex instead. |
-| set | `set <target> <value>` | Write a register (`$N`/`N`), special register, or the memory octa at a hex address's aligned 8-byte base. A symbol whose type is a register alias (from `GREG` or a register-valued `IS`, e.g. `Sp`) is settable the same way; a label or a symbol whose type is a constant (an `IS` bound to a non-register value) is not -- neither names a storage location. `value` is decimal or `0x`/`#`-prefixed hex. |
+| set | `set <target> <value>` | Write a register (`$N`/`N`), special register, or the memory octa at a hex address's aligned 8-byte base. A symbol whose type is a register alias (from `GREG` or a register-valued `IS`, e.g. `Sp`) is settable the same way; a label or a symbol whose type is a constant (an `IS` bound to a non-register value) is not; neither names a storage location. `value` is decimal or `0x`/`#`-prefixed hex. |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
 | breakpoints | `info break`, `info breakpoints` | List every currently-set breakpoint with its source location. |
 | list | `l`, `list` | Print source lines around the current PC. |
 | help | `h`, `help`, `?` | Show this help. |
 | quit | `q`, `quit`, `exit` | Exit the debugger. |
 
-Blank input repeats the last command -- most debugging is stepping. Once the
+Blank input repeats the last command; most debugging is stepping. Once the
 program has exited, `step`, `stepi`, `next` and `continue` are refused; `run`
 restarts it.
 
@@ -263,10 +262,10 @@ emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and
 ```
 
 ## Using checksmix as a library
-`checksmix` is usable as a library, independent of the three binaries above. The
-`clap`, `rustyline`, and `tracing-subscriber` dependencies the CLIs need live behind
-the `cli` feature, which is on by default. A library-only consumer — notably one
-targeting `wasm32-unknown-unknown`, where `rustyline` does not build — turns it off.
+checksmix is usable as a library, independent of the three binaries above. The
+`clap`, `rustyline` and `tracing-subscriber` dependencies the CLIs need live behind
+the `cli` feature, which is on by default. A library-only consumer, notably one
+targeting `wasm32-unknown-unknown` where `rustyline` does not build, turns it off.
 [playmmix](https://playmmix.2ad.com) is built this way, on `checksmix = { version = "0.3",
 default-features = false }`, and runs the emulator in the browser as wasm.
 
@@ -278,14 +277,14 @@ checksmix = "0.3"
 checksmix = { version = "0.3", default-features = false }
 ```
 
-Either form gives you the library. The `checksmix`, `mmixasm`, and `mmixdb`
+Either form gives you the library. The `checksmix`, `mmixasm` and `mmixdb`
 executables come from `cargo install checksmix`, not from a `[dependencies]` entry.
 
 ### Capturing what a program emits
 
 By default an `MMix` writes to the process's stdout and stderr. Implement
-`Host` to intercept that instead — what the program writes, the clock behind
-the `Time` trap, diagnostics, and every recognized `TRAP`:
+`Host` to intercept what the program writes, the clock behind the `Time` trap,
+diagnostics and every recognized `TRAP`:
 
 ```rust
 use checksmix::{Host, MMix};
@@ -307,7 +306,7 @@ let out = Rc::new(RefCell::new(Vec::new()));
 let mut mmix = MMix::with_host(Capture(out.clone()));
 ```
 
-Clone the buffer handle *before* moving the host in — `with_host` consumes it
+Clone the buffer handle *before* moving the host in; `with_host` consumes it
 and hands back no way to reach it again.
 
 `Debugger::load_with_host` takes a host the same way, for programs you want to
@@ -315,46 +314,47 @@ step through rather than run straight out. `Debugger::load` installs `StdHost`,
 so a debugged program's output goes to the process and never reaches you.
 
 An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
-`UnwindSafe`, or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that. Construct one on the thread that runs it, and wrap it in
+`UnwindSafe` or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that.
+Construct one on the thread that runs it, and wrap it in
 `std::panic::AssertUnwindSafe` to put it through `catch_unwind`.
 
 ## Learning MMIX
 
-MMIX is Knuth's own "pretty clean" machine architecture, and he documented it himself:
+MMIX is Knuth's "pretty clean" machine architecture, and he documented it himself:
 
-- [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html) — the
+- [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html): the
   canonical home: design rationale, current news, and why MIX was retired.
 - [*The Art of Computer Programming*](https://www-cs-faculty.stanford.edu/~knuth/taocp.html),
-  Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005) — the
+  Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005): the
   instruction set as Knuth teaches it, and the shortest path in.
 
-`checksmix` follows the same instruction set, so a program written from any of these
-runs here — and in [playmmix](https://playmmix.2ad.com) without installing anything.
+checksmix follows the same instruction set, so a program written from any of these
+runs here.
 
 ## Related projects
 
-- [The MMIX Home Page](http://mmix.cs.hm.edu/) — Martin Ruckert's collection at Munich
+- [The MMIX Home Page](http://mmix.cs.hm.edu/): Martin Ruckert's collection at Munich
   University of Applied Sciences: documentation, sources, binaries, worked examples,
   and *The MMIX Supplement*.
-- [Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/) — the Home Page's
+- [Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/): the Home Page's
   per-instruction reference.
-- [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html)
-  — the full definition of MMIX, with an assembler and simulator (Springer LNCS 1750, 1999).
+- [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html):
+  the full definition of MMIX, with an assembler and simulator (Springer LNCS 1750, 1999).
 
 ## Legacy MIX
 
 checksmix began as a MIX emulator. `.mix` and `.mixal` files still run through
-`checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target and new work
-belongs in `.mms`.
+`checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target
+and new work belongs in `.mms`.
 
 ## Tribute
 
 Donald Knuth has been one of the formative influences in my career. Early on—as a junior developer just beginning to feel like a mid-level engineer—I implemented his external, file-based merge sort to collate insurance datasets that were far too large for memory. That experience taught me a lot about how to think about programming and system design.
 
-Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software.  Some time later, I submitted a “bug” in The Art of Computer Programming- to earn the coveted Knuth “hexadecimal dollar.” His reply was short and perfect:
+Knuth’s blend of rigor, playfulness, and generosity has shaped how I write code and how I view the craft of software. Some time later, I submitted a “bug” in The Art of Computer Programming to earn the coveted Knuth “hexadecimal dollar.” His reply was short and perfect:
 
 “e is as real as any other number.”
 
 Evidently!
 
-This project carries a little of that spirit forward: curiosity, precision, and the belief that programming can be serious fun.
+This project carries a little of that spirit forward: curiosity, precision and the belief that programming can be serious fun.
