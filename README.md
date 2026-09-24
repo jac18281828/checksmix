@@ -1,8 +1,8 @@
 # checksmix
 
 An assembler, emulator and source-level debugger for Knuth's MMIX, the 64-bit
-RISC machine of *The Art of Computer Programming*. Write MMIXAL, run it, and
-read the machine state it leaves behind.
+RISC machine of *The Art of Computer Programming*. Write MMIXAL, run it, read
+machine state.
 
 [![crates.io](https://img.shields.io/crates/v/checksmix)](https://crates.io/crates/checksmix)
 [![docs.rs](https://img.shields.io/docsrs/checksmix)](https://docs.rs/checksmix)
