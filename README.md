@@ -1,4 +1,4 @@
-# checksmix
+# `checksmix`
 
 An assembler, emulator and source-level debugger for Knuth's MMIX, the 64-bit
 RISC machine of *The Art of Computer Programming*. Write MMIXAL, run it, read
@@ -25,12 +25,46 @@ cd checksmix
 cargo build --release          # binaries land in target/release/
 ```
 
-## Perpetual leap year
+## Usage
+
+- `checksmix` runs `.mms` source or a `.mmo` object file.
+  `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
+- `mmixasm` assembles `.mms` to `.mmo` and lists the symbols, labels and code it produced.
+- `mmixdb` steps through `.mms` source with breakpoints, register and memory
+  inspection, and Emacs GUD support.
+
+`checksmix` has 256 general-purpose registers, 32 special registers, a sparse 64-bit
+address space and the MMIXAL reference's TRAP file I/O.
+
+Assemble once and run the object file:
+
+```bash
+checksmix build examples/prime.mms -o prime.mmo
+checksmix prime.mmo
+```
+
+Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
+
+## Examples
+
+- [`leapyear.mms`](examples/leapyear.mms): the perpetual leap year below.
+- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt: the smallest program that runs.
+- [`exit_code.mms`](examples/exit_code.mms): return a value to the shell.
+- [`hello_world.mms`](examples/hello_world.mms): print a string to standard output.
+- [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
+- [`fibonacci.mms`](examples/fibonacci.mms): return fib(20) as the exit code.
+- [`big_fib.mms`](examples/big_fib.mms): compute fib(100) in multi-precision arithmetic.
+- [`prime.mms`](examples/prime.mms): test a number for primality and print the verdict.
+- [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
+- [`time.mms`](examples/time.mms): read the host clock.
+- [`all_instructions_test.mms`](examples/all_instructions_test.mms): run every mnemonic as a regression suite.
+
+### Perpetual leap year
 
 The Gregorian rule, which holds for any year: 4 divides it, unless 100 does,
 unless 400 does too.
 
-### Listing — `leapyear.mms`
+#### Listing — `leapyear.mms`
 
 ```mmix
 % leapyear.mms -- the first leap year after Year, by the Gregorian rule.
@@ -88,7 +122,7 @@ PrintNum LDA    $1,End
         POP     0,0
 ```
 
-### Run
+#### Run
 
 ```console
 $ checksmix leapyear.mms
@@ -156,41 +190,7 @@ Execution completed.
 With `Year IS 2099`, the century rule skips 2100: `2104`.
 
 More MMIX, less installation: [playmmix](https://playmmix.2ad.com), the
-browser playground built on checksmix.
-
-## Commands
-
-- `checksmix` runs `.mms` source or a `.mmo` object file.
-  `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
-- `mmixasm` assembles `.mms` to `.mmo` and lists the symbols, labels and code it produced.
-- `mmixdb` steps through `.mms` source with breakpoints, register and memory
-  inspection, and Emacs GUD support.
-
-checksmix has 256 general-purpose registers, 32 special registers, a sparse 64-bit
-address space and the MMIXAL reference's TRAP file I/O.
-
-Assemble once and run the object file:
-
-```bash
-checksmix build examples/prime.mms -o prime.mmo
-checksmix prime.mmo
-```
-
-Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
-
-## Examples
-
-- [`leapyear.mms`](examples/leapyear.mms): find the first leap year after 2026.
-- [`hello_halt.mms`](examples/hello_halt.mms): Hello, Halt: the smallest program that runs.
-- [`exit_code.mms`](examples/exit_code.mms): return a value to the shell.
-- [`hello_world.mms`](examples/hello_world.mms): print a string to standard output.
-- [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
-- [`fibonacci.mms`](examples/fibonacci.mms): return fib(20) as the exit code.
-- [`big_fib.mms`](examples/big_fib.mms): compute fib(100) in multi-precision arithmetic.
-- [`prime.mms`](examples/prime.mms): test a number for primality and print the verdict.
-- [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
-- [`time.mms`](examples/time.mms): read the host clock.
-- [`all_instructions_test.mms`](examples/all_instructions_test.mms): run every mnemonic as a regression suite.
+browser playground built on `checksmix`.
 
 ## mmixdb
 
@@ -242,8 +242,8 @@ or autoload it instead:
 ```
 
 `contrib/mmix-mode.el` is a major mode for `.mms` source written to the dialect
-checksmix assembles: `%` comments, a label field only on an unindented line,
-the explicit immediate mnemonics and checksmix's extensions. It highlights and indents,
+`checksmix` assembles: `%` comments, a label field only on an unindented line,
+the explicit immediate mnemonics and `checksmix`'s extensions. It highlights and indents,
 colours each use of a label or `IS`/`GREG` name the file defines, shows
 the current line's instruction through eldoc, describes any instruction with
 `C-c C-d`, and runs the file with `C-c C-c` (`checksmix run`). The instruction
@@ -261,8 +261,8 @@ repository root:
 emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and-exit
 ```
 
-## Using checksmix as a library
-checksmix is usable as a library, independent of the three binaries above. The
+## Using `checksmix` as a library
+`checksmix` is usable as a library, independent of the three binaries above. The
 `clap`, `rustyline` and `tracing-subscriber` dependencies the CLIs need live behind
 the `cli` feature, which is on by default. A library-only consumer, notably one
 targeting `wasm32-unknown-unknown` where `rustyline` does not build, turns it off.
@@ -328,7 +328,7 @@ MMIX is Knuth's "pretty clean" machine architecture, and he documented it himsel
   Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005): the
   instruction set as Knuth teaches it, and the shortest path in.
 
-checksmix follows the same instruction set, so a program written from any of these
+`checksmix` follows the same instruction set, so a program written from any of these
 runs here.
 
 ## Related projects
@@ -343,7 +343,7 @@ runs here.
 
 ## Legacy MIX
 
-checksmix began as a MIX emulator. `.mix` and `.mixal` files still run through
+`checksmix` began as a MIX emulator. `.mix` and `.mixal` files still run through
 `checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target
 and new work belongs in `.mms`.
 
