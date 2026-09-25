@@ -1,4 +1,6 @@
-% Is N prime?  Divide by odd numbers up to sqrt(N).
+% prime.mms -- test a number for primality and print the verdict.
+%
+% Halts with 1 if N is composite. Divide by odd numbers up to sqrt(N).
 
 N       IS      97
 
