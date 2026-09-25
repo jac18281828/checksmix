@@ -5,9 +5,15 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tracing::debug;
 
-/// The per-call byte bound shared by `Fopen`'s name and (below) `Fputs`.
-/// A fixed constant, read from no register.
+/// The per-call byte bound shared by `Fopen`'s name, `Fputs` and `Fputws`
+/// (`Fputws`'s own bound counted in wydes, `MAX_TRAP_WYDES` below).
+/// **Departure from the reference:** none of the three has one there. A
+/// fixed constant, read from no register.
 pub(super) const MAX_TRAP_BYTES: usize = 1_048_576;
+
+/// `Fputws`'s bound in wydes: the same byte budget as `MAX_TRAP_BYTES`,
+/// counted two bytes at a time.
+const MAX_TRAP_WYDES: usize = MAX_TRAP_BYTES / 2;
 
 /// TRAP code identifiers for MMIX, numbered per the MMIXAL reference: every
 /// call is `TRAP 0,Code,Handle`, `Z` names the handle (0-255), and `$255`
@@ -588,10 +594,13 @@ impl MMix {
 
     /// TRAP 7: Fputs. `Z` is the handle; `$255` is the string address.
     /// Writes bytes up to, not including, the first zero byte, with no
-    /// byte value translated. Returns the byte count written, or -1.
+    /// byte value translated. **Departure from the reference:** capped at
+    /// `MAX_TRAP_BYTES` per call; a longer string writes that many bytes,
+    /// reports a diagnostic, and returns the count actually written.
+    /// Returns the byte count written, or -1.
     fn handle_fputs(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
-        let (bytes, truncated) = self.read_bounded_bytes(str_addr, 10000);
+        let (bytes, truncated) = self.read_bounded_bytes(str_addr, MAX_TRAP_BYTES);
         if truncated {
             self.host
                 .diagnostic("Warning: Fputs string too long, truncating");
@@ -643,8 +652,12 @@ impl MMix {
 
     /// TRAP 8: Fputws. `Z` is the handle; `$255` is the string address.
     /// Wyde characters, two bytes each in memory order, written up to, not
-    /// including, the first zero wyde. Returns the wyde count written, or
-    /// -1.
+    /// including, the first zero wyde. **Departure from the reference:**
+    /// capped at `MAX_TRAP_WYDES` per call, `MAX_TRAP_BYTES`'s budget in
+    /// wydes; a longer string writes that many wydes, reports a diagnostic,
+    /// and returns the count actually written. A string of exactly
+    /// `MAX_TRAP_WYDES` wydes, followed by its zero wyde, is not too long.
+    /// Returns the wyde count written, or -1.
     fn handle_fputws(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
         let mut bytes = Vec::new();
@@ -656,14 +669,14 @@ impl MMix {
             if hi == 0 && lo == 0 {
                 break;
             }
-            bytes.push(hi);
-            bytes.push(lo);
-            wyde_count += 1;
-            if wyde_count >= 5000 {
+            if wyde_count == MAX_TRAP_WYDES {
                 self.host
                     .diagnostic("Warning: Fputws string too long, truncating");
                 break;
             }
+            bytes.push(hi);
+            bytes.push(lo);
+            wyde_count += 1;
             addr = addr.wrapping_add(2);
         }
         debug!(

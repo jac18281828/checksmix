@@ -102,6 +102,96 @@ fn test_trap_fputws() {
     assert_eq!(handle.stdout(), b"Hi");
 }
 
+/// A string of exactly `Fputs`'s 1 MiB cap, followed by its zero, is not
+/// too long: it writes whole, silently.
+#[test]
+fn test_trap_fputs_writes_exactly_the_cap_with_no_diagnostic() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    let str_addr = 10_000u64;
+    for i in 0..1_048_576u64 {
+        mmix.write_byte(str_addr + i, b'A');
+    }
+    mmix.write_byte(str_addr + 1_048_576, 0);
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000701); // TRAP 0, Fputs (7), 1 (stdout)
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), 1_048_576);
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert!(handle.diagnostics().is_empty());
+}
+
+/// A string one byte past `Fputs`'s cap writes the first 1 MiB, reports a
+/// diagnostic, and returns the count actually written.
+#[test]
+fn test_trap_fputs_past_the_cap_truncates_with_a_diagnostic() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    let str_addr = 10_000u64;
+    for i in 0..1_048_577u64 {
+        mmix.write_byte(str_addr + i, b'A');
+    }
+    mmix.write_byte(str_addr + 1_048_577, 0);
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000701);
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), 1_048_576);
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert!(handle.diagnostics()[0].contains("Fputs"));
+}
+
+/// `Fputws`'s cap is `Fputs`'s budget in wydes: exactly that many, followed
+/// by the terminating zero wyde, writes whole and silently.
+#[test]
+fn test_trap_fputws_writes_exactly_the_cap_with_no_diagnostic() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    let str_addr = 20_000u64;
+    for i in 0..524_288u64 {
+        mmix.write_byte(str_addr + i * 2, 0x00);
+        mmix.write_byte(str_addr + i * 2 + 1, 0x41);
+    }
+    mmix.write_byte(str_addr + 524_288 * 2, 0);
+    mmix.write_byte(str_addr + 524_288 * 2 + 1, 0);
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputws (8), 1 (stdout)
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), 524_288);
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert!(handle.diagnostics().is_empty());
+}
+
+/// A string one wyde past `Fputws`'s cap writes the first 524,288 wydes,
+/// reports a diagnostic, and returns the count actually written.
+#[test]
+fn test_trap_fputws_past_the_cap_truncates_with_a_diagnostic() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    let str_addr = 20_000u64;
+    for i in 0..524_289u64 {
+        mmix.write_byte(str_addr + i * 2, 0x00);
+        mmix.write_byte(str_addr + i * 2 + 1, 0x41);
+    }
+    mmix.write_byte(str_addr + 524_289 * 2, 0);
+    mmix.write_byte(str_addr + 524_289 * 2 + 1, 0);
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000801);
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), 524_288);
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert!(handle.diagnostics()[0].contains("Fputws"));
+}
+
 #[test]
 fn test_host_trap_hook_reports_arg_and_both_255_values() {
     let (host, handle) = CaptureHost::new();

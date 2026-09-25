@@ -489,9 +489,9 @@ program choose the handle; opening one already open closes it first, and a
 failed open leaves the handle closed.
 
 `Fopen`'s name is the bytes at its address up to the first zero byte,
-passed to the host unchanged, capped at 1,048,576 bytes per call. A name
-with no zero within the bound, or one that is not valid UTF-8, fails with
-−1 and touches no file.
+passed to the host unchanged, capped at the same per-call length as
+`Fputs` below. A name with no zero within the bound, or one that is not
+valid UTF-8, fails with −1 and touches no file.
 
 `Fgets` reads until `size − 1` characters or a newline, then a zero byte,
 returning the count stored (a partial last line at end of file included), or
@@ -500,9 +500,13 @@ characters, two bytes each in memory order, raw to and from the file:
 `Fgetws` rounds its buffer address down to even and stops at the wyde
 `#000A`, `size − 1` wydes, or end of file; `Fputws` writes up to, not
 including, the first zero wyde. `Fputs` writes up to, not including, the
-first zero byte, with no byte value translated. `Fseek`'s offset, `≥ 0`,
-positions that many bytes from the start; `< 0` positions `−offset − 1`
-bytes before the end, so `−1` is the end itself.
+first zero byte, with no byte value translated. `Fputs` and `Fputws` cap
+each call at 1,048,576 bytes and 524,288 wydes; a string of exactly the
+cap, followed by its zero, writes whole, and a longer one writes that
+many, reports a diagnostic, and returns the count actually written in
+`$255`. `Fseek`'s offset, `≥ 0`, positions that many bytes from the start;
+`< 0` positions `−offset − 1` bytes before the end, so `−1` is the end
+itself.
 
 Handles 0, 1 and 2 (`StdIn`, `StdOut`, `StdErr`, the predefined symbols'
 values) are open at start with `TextRead`, `TextWrite`, `TextWrite`.
@@ -513,8 +517,9 @@ no file underneath to rebind, and a `StdIn` read always fails, since the
 host has no read primitive.
 
 **Departure from the reference:** the reference places no length limit on
-`Fopen`'s name, and accepts any name the host filesystem does; checksmix
-caps it at 1,048,576 bytes and rejects a name that is not valid UTF-8.
+`Fopen`'s name, `Fputs`, or `Fputws`, and accepts any name the host
+filesystem does; checksmix caps the three calls as above and rejects an
+`Fopen` name that is not valid UTF-8.
 
 ### Extensions
 
