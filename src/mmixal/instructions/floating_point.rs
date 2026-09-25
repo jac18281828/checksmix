@@ -2,7 +2,7 @@
 
 use super::super::MMixAssembler;
 use super::super::Rule;
-use super::super::ZForm;
+use super::super::operands::ZForm;
 use super::MMixInstruction;
 
 impl MMixAssembler {
