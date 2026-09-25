@@ -1,9 +1,9 @@
 //! Data and pseudo directives: `BYTE`/`WYDE`/`TETRA`/`OCTA`, `LOC`, `IS`, and `PREFIX`.
 
-use super::ExprValue;
 use super::MMixAssembler;
 use super::Rule;
 use super::SymbolType;
+use super::expressions::ExprValue;
 use super::instructions::MMixInstruction;
 use tracing::debug;
 

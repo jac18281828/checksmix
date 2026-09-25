@@ -1,9 +1,9 @@
 //! Symbol qualification, redefinition rules, and local-label bookkeeping.
 
-use super::ExprValue;
 use super::MMixAssembler;
 use super::Rule;
 use super::SymbolType;
+use super::expressions::ExprValue;
 
 impl MMixAssembler {
     /// Apply the active PREFIX to a raw identifier. The root prefix is the

@@ -1,8 +1,8 @@
 //! Operand resolution: register and immediate parsing, and base-address search for the two-operand memory form.
 
-use super::ExprValue;
 use super::MMixAssembler;
 use super::Rule;
+use super::expressions::ExprValue;
 
 /// Resolved Z operand for an auto-immediate base mnemonic. The parser uses
 /// this to choose between the RRR and RRI variants of an instruction.

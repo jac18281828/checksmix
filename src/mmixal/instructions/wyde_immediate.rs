@@ -1,8 +1,8 @@
 //! The SET/SETI/SETL/SETH/SETMH/SETML/INC*/OR*/ANDN* wyde-immediate family.
 
-use super::super::ExprValue;
 use super::super::MMixAssembler;
 use super::super::Rule;
+use super::super::expressions::ExprValue;
 use super::MMixInstruction;
 
 impl MMixAssembler {
