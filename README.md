@@ -347,6 +347,11 @@ runs here.
 `checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target
 and new work belongs in `.mms`.
 
+## Contribute
+
+Bug reports and pull requests are welcome; see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Tribute
 
 Donald Knuth's art and craft inspire my work. I once reported a "bug" in *The Art
