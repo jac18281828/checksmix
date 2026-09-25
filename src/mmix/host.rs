@@ -6,31 +6,34 @@ use std::io::{Write, stderr, stdout};
 use std::time::SystemTime;
 
 /// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
-/// the wall clock, and diagnostic messages that today go to stderr.
+/// the wall clock, and diagnostic messages (`StdHost` prints them to
+/// stderr).
 ///
-/// `MMix::new()` installs `StdHost`, reproducing today's process behavior
-/// exactly. `MMix::with_host` accepts any `Host`, which is how an embedder
-/// (a wasm host with no stdout, a test harness that wants to inspect bytes
-/// rather than print them) captures what the machine emits instead of
-/// losing it to the process.
+/// `MMix::new()` installs `StdHost`, which writes to the process's own
+/// stdout and stderr. `MMix::with_host` accepts any `Host`, which is how an
+/// embedder (a wasm host with no stdout, a test harness that wants to
+/// inspect bytes rather than print them) captures what the machine emits
+/// instead of losing it to the process.
 ///
 /// File-descriptor traps (`Fopen`/`Fclose`/`Fread`/`Fgets`/`Fgetws`/
 /// `Fwrite`/`Fseek`/`Ftell` on a handle above 2, and fd 3+ of `Fputs`/
 /// `Fputc`/`Fputws`) do not go through the host — they keep using `std::fs`
 /// directly and fail naturally on platforms without a filesystem. Handles
-/// 0-2 belong to the host: `Fopen`/`Fclose` reject them, and their reads and
-/// writes route through `Host` rather than `std::fs`.
+/// 0-2 belong to the host: `Fopen`/`Fclose` reject them. Fd 1 and 2 writes
+/// route through `Host`; a fd 0 (`StdIn`) read always fails, since `Host`
+/// has no read primitive.
 ///
 /// `flush` and `trap` have no-op defaults, so an embedder implements only
 /// what it needs. The trait is object-safe — `MMix` stores it as
 /// `Box<dyn Host>` — and any method added in a future release will carry a
 /// default, so implementors do not break.
 ///
-/// `MMix::with_host` consumes the host and offers no way to get it back. A
-/// host that wants its caller to read what it captured owns its buffers
-/// behind a shared handle — `Rc<RefCell<Vec<u8>>>` or similar — cloned
-/// *before* the host is moved in, so the caller keeps one clone and the
-/// `MMix` owns the other.
+/// `MMix::host_mut` and `MMix::into_host` reach a host moved in with
+/// `with_host` again, by reference or by consuming the machine. A host that
+/// wants its caller to read what it captured without borrowing the `MMix`
+/// can instead hold its buffers behind a shared handle —
+/// `Rc<RefCell<Vec<u8>>>` or similar — cloned *before* the host is moved
+/// in, so the caller keeps one clone and the `MMix` owns the other.
 ///
 /// Because `MMix` stores the host as `Box<dyn Host>`, it is none of `Send`,
 /// `Sync`, `UnwindSafe`, or `RefUnwindSafe`. The intended embedders are
@@ -148,9 +151,9 @@ impl<H: Host + ?Sized> Host for Box<H> {
     }
 }
 
-/// The `Host` behind `MMix::new()`: reproduces today's process I/O exactly
-/// — locked `stdout`/`stderr` writes, `stdout().flush()` on halt,
-/// `SystemTime` for the clock, and `eprintln!` for diagnostics.
+/// The `Host` behind `MMix::new()`: the process's own I/O — locked
+/// `stdout`/`stderr` writes, `stdout().flush()` on halt, `SystemTime` for
+/// the clock, and `eprintln!` for diagnostics.
 ///
 /// `write_bytes_to_fd` only ever calls `Host::write` with fd 1 or 2 (fd 3+
 /// reads its `File` from `file_handles`), but `StdHost` is a general `Host`

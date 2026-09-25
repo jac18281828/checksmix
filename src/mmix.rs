@@ -36,12 +36,11 @@ pub use trap::TrapCode;
 /// # Thread safety
 ///
 /// `MMix` owns a [`Host`] as `Box<dyn Host>` and is therefore none of `Send`,
-/// `Sync`, `UnwindSafe`, or `RefUnwindSafe` — a change from 0.2.23, where it
-/// was all four. This is deliberate: the intended embedders are
-/// single-threaded and capture into `Rc<RefCell<_>>`, which a `Send` bound
-/// would forbid. Move the program, not the machine — construct an `MMix` on
-/// the thread that runs it, and wrap it in `std::panic::AssertUnwindSafe` to
-/// put one through `catch_unwind`.
+/// `Sync`, `UnwindSafe`, or `RefUnwindSafe`. This is deliberate: the intended
+/// embedders are single-threaded and capture into `Rc<RefCell<_>>`, which a
+/// `Send` bound would forbid. Move the program, not the machine — construct
+/// an `MMix` on the thread that runs it, and wrap it in
+/// `std::panic::AssertUnwindSafe` to put one through `catch_unwind`.
 pub struct MMix {
     /// 256 general-purpose registers, each 64 bits
     general_regs: [u64; 256],
@@ -101,8 +100,7 @@ impl Default for MMix {
 
 impl MMix {
     /// Create a new MMIX computer with all registers and memory initialized
-    /// to zero, and process I/O routed through `StdHost` — today's behavior,
-    /// unchanged.
+    /// to zero, and process I/O routed through `StdHost`.
     pub fn new() -> Self {
         Self::with_host(StdHost)
     }
@@ -216,8 +214,9 @@ impl MMix {
         self.set_special(SpecialReg::RV, 0x369C200400000000);
 
         // StdIn/StdOut/StdErr are open at start, TextRead/TextWrite/TextWrite
-        // per the reference. None carries a `File`: fd 0's reads and fd 1/2's
-        // writes route through the installed `Host`.
+        // per the reference. None carries a `File`: fd 1 and 2's writes
+        // route through the installed `Host`; a fd 0 read always fails,
+        // since `Host` has no read primitive.
         self.file_handles.insert(
             0,
             FileHandle {

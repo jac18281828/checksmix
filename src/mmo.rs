@@ -294,17 +294,14 @@ impl MmoGenerator {
     /// Emit `lop_loc`: `#98010002`, then `addr`'s high and low tetras.
     /// `addr` is always a multiple of 4, `generate`'s own invariant.
     fn emit_lop_loc(&self, mmo: &mut Vec<u8>, addr: u64) {
-        // Record header: MM lop_loc with YZ=2 (two tetras of address data follow)
-        mmo.push(MM); // MM escape code
-        mmo.push(MmoRecordType::LopLoc as u8); // lop_loc
-        mmo.push(0x00); // Y
-        mmo.push(0x02); // Z = 2 (two tetras follow)
+        mmo.push(MM);
+        mmo.push(MmoRecordType::LopLoc as u8);
+        mmo.push(0x00);
+        mmo.push(0x02);
 
-        // Tetra 1: high 32 bits
         let high = (addr >> 32) as u32;
         mmo.extend_from_slice(&high.to_be_bytes());
 
-        // Tetra 2: low 32 bits
         let low = (addr & 0xFFFFFFFF) as u32;
         mmo.extend_from_slice(&low.to_be_bytes());
     }

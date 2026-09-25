@@ -8,7 +8,7 @@ impl MMix {
     /// is clear sets its event bit and execution continues normally. The
     /// leftmost raised bit in `D V W I O U Z X` priority whose enable is set
     /// instead trips to its handler; any other raised bit that is enabled
-    /// but not leftmost is dropped — no event, no trip (owner, 2026-09-18).
+    /// but not leftmost is dropped — no event, no trip.
     ///
     /// `op_byte`, `x`, `y`, `z` are the raising instruction's own fields, and
     /// `y_val`/`z_val` its `$Y`/`$Z`, captured by the caller before any

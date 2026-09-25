@@ -19,8 +19,12 @@ pub(super) const MAX_TRAP_BYTES: usize = 1_048_576;
 const MAX_TRAP_WYDES: usize = MAX_TRAP_BYTES / 2;
 
 /// TRAP code identifiers for MMIX, numbered per the MMIXAL reference: every
-/// call is `TRAP 0,Code,Handle`, `Z` names the handle (0-255), and `$255`
-/// carries any further argument (an address, for a call that takes two).
+/// call is `TRAP 0,Code,Z`. `Z` means a different thing per code: ignored
+/// for `Halt`; the handle (0-255) for the file calls and `Fputc`; the unit
+/// for `Time` (0 seconds, 1 milliseconds, 2 microseconds); and for `Debug`,
+/// the 0-based index, in program order, of a `debug "text"` directive,
+/// looked up in the table `set_debug_strings` installed. `$255` carries any
+/// further argument (an address, for a call that takes two).
 /// `Fputc`, `Time` and `Debug` are checksmix's own extensions, given codes
 /// (`#80`-`#82`) well above the reference's range so an old binary's codes
 /// 11-13 reach the unhandled-TRAP diagnostic rather than the wrong call.
@@ -71,9 +75,10 @@ impl TrapCode {
 }
 
 /// One of `checksmix`'s open TRAP handles. Handles 0-2 are the standard
-/// streams: no backing `File` (`Fclose`d reads and writes for them route
-/// through the installed [`Host`]) and fixed capabilities. Handles 3-255 are
-/// whatever `Fopen`'s mode granted.
+/// streams: no backing `File` and fixed capabilities. Fd 1 and 2 writes
+/// route through the installed [`Host`]; a fd 0 read always fails, since
+/// `Host` has no read primitive. Handles 3-255 are whatever `Fopen`'s mode
+/// granted.
 ///
 /// `read`, `write` and `seek` gate `Fread`/`Fgets`/`Fgetws`,
 /// `Fwrite`/`Fputs`/`Fputc`/`Fputws`, and `Fseek`/`Ftell` respectively.

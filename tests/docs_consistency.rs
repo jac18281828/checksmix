@@ -1,9 +1,10 @@
-/// Integration test for docs consistency
-/// Verifies every man page's version matches Cargo.toml, and that every
-/// binary the crate declares has a man page. Discovers pages by enumerating
-/// `man/*.1` rather than naming files, so a new binary's missing page is
-/// caught without anyone remembering to wire it up here.
+//! Integration tests for docs consistency: `man_page_versions_match_cargo_toml`,
+//! `man_page_exists_for_every_declared_binary`, and
+//! `every_opcode_appears_once_in_the_instruction_table`.
 
+/// Verifies every `man/*.1` page's `.TH` version matches Cargo.toml. Pages
+/// are found by enumerating `man/` rather than naming files, so a new page
+/// is checked without anyone remembering to wire it up here.
 #[test]
 fn man_page_versions_match_cargo_toml() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -30,6 +31,8 @@ fn man_page_versions_match_cargo_toml() {
     }
 }
 
+/// Verifies every `[[bin]]` Cargo.toml declares has a man page at
+/// `man/<name>.1`, so a new binary's missing page is caught.
 #[test]
 fn man_page_exists_for_every_declared_binary() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
