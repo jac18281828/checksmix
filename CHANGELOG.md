@@ -1,3 +1,7 @@
+0.4.0 (unreleased)
+
+* `break` and `delete` take a `#` or `0x` hex address as `print` does, rounded down to its tetra, and an unprefixed number is still a source line
+
 0.3.13 (2026-09-22)
 
 * Every load, store, `GO` and cache instruction that auto-selects its register or immediate opcode now also takes a two-operand memory form: a register second operand is an offset of zero, `LDO $1,$2` assembling `LDO $1,$2,0`; a pure second operand is a base-relative address, resolved against the largest preceding `GREG`'s nonzero initial value that lands within 255 bytes below it, emitting the three-operand form with that base in Y and the remainder in Z. No base close enough is an error naming the address, at the operand's own line and column. `LDA` does not take this path; its own two-operand form and sizing are unchanged

@@ -93,7 +93,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         "r" | "run" => Ok(Command::Run),
         "b" | "break" => {
             if rest.is_empty() {
-                Err("break requires a line number or label".to_string())
+                Err("break requires a line number, label or address".to_string())
             } else {
                 Ok(Command::Break(rest.to_string()))
             }
@@ -561,10 +561,11 @@ impl Debugger {
     }
 
     /// Resolve a `break`/`delete` argument to an address, in priority order:
-    /// a decimal source line in the current file, else an exact label. A
-    /// leading ':' (the root-namespace spelling) is stripped before the
-    /// label lookup, since `MMixAssembler::labels` keys a root name without
-    /// it.
+    /// a decimal source line in the current file, an exact label, or a `#`/
+    /// `0x` hex address rounded down to its tetra (`addr & !3`), since MMIX
+    /// executes instructions only at multiples of 4. A leading ':' (the
+    /// root-namespace spelling) is stripped before the label lookup, since
+    /// `MMixAssembler::labels` keys a root name without it.
     fn resolve_break_location(&self, arg: &str) -> Option<u64> {
         let arg = arg.trim();
         if let Ok(line) = arg.parse::<usize>() {
@@ -572,7 +573,11 @@ impl Debugger {
                 .and_then(|file| self.assembler.addr_for_line(&file, line))
         } else {
             let key = arg.strip_prefix(':').unwrap_or(arg);
-            self.assembler.labels.get(key).copied()
+            self.assembler
+                .labels
+                .get(key)
+                .copied()
+                .or_else(|| self.parse_hex_address(arg).map(|addr| addr & !3))
         }
     }
 
@@ -832,8 +837,8 @@ next (over)   n, next                          Execute one source line, stepping
 stepi         si, stepi                        Execute exactly one instruction, following into calls/branches.
 continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
 run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
-break         b <line>, b <label>, break …     Set a breakpoint at a source line or label.
-delete        d, delete, d <line>, d <label>   Delete one breakpoint, or every breakpoint given no argument.
+break         b <line>, b <label>, b <addr>, break …   Set a breakpoint at a source line, label, or hex address.
+delete        d, delete, d <line>, d <label>, d <addr>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base. p/f and p/x, attached or detached, print it as an IEEE double or in hex.
 set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
@@ -1060,6 +1065,20 @@ Text\tBYTE\t\"Hi\",0
         assert!(joined.contains("delete"));
         assert!(joined.contains("info break"));
         assert!(joined.lines().any(|l| l.starts_with("set")));
+        assert!(
+            joined
+                .lines()
+                .find(|l| l.starts_with("break "))
+                .is_some_and(|l| l.contains("<addr>")),
+            "the break help line must name the address form: {joined:?}"
+        );
+        assert!(
+            joined
+                .lines()
+                .find(|l| l.starts_with("delete "))
+                .is_some_and(|l| l.contains("<addr>")),
+            "the delete help line must name the address form: {joined:?}"
+        );
     }
 
     /// `next` lands on the head of the next source line every time, never
@@ -1222,6 +1241,119 @@ Main\tdebug\t\"hi\"
         assert!(
             stop.starts_with("stack.mms:11\t"),
             "run must stop at the line-11 breakpoint, got {stop:?}"
+        );
+    }
+
+    /// `#`/`0x` both name a hex address, matching `print`'s spellings; the
+    /// success message echoes the resolved address beside the argument
+    /// text.
+    #[test]
+    fn break_by_hash_hex_address_stops_there() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let msg = dbg.execute(Command::Break("#118".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x118 (#118)".to_string()]);
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert_eq!(dbg.mmix.get_pc(), 0x118);
+        assert!(
+            stop.starts_with("stack.mms:11\t"),
+            "run must stop at the hex breakpoint, got {stop:?}"
+        );
+    }
+
+    #[test]
+    fn break_by_0x_hex_address_stops_there() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let msg = dbg.execute(Command::Break("0x118".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x118 (0x118)".to_string()]);
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x118);
+    }
+
+    /// A hex address off the tetra boundary rounds down to the instruction
+    /// holding it, and `info break` lists it against that instruction's
+    /// line, since `source_loc` is an extent lookup.
+    #[test]
+    fn break_by_hex_address_rounds_down_to_its_tetra() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let msg = dbg.execute(Command::Break("#11B".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x118 (#11B)".to_string()]);
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["0x118  stack.mms:11".to_string()]
+        );
+    }
+
+    /// A hex address naming a tetra inside a multi-tetra expansion, such as
+    /// `SETI`'s, stops there -- no line or label names it.
+    #[test]
+    fn break_by_hex_address_inside_an_expansion_stops_there() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let msg = dbg.execute(Command::Break("#124".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x124 (#124)".to_string()]);
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x124);
+    }
+
+    /// `delete` resolves a hex address the same way `break` does, matching
+    /// what `info break` lists a line-set breakpoint as.
+    #[test]
+    fn delete_by_hex_address_removes_a_line_set_breakpoint() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        dbg.execute(Command::Break("11".to_string()));
+        let msg = dbg.execute(Command::Delete(Some("0x118".to_string())));
+        assert_eq!(msg, vec!["Deleted breakpoint at 0x118 (0x118)".to_string()]);
+        let stop = dbg.execute(Command::Run).join("\n");
+        assert!(
+            stop.starts_with("Program exited with code 42."),
+            "clearing the only breakpoint must let the program run to completion, got {stop:?}"
+        );
+    }
+
+    /// An unprefixed number is always a source line, never an address: the
+    /// two spellings are disjoint even where the digits would parse as
+    /// either.
+    #[test]
+    fn break_treats_an_unprefixed_number_as_a_line_not_an_address() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        let msg = dbg.execute(Command::Break("118".to_string()));
+        assert_eq!(
+            msg,
+            vec!["No location found for '118'; breakpoint not set".to_string()]
+        );
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["No breakpoints set.".to_string()]
+        );
+    }
+
+    /// Text `parse_hex_address` rejects -- a bare prefix, a non-hex digit,
+    /// or a value at or above 2^64 -- falls through to the label lookup and
+    /// gets the existing unresolvable-argument message.
+    #[test]
+    fn break_rejects_malformed_hex_address_text() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        for arg in ["#", "0x", "#11G", "#10000000000000000"] {
+            let msg = dbg.execute(Command::Break(arg.to_string()));
+            assert_eq!(
+                msg,
+                vec![format!("No location found for '{arg}'; breakpoint not set")]
+            );
+        }
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["No breakpoints set.".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_command_break_requires_an_argument() {
+        assert_eq!(
+            parse_command("b"),
+            Err("break requires a line number, label or address".to_string())
+        );
+        assert_eq!(
+            parse_command("break"),
+            Err("break requires a line number, label or address".to_string())
         );
     }
 

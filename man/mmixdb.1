@@ -96,13 +96,14 @@ yet.
 .B run
 is the one resume command that works after the program has exited.
 .TP
-.BR "b " \fILINE\fR|\fILABEL\fR ", " "break " \fILINE\fR|\fILABEL\fR
-Set a breakpoint at a decimal source line number in the current file, or
-at an exact label. No other address form is accepted.
+.BR "b " \fILINE\fR|\fILABEL\fR|\fIADDR\fR ", " "break " \fILINE\fR|\fILABEL\fR|\fIADDR\fR
+Set a breakpoint at a decimal source line number in the current file, at
+an exact label, or at a \fB#\fR/\fB0x\fR-prefixed hex address, rounded down
+to a multiple of 4.
 .TP
-.BR "d " \fILINE\fR|\fILABEL\fR ", " "delete " \fILINE\fR|\fILABEL\fR ", " d ", " delete
-Delete the breakpoint at a decimal source line number or an exact label,
-resolved exactly as
+.BR "d " \fILINE\fR|\fILABEL\fR|\fIADDR\fR ", " "delete " \fILINE\fR|\fILABEL\fR|\fIADDR\fR ", " d ", " delete
+Delete the breakpoint at a decimal source line number, an exact label, or a
+hex address, resolved exactly as
 .BR break .
 With no argument, delete every breakpoint.
 .TP

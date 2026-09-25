@@ -213,8 +213,8 @@ set (i.e. when run from Emacs's `gud-mode`).
 | stepi | `si`, `stepi` | Execute exactly one instruction, following into calls/branches. |
 | continue | `c`, `continue` | Resume, single-stepping until a breakpoint or halt. |
 | run/reset | `r`, `run` | Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires. |
-| break | `b <line>`, `b <label>`, `break …` | Set a breakpoint at a source line or label. |
-| delete | `d`, `delete`, `d <line>`, `d <label>` | Delete one breakpoint, or every breakpoint given no argument. |
+| break | `b <line>`, `b <label>`, `b <addr>`, `break …` | Set a breakpoint at a source line, a label, or a hex address (`0x...`/`#...`) at the tetra holding it. |
+| delete | `d`, `delete`, `d <line>`, `d <label>`, `d <addr>` | Delete one breakpoint, or every breakpoint given no argument. |
 | print | `p <arg>`, `print <arg>`, `p/f <arg>`, `p/x <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or the memory octa at a hex address's aligned 8-byte base (`0x...`/`#...`). `/f` and `/x`, attached or detached (`p /f <arg>`), print the same octabyte as an IEEE double or in hex instead. |
 | set | `set <target> <value>` | Write a register (`$N`/`N`), special register, or the memory octa at a hex address's aligned 8-byte base. A symbol whose type is a register alias (from `GREG` or a register-valued `IS`, e.g. `Sp`) is settable the same way; a label or a symbol whose type is a constant (an `IS` bound to a non-register value) is not; neither names a storage location. `value` is decimal or `0x`/`#`-prefixed hex. |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
