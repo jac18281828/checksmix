@@ -1,5 +1,5 @@
-//! The load/store family: LDB through SYNCIDI, excluding GO/GOI and
-//! PUSHGO/PUSHGOI, which transfer control and dispatch to `control.rs`.
+//! The load/store family: LDB through SYNCIDI, excluding GO/GOI, which
+//! transfer control and dispatch to `control.rs`.
 
 use super::super::{MMix, SpecialReg};
 use crate::mmixal::Opcode;

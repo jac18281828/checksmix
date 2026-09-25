@@ -57,6 +57,7 @@ impl MMix {
                 self.pc = addr;
                 true
             }
+            // Store-range call instructions (0xBE-0xBF): PUSHGO, PUSHGOI
             Opcode::PUSHGO => {
                 // PUSHGO $X, $Y, $Z - Push registers and go (absolute target $Y+$Z)
                 let target = self.get_register(y).wrapping_add(self.get_register(z));

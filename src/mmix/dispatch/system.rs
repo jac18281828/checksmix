@@ -52,7 +52,7 @@ impl MMix {
                     false // Halt by default for unhandled register traps
                 }
             }
-            // Jump/Stack/System instructions - opcodes 0xF6-0xF7, 0xF9-0xFF
+            // Stack/System instructions - opcodes 0xF6-0xF7, 0xF9-0xFF
             Opcode::PUT => {
                 // PUT X, $Z - Put $Z into special register X.
                 let value = self.get_register(z);

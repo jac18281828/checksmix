@@ -1,6 +1,5 @@
 //! Instruction dispatch: `execute_instruction`, `dispatch`'s prologue and
-//! family router, and `must_be_zero_violation`, the only check every
-//! family shares.
+//! family router, and `must_be_zero_violation`.
 
 use super::{MMix, SpecialReg};
 use tracing::{debug, instrument};
