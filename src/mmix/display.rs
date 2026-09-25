@@ -10,6 +10,7 @@ impl fmt::Display for MMix {
 }
 
 #[derive(Copy, Clone)]
+#[non_exhaustive]
 pub enum ValueFormat {
     Signed,
     Unsigned,

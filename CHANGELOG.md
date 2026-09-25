@@ -2,6 +2,7 @@
 
 * `break` and `delete` take a `#` or `0x` hex address as `print` does, rounded down to its tetra, and an unprefixed number is still a source line
 * **Breaking: the MIX emulator is gone.** The library no longer exports `Mix`, `Computer`, `Program`, `Instruction` or `ProgramParseError`, and `checksmix` no longer runs `.mix` or `.mixal` files; it exits 1 on either as an unknown extension
+* **Breaking: `ValueFormat` is `#[non_exhaustive]`.** A downstream `match` on it needs a wildcard arm; naming a variant still works
 
 0.3.13 (2026-09-22)
 
