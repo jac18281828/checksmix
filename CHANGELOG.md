@@ -26,6 +26,7 @@
 * **Breaking: the 224th `GREG` is an error.** The reference's own threshold applies: `GREG` allocates `$254` down to `$32`, 223 registers, and refuses a 224th; it used to allocate `$31` and below, 254 in all
 * `MMixAssembler::generate_object_code` carries the assembler's `GREG` values and rG into the `.mmo` it builds; `checksmix build` and `mmixasm` now build their object file through it instead of assembling a `MmoGenerator` by hand
 * Every error `MMixAssembler::parse` or `MMixAssembler::resolve_includes` returns now begins `file:line:col:`. `Expected expression, got: …`, `Expected a literal, got: …`, `symbol '…' redefined`, `predefined symbol '…' redefined after its value was used at …`, `` too many `debug` directives … ``, `BSPEC has no matching ESPEC before end of input`, `LOCAL ${reg} is not below the global threshold`, `{what} is not allowed inside BSPEC/ESPEC`, `{keyword} takes no label`, `BSPEC does not nest`, `BSPEC operand {v} does not fit in two bytes`, `ESPEC has no matching BSPEC`, `include cycle detected: …` and `cannot read included file '…': …` each gain a column, a file, or both
+* The published crate drops the repository's integration tests and its CI, editor, container and agent files (`tests/`, `.github/`, `.vscode/`, `.devcontainer/`, `Dockerfile`, `CLAUDE.md`, `AGENTS.md`, `commitlint.config.js`), and takes the README's description
 
 0.3.13 (2026-09-22)
 

@@ -3,12 +3,22 @@ name = "checksmix"
 version = "0.3.14"
 edition = "2024"
 authors = ["John Cairns <john@2ad.com>"]
-description = "A simplified MMIX simulator - Donald Knuth's hypothetical computer for teaching and learning assembly language programming."
+description = "An assembler, emulator and source-level debugger for Knuth's MMIX."
 license = "BSD-3-Clause"
 repository = "https://github.com/jac18281828/checksmix"
 keywords = ["mmix", "simulator", "knuth", "assembly", "educational"]
 categories = ["simulation", "emulators"]
-exclude = ["examples/*", "README.md", "docs/*"]
+exclude = [
+  "/examples/",
+  "/tests/",
+  "/.github/",
+  "/.vscode/",
+  "/.devcontainer/",
+  "/Dockerfile",
+  "/CLAUDE.md",
+  "/AGENTS.md",
+  "/commitlint.config.js",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
