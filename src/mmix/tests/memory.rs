@@ -457,10 +457,24 @@ fn test_seti_lands_a_wide_constant() {
 
 #[test]
 fn test_lda_large_address_lands_whole_address() {
-    // LDA $X,Label above #FF expands to the same four tetras SETI uses;
-    // examples/hello_world.mms gets its string pointer this way.
-    let mmix = assemble_and_run("\tLOC\t#2000000000001234\nMain\tLDA\t$255,Main\n", 4);
+    // LDA $X,addr resolves against a GREG base, one tetra; a base within
+    // 255 bytes below a far address still reaches it whole.
+    let mmix = assemble_and_run(
+        "\tLOC\t#2000000000001200\nBase\tGREG\t@\n\tLOC\t#2000000000001234\nMain\tLDA\t$255,Main\n",
+        1,
+    );
     assert_eq!(mmix.get_register(255), 0x2000_0000_0000_1234);
+}
+
+#[test]
+fn test_lda_with_a_base_never_encodes_register_form_22() {
+    // Register form #22 would add $5's contents to $0; the base-address
+    // form #23 loads the literal address 5 instead, leaving $0 untouched.
+    let mmix = assemble_and_run(
+        "\tLOC\t#100\nB\tGREG\t1\nMain\tSET\t$0,100\n\tLDA\t$1,5\n",
+        2,
+    );
+    assert_eq!(mmix.get_register(1), 5);
 }
 
 #[test]

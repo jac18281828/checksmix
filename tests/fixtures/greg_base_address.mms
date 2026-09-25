@@ -16,7 +16,7 @@ DataAddr OCTA   0
 Sub     SET     Result,1        % the two-operand GO's target, also base-relative
         SET     Expect,1
         CMP     Temp,Result,Expect
-        PBZ     Temp,Pass
+        PBZ     Temp,Check4
         JMP     Fail
 PassMsg BYTE    "All tests passed!",10,0
 FailMsg BYTE    "Test failed!",10,0
@@ -37,7 +37,13 @@ Check2  LDO     Result,DataB    % a second base-relative load
         JMP     Fail
 
 Check3  GO      $9,Sub          % the two-operand form of GO
-        JMP     Fail            % unreached: Sub falls through to Pass
+        JMP     Fail            % unreached: Sub falls through to Check4
+
+Check4  LDA     Result,DataA    % the two-operand LDA form, base-relative
+        SET     Expect,DataA
+        CMP     Temp,Result,Expect
+        PBZ     Temp,Pass
+        JMP     Fail
 
 Pass    SET     $255,PassMsg
         TRAP    0,Fputs,StdOut

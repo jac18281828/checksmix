@@ -933,6 +933,7 @@ Main    SETI    $1,7
     /// Writes `Hi` to fd 1, then halts.
     const GREETING_PROGRAM: &str = "\
 \tLOC\t#100
+Base\tGREG\t@
 Main\tLDA\t$255,Text
 \tTRAP\t0,Fputs,1
 \tTRAP\t0,Halt,0

@@ -515,7 +515,8 @@ inst_load_store_rri = {
 }
 
 // LDA aliases ADDU, so its Z auto-selects the register or immediate opcode.
-// The two-operand form LDA $X,Label loads a full address.
+// The two-operand form LDA $X,addr resolves addr against a preceding GREG
+// base, like the memory forms.
 inst_lda_auto = { mnemonic_lda ~ operand_list_three }
 inst_lda_rri = { mnemonic_ldai ~ operand_list_three }
 inst_lda_ri = { (mnemonic_ldai | mnemonic_lda) ~ operand_list_two }

@@ -22,6 +22,7 @@
 * `GO` and `GOI` store `@+4` mod 2^64: a release build already wrapped the return address silently at the top of memory; a debug build no longer panics there
 * **Breaking: mmixdb's `set` rejects an rL or rG the register file cannot hold.** `set rL` now accepts at most rG and `set rG` accepts 32-255 and at least rL; a value outside those bounds used to take effect and could panic or corrupt the machine on the next `SAVE`, `PUSHJ` or `POP`
 * **Breaking: an address past `#FFFFFFFFFFFFFFFF` is an assembly error.** An item may still fill the address space's last bytes exactly, but a statement that then needs an address — an instruction, a data item, a bound label, or `@` — now errors instead of wrapping; a release build used to wrap such input silently. The `.mmo` writer and reader, and a `lop_spec` length check, follow the same bound
+* **Breaking: two-operand `LDA $X,addr` resolves `addr` against a preceding `GREG` base, one tetra always**, the memory forms' own error when none is close enough; `LDA $X,$Y` is `LDA $X,$Y,0`. It used to select register form `#22` at or below `#FF` — with the address landing in the Z *register* field rather than as a literal — expand to a four-tetra `SETH`/`INCMH`/`INCML`/`INCL` sequence above it, and its pass-1 size tracked that same threshold, moving every label after a forward-referenced operand whenever pass 2 resolved a different size. Supersedes 0.3.13's "`LDA` does not take this path; its own two-operand form and sizing are unchanged"
 
 0.3.13 (2026-09-22)
 

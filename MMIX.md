@@ -24,9 +24,9 @@ register, among those declared earlier in the source with a nonzero initial
 value, whose value is no more than 255 below it, and emits the three-operand
 form with that base in Y and the remaining offset in Z. No such base is an
 error: `no GREG before this instruction holds a base address 0 to 255 bytes
-below {addr:#x}`. The form always assembles one tetra. `LDA` does not take
-this path; its two-operand form is the address-loading alias described
-below.
+below {addr:#x}`. The form always assembles one tetra. `LDA` takes this path
+too, as `LDA $X,base,offset`; its two-operand form is described below the
+instruction table.
 
 ## Minimal assembly skeleton
 
@@ -227,10 +227,9 @@ symbol defined anywhere in the program, and operators apply to it exactly as
 to a resolved value — `JMP Later+4` and `OCTA Later-8` both assemble. Applying
 an operator to a forward reference at all is a **checksmix extension**: MMIXAL
 assembles in one pass and forbids it outright, but every program it accepts
-still assembles identically here. `LOC`, `IS`, `GREG` and the two-operand
-`LDA`'s size estimate are the exception: they resolve only a symbol already
-defined above, an assembler restriction this widens to cover expressions
-rather than lifts.
+still assembles identically here. `LOC`, `IS` and `GREG` are the exception:
+they resolve only a symbol already defined above, an assembler restriction
+this widens to cover expressions rather than lifts.
 
 ### Local symbols
 
@@ -986,16 +985,12 @@ tetra. In MMIX, `X` is an immediate byte count: `PRELD X,$Y,$Z` covers the
 `X+1` bytes `M[$Y+$Z]` through `M[$Y+$Z+X]`. `PRELD 7,$1,$2` and
 `PRELD $7,$1,$2` both emit `#9A070102`.
 
-`LDA`/`LDAI $X, addr` resolve at assemble time by whether `addr` fits a byte.
-An `addr` of 0 to 255 assembles to a single tetra: `LDAI` correctly emits a
-register-immediate `ADDUI $X, $0, addr`, but `LDA` emits the
-register-register `ADDU $X, $0, addr` instead — the address ends up in the Z
-*register* field, so the assembled instruction adds whatever register `addr`
-names rather than the literal value. Both forms also assume register `$0`
-holds zero, which nothing in checksmix enforces. This is a known gap against
-the code's own intent; it is a code change and out of scope here. An `addr`
-above 255 expands to a four-tetra `SETH`/`INCMH`/`INCML`/`INCL` sequence that
-clears `$X` and loads the full 64-bit value, correct for both forms.
+`LDA`/`LDAI $X, addr` are the two-operand memory form: `addr` resolves
+against a preceding `GREG` base exactly as `LDO $X,addr` and the other
+memory operations do, one tetra always. No base within 255 bytes below
+`addr` is the same error the memory forms give. `LDA $X,$Y` is `LDA
+$X,$Y,0`, a register `$Y` read as an offset of zero. `SETI` loads any
+address in four tetras when no base is in scope.
 
 `GETA`'s `addr` must be 4-byte aligned relative to the current instruction. A
 forward target reaches 0 to 262140 bytes ahead (an unsigned count of 0 to
@@ -1007,4 +1002,5 @@ more tetra of reach than `GETA`'s forward-only side. `GETAB` written
 directly enforces the same backward-only range and rejects a forward target
 outright. Targets that are out of range, misaligned, or (for `GETAB`) not
 behind the current instruction are a hard assembly-time error naming the
-byte figure; use `LDA` for addresses that don't fit either field.
+byte figure; use `SETI`, or `LDA` against a `GREG` base, for addresses that
+don't fit either field.

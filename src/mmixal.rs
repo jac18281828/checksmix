@@ -2806,26 +2806,11 @@ impl MMixAssembler {
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
             Rule::inst_setml_ri => Ok(MMixInstruction::SETML(0, 0)),
             Rule::inst_incl_ri => Ok(MMixInstruction::INCL(0, 0)),
-            // LDA $X,$Y,Z (3-operand form): parse_inst_lda_rri always emits a
-            // real 4-byte LDA regardless of Z's value -- it never expands to
-            // SET, unlike the 2-operand form below.
+            // LDA $X,$Y,Z (3-operand form) always emits a real 4-byte LDA
+            // regardless of Z's value. The 2-operand form resolves against
+            // a GREG base like the memory forms and is the same one tetra
+            // always, so it falls to the catch-all.
             Rule::inst_lda_rri => Ok(MMixInstruction::LDA(0, 0, 0)),
-            Rule::inst_lda_ri => {
-                // Check if LDA will expand to SET (address > 0xFF)
-                // We need to peek at the operand to determine this
-                let mut parts = inner.clone().into_inner();
-                let _mnem = parts.next();
-                let operands = parts.next().unwrap();
-                let mut ops = operands.into_inner();
-                let _x = ops.next(); // skip register
-                let addr_pair = ops.next().unwrap();
-
-                // Try to resolve the address
-                match self.parse_number(addr_pair) {
-                    Ok(addr) if addr <= 0xFF => Ok(MMixInstruction::LDA(0, 0, 0)), // 4 bytes
-                    _ => Ok(MMixInstruction::SET(0, 0)), // 16 bytes (will expand)
-                }
-            }
             Rule::inst_halt => Ok(MMixInstruction::HALT),
             // For all other instructions, return a standard 4-byte instruction
             _ => Ok(MMixInstruction::ADDU(0, 0, 0)),
@@ -2852,10 +2837,8 @@ impl MMixAssembler {
     /// would need an address past it -- `current_addr` is left unchanged in
     /// that case.
     ///
-    /// Both passes round at the same point, ahead of the item's operands.
-    /// `peek_instruction_type` sizes the two-operand `LDA` from its operand's
-    /// value, so rounding on opposite sides of operand evaluation would let
-    /// the passes disagree about a forward reference with no other symptom.
+    /// Both passes round at the same point, ahead of the item's operands, so
+    /// a forward reference sees the same address in either pass.
     fn align_current_addr(&mut self, alignment: u64) -> Result<(), ()> {
         if self.past_end {
             return Err(());
@@ -3515,39 +3498,20 @@ impl MMixAssembler {
         self.parse_rri(pair, "LDAI", MMixInstruction::LDAI)
     }
 
+    /// `LDA $X,addr` and `LDAI $X,addr` are the same address form: `addr`
+    /// resolves against a preceding `GREG` base exactly as the memory
+    /// forms' two-operand shape does, always one tetra.
     fn parse_inst_lda_ri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
+        let _mnem = parts.next();
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let addr_value = self.parse_number(ops.next().unwrap())?;
-
-        // LDA $X,Label where Label is a full 64-bit address should become SET
-        // LDA is really ADDU $X,$0,Z where Z is an 8-bit immediate
-        // If the address doesn't fit in 8 bits, use SET instead
-        match mnem.as_str().to_uppercase().as_str() {
-            "LDA" => {
-                if addr_value <= 0xFF {
-                    Ok(MMixInstruction::LDA(x, 0, addr_value as u8))
-                } else {
-                    // Address too large for LDA immediate form - use SET instead
-                    debug!("LDA with large address {:#x} converted to SET", addr_value);
-                    Ok(MMixInstruction::SET(x, addr_value))
-                }
-            }
-            "LDAI" => {
-                if addr_value <= 0xFF {
-                    Ok(MMixInstruction::LDAI(x, 0, addr_value as u8))
-                } else {
-                    Ok(MMixInstruction::SET(x, addr_value))
-                }
-            }
-            _ => Err(format!("Unknown LDA instruction: {}", mnem.as_str())),
-        }
+        let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+        Ok(MMixInstruction::LDAI(x, y, offset))
     }
 
     fn parse_inst_arith_auto(
@@ -4343,7 +4307,7 @@ impl MMixAssembler {
             addr,
             16,
             (line, col),
-            " (use LDA for longer-range addresses)",
+            " (use SETI, or LDA against a GREG base, for longer-range addresses)",
         )?;
         let y = (resolved.field >> 8) as u8;
         let z = (resolved.field & 0xFF) as u8;
@@ -4381,7 +4345,7 @@ impl MMixAssembler {
             addr,
             16,
             (line, col),
-            " (use LDA for longer-range addresses)",
+            " (use SETI, or LDA against a GREG base, for longer-range addresses)",
         )?;
         let y = (resolved.field >> 8) as u8;
         let z = (resolved.field & 0xFF) as u8;
@@ -6586,167 +6550,112 @@ mod tests {
         assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// Pass 1 sizes a forward-referenced `LDA` conservatively (16 bytes,
-    /// the `SET` expansion) since the reference isn't resolved yet; pass 2
-    /// resolves it to a value `<= #FF` and emits the short 4-byte form
-    /// instead. An `IS` symbol computed from a label between them then
-    /// sees a different address each pass -- `#FF` in pass 1, past `#FF`
-    /// in pass 2 -- so the `LDA`s that reference it grow from 4 bytes back
-    /// to 16 in pass 2, running the whole block past the end pass 1 never
-    /// saw. Pass 2 must report the located error, never panic.
+    /// Parses one bare statement for a direct `second_pass_statement` call,
+    /// bypassing `parse_two_pass`'s two-pass walk entirely.
+    fn lone_statement(source: &'static str) -> pest::iterators::Pair<'static, Rule> {
+        use pest::Parser;
+        MMixalParser::parse(Rule::statement, source)
+            .unwrap()
+            .next()
+            .unwrap()
+    }
+
+    /// Two-operand `LDA` is one tetra whatever its operand, so pass 1 and
+    /// pass 2 always place every item at the same address and no source
+    /// program can make pass 2 alone reach a past-end statement pass 1
+    /// missed. The seven tests below drive `second_pass_statement` directly
+    /// instead, one per `require_addr`/`require_valid` call it makes, and
+    /// each still fails if its call is replaced with `.expect(...)`. The
+    /// instruction-align and data-directive-align tests below pin a
+    /// located error, never a panic, at the align call: `place_item`'s own
+    /// `past_end` guard would report the same error if the align call's
+    /// guard were skipped, so those two alone do not isolate the align
+    /// check.
+    ///
+    /// Pins the instruction's own alignment check.
     #[test]
     fn test_pass_2_disagreeing_with_pass_1_on_size_is_a_located_error_not_a_panic() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:13:2: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.past_end = true;
+        let err = asm
+            .second_pass_statement(lone_statement("SWYM"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// The same pass-1/pass-2 size disagreement as the test above, tuned
-    /// so pass 1's aggregate check on the `OCTA` list below sees it fit
-    /// exactly (224 bytes to the end it assumes), while pass 2's real
-    /// address -- 12 bytes later, from the two `LDA`s growing 4 to 16
-    /// bytes each -- has room for only 27 of the list's 28 items before
-    /// the 27th lands exactly on the last byte. `place_item` has to reject
-    /// every item once the counter is past the end, not only the first
-    /// one, or the 28th item in the same directive's loop reuses the 27th
-    /// item's own address instead of reporting one.
+    /// `place_item` rejects a second item in the same data directive once
+    /// the first has already filled the address space's last byte, rather
+    /// than reusing its address: `current_addr` sits at the last address an
+    /// `OCTA` can start from, so the first of two exactly fills the top and
+    /// the second must still be rejected, not silently placed at the same
+    /// address.
     #[test]
     fn test_items_after_the_end_within_one_directive_never_overlap() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFF00\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFF10-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " OCTA 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:7:2: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.current_addr = u64::MAX - 7;
+        let err = asm
+            .second_pass_statement(lone_statement("OCTA 1,2"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// The same pass-1/pass-2 size disagreement as
-    /// `test_pass_2_disagreeing_with_pass_1_on_size_is_a_located_error_not_a_panic`,
-    /// tuned so pass 1 never lands on the boundary (no error) while pass
-    /// 2's extra growth fills the last byte exactly after the sixth
-    /// `SWYM`, leaving a standalone label past the end for only pass 2 to
-    /// catch.
+    /// Pins the standalone-label site at the end of `second_pass_statement`.
     #[test]
     fn test_pass_2_only_overrun_on_a_standalone_label_is_an_error() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
-            "End\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:13:1: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.past_end = true;
+        let err = asm
+            .second_pass_statement(lone_statement("End"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// Same construction, with the trailing label owning a `LOC` line
-    /// instead of standing alone, pinning `second_pass_statement`'s
-    /// `loc_directive` label site.
+    /// Pins `second_pass_statement`'s `loc_directive` label site.
     #[test]
     fn test_pass_2_only_overrun_on_a_locs_own_label_is_an_error() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
-            "End LOC #100\n",
-            "Main SWYM\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:13:1: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.past_end = true;
+        let err = asm
+            .second_pass_statement(lone_statement("End LOC #100"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// Same construction, with the trailing label bound inside `BSPEC`,
-    /// pinning `second_pass_statement`'s special-mode label site: pass 1
-    /// takes the identical path and never overruns, so only pass 2's
-    /// extra growth reaches it past the end.
+    /// Pins `second_pass_statement`'s special-mode label site.
     #[test]
     fn test_pass_2_only_overrun_on_a_label_inside_bspec_is_an_error() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
-            " BSPEC 0\n",
-            "End BYTE 1\n",
-            " ESPEC\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:14:1: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.past_end = true;
+        asm.in_special_mode = true;
+        let err = asm
+            .second_pass_statement(lone_statement("End BYTE 1"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// Same construction, with a data directive past the six `SWYM`s
-    /// instead of a bare label, pinning the data-directive alignment's
-    /// `require_addr` call, which `.expect` also passed until now.
+    /// Pins the data-directive alignment's `require_addr` call, which
+    /// `.expect` also passed until now.
     #[test]
     fn test_pass_2_only_overrun_on_a_data_directives_alignment_is_an_error() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
-            " OCTA 1\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:13:2: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.past_end = true;
+        let err = asm
+            .second_pass_statement(lone_statement("OCTA 1"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
-    /// Same construction, with fewer `SWYM`s so the boundary falls on the
-    /// final instruction's own place call instead of an alignment,
-    /// pinning that `require_addr` call.
+    /// Pins an instruction's own `place_item` call: `SETI` is 16 bytes
+    /// though its alignment is 4, so the last 4-aligned address still
+    /// overruns placing it, where a plain 4-byte instruction never could.
     #[test]
     fn test_pass_2_only_overrun_on_the_final_instructions_place_is_an_error() {
-        let source = concat!(
-            " LOC #FFFFFFFFFFFFFFC0\n",
-            " LDA $1,Small\n",
-            "L SWYM\n",
-            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
-            " LDA $2,X\n",
-            " LDA $3,X\n",
-            " SWYM\n SWYM\n SWYM\n SWYM\n",
-            " LDA $4,X\n",
-            "Small IS 5\n",
-        );
-        let mut asm = MMixAssembler::new(source, "<test>");
-        let err = asm.parse().unwrap_err();
-        assert_eq!(err, "<test>:11:2: address past #FFFFFFFFFFFFFFFF");
+        let mut asm = MMixAssembler::new("", "<test>");
+        asm.current_addr = u64::MAX - 3;
+        let err = asm
+            .second_pass_statement(lone_statement("SETI $1,5"))
+            .unwrap_err();
+        assert_eq!(err, "<test>:1:1: address past #FFFFFFFFFFFFFFFF");
     }
 
     #[test]
@@ -8997,7 +8906,8 @@ ZSP  $3,$4,2
     /// `source_loc` mapped back from.
     #[test]
     fn test_addr_for_line_round_trips_with_source_loc() {
-        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n\tTRAP\t0,Halt,0\n";
+        let source =
+            "Base\tGREG\t1\nMain\tdebug \"hi\"\nStart\tLDA\t$255,Start\n\tTRAP\t0,Halt,0\n";
 
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
@@ -9015,11 +8925,11 @@ ZSP  $3,$4,2
     /// user wrote it), not the preprocessed `PUSHJ` text.
     #[test]
     fn test_source_text_returns_original_not_preprocessed() {
-        let source = "Main\tdebug \"hi\"\nStart\tLDA\t$255,Start\n";
+        let source = "Base\tGREG\t1\nMain\tdebug \"hi\"\nStart\tLDA\t$255,Start\n";
         let mut asm = MMixAssembler::new(source, "<test>");
         asm.parse().unwrap();
 
-        let text = asm.source_text("<test>", 1).expect("line 1 exists");
+        let text = asm.source_text("<test>", 2).expect("line 2 exists");
         assert!(
             text.contains("debug"),
             "expected original text, got {text:?}"
@@ -9029,7 +8939,7 @@ ZSP  $3,$4,2
             "source_text must not leak preprocessed text, got {text:?}"
         );
 
-        let lda_text = asm.source_text("<test>", 2).expect("line 2 exists");
+        let lda_text = asm.source_text("<test>", 3).expect("line 3 exists");
         assert!(lda_text.contains("LDA"));
     }
 
@@ -11271,13 +11181,142 @@ Main    SETI    $1,7
     }
 
     #[test]
-    fn test_lda_two_operand_form_never_takes_the_base_address_path() {
-        // A preceding GREG close to Data does not change LDA's own sizing:
-        // LDA expands to SET when the address exceeds one byte.
+    fn test_lda_two_operand_form_always_takes_the_base_address_path() {
+        // LDA resolves against Base exactly as LDO does, whatever the
+        // address's own value.
         assert_first_instruction(
             "Base GREG #1000\nLDA $1,Data\nData IS #1000",
-            MMixInstruction::SET(1, 0x1000),
+            MMixInstruction::LDAI(1, 254, 0),
         );
+    }
+
+    #[test]
+    fn test_forward_lda_keeps_every_label_in_place() {
+        // LDA costs one tetra regardless of whether its operand has
+        // resolved yet, so pass 1 and pass 2 agree on every label after it
+        // (the scan's `lda_fwd2`). Main's SET reads After before pass 2
+        // revisits it, so it still carries pass 1's own estimate -- equal
+        // to After's own SET only if that estimate already matches.
+        let mut asm = MMixAssembler::new(
+            "LOC #100\nBase GREG 1\nMain SET $3,After\nLDA $1,K\n\
+             After SET $2,After\nTRAP 0,Halt,0\nK IS 5\n",
+            "<test>",
+        );
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        let after_addr = *asm.labels.get("After").expect("After label");
+        assert_eq!(
+            asm.instructions[0].1,
+            MMixInstruction::SETL(3, after_addr as u16)
+        );
+        assert_eq!(
+            asm.instructions[2].1,
+            MMixInstruction::SETL(2, after_addr as u16)
+        );
+        assert_eq!(asm.instructions[1].1, MMixInstruction::LDAI(1, 254, 4));
+    }
+
+    #[test]
+    fn test_lda_pure_value_never_encodes_addu_register_form() {
+        // With no GREG in scope, a pure second operand is the base-address
+        // error, never register form #22.
+        assert_eq!(
+            assemble_err("LDA $1,5"),
+            "<test>:1:8: no GREG before this instruction holds a base \
+             address 0 to 255 bytes below 0x5"
+        );
+        // With a base in scope, it's LDAI -- opcode #23, never #22.
+        let mut asm = MMixAssembler::new("B GREG 1\nLDA $1,5", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::LDAI(1, 254, 4));
+        assert_eq!(
+            asm.encode_instruction_bytes(&asm.instructions[0].1)[0],
+            0x23
+        );
+    }
+
+    /// Assemble `src` and return its LDA/LDO/etc. instruction: the last
+    /// item in `instructions`, since every case here places exactly one
+    /// data directive (an `OCTA` base value) ahead of the instruction under
+    /// test.
+    fn last_instruction(src: &str) -> MMixInstruction {
+        let mut asm = MMixAssembler::new(src, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e}"));
+        asm.instructions
+            .last()
+            .unwrap_or_else(|| panic!("no instructions produced for {src:?}"))
+            .1
+            .clone()
+    }
+
+    #[test]
+    fn test_lda_base_search_matches_the_memory_forms() {
+        let source = |addr: &str| {
+            format!("LOC Data_Segment\nBase GREG @\nX OCTA 7\nLOC #100\nMain LDA $1,{addr}")
+        };
+        // Offset 0: Base itself covers X.
+        assert_eq!(
+            last_instruction(&source("X")),
+            MMixInstruction::LDAI(1, 254, 0)
+        );
+        // Offset 255 assembles; 256 is the base-address error.
+        assert_eq!(
+            last_instruction(&source("X+255")),
+            MMixInstruction::LDAI(1, 254, 255)
+        );
+        assert_eq!(
+            assemble_err(&source("X+256")),
+            "<test>:5:13: no GREG before this instruction holds a base \
+             address 0 to 255 bytes below 0x2000000000000100"
+        );
+        // LDAI matches LDA.
+        assert_eq!(
+            last_instruction(&source("X")),
+            last_instruction(&source("X").replacen("LDA", "LDAI", 1))
+        );
+    }
+
+    #[test]
+    fn test_lda_base_search_ignores_a_greg_appearing_after_the_instruction() {
+        // Closer holds Y's own value (offset 0), but it comes after Main:
+        // the search bounds itself to GREGs already seen, so Base (offset
+        // 8) wins regardless.
+        assert_eq!(
+            last_instruction(
+                "LOC Data_Segment\nBase GREG @\nX OCTA 7\nY OCTA 9\n\
+                 LOC #100\nMain LDA $1,Y\nCloser GREG Y"
+            ),
+            MMixInstruction::LDAI(1, 254, 8)
+        );
+    }
+
+    #[test]
+    fn test_lda_register_operand_is_offset_zero() {
+        assert_first_instruction("LDA $3,$2", MMixInstruction::LDAI(3, 2, 0));
+        assert_first_instruction("x IS $2\nLDA $3,x", MMixInstruction::LDAI(3, 2, 0));
+    }
+
+    #[test]
+    fn test_lda_one_tetra_even_with_an_unresolved_forward_operand() {
+        // Far exceeds #FF and is a forward reference; LDA still costs one
+        // tetra, so After sits exactly 4 bytes past Main. Pre's own operand
+        // reads After before pass 2 revisits it, so it still carries pass
+        // 1's estimate of After's address -- proving that estimate is
+        // already exact, not merely that pass 2's own later walk is.
+        let mut asm = MMixAssembler::new(
+            "Base GREG #150\nPre SET $2,After\nMain LDA $1,Far\nAfter HALT\nFar IS #200",
+            "<test>",
+        );
+        asm.parse().unwrap();
+        let main_addr = *asm.labels.get("Main").unwrap();
+        let after_addr = *asm.labels.get("After").unwrap();
+        assert_eq!(after_addr, main_addr + 4);
+        assert_eq!(
+            asm.instructions[0].1,
+            MMixInstruction::SETL(2, after_addr as u16)
+        );
+        assert_eq!(asm.instructions[1].1, MMixInstruction::LDAI(1, 254, 176));
     }
 
     // ---- Operand counts and kinds ----------------------------------------

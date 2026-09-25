@@ -746,9 +746,9 @@ Leave one space when the text before POSITION already reaches COLUMN."
     (("CSWAPI" "CSWAP") "CSWAP $X, $Y, Z"
      "Compare and swap (immediate): if M8[$Y+Z] = rP, store $X there and set $X ← 1; otherwise rP ← M8[$Y+Z] and $X ← 0")
     (("LDA") "LDA $X, $Y, $Z / LDA $X, addr"
-     "Load address of $Y + $Z — the ADDU $X, $Y, $Z alias; LDA $X, addr loads addr in one tetra when it fits a byte, else in four")
+     "Load address of $Y + $Z — the ADDU $X, $Y, $Z alias; the two-operand form's $Y is a register (offset 0) or resolves addr against a preceding GREG base, one tetra")
     (("LDAI" "LDA") "LDA $X, $Y, Z / LDAI $X, addr"
-     "Load address of $Y + Z — the ADDU $X, $Y, Z alias; LDAI $X, addr loads addr in one tetra when it fits a byte, else in four")
+     "Load address of $Y + Z — the ADDU $X, $Y, Z alias; LDAI $X, addr matches LDA $X, addr")
     (("STB") "STB $X, $Y, $Z / STB $X, $Y"
      "Store byte signed; the two-operand form's $Y is a register (offset 0) or a base-relative address")
     (("STBI" "STB") "STB $X, $Y, Z"

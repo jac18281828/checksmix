@@ -4102,11 +4102,27 @@ Test284f
         SET     Result,$100
         SET     Expect,1
         CMP     Temp,Result,Expect
-        PBZ     Temp,TestPass
+        PBZ     Temp,Test285
         JMP     TestFail
 Test284Callee2
         SET     $100,1
         POP
+
+% ========================================
+% Test 285: LDA's two-operand register form -- offset 0, like the other
+% memory operations' register operand.
+% ========================================
+% Every register this test touches (Expect, Result, Temp) is written here
+% before it is ever read.
+% ========================================
+Test285 ADDU    TestNum,TestNum,1
+        SET     $10,Test285Data   % a register holding Data's address
+        LDA     Result,$10        % the two-operand form: register operand, offset 0
+        SET     Expect,$10
+        CMP     Temp,Result,Expect
+        PBZ     Temp,TestPass
+        JMP     TestFail
+Test285Data OCTA 42
 
 % ========================================
 % Intentional coverage exceptions
@@ -4123,12 +4139,13 @@ Test284Callee2
 % (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
 % skipped, which is real (if narrow) coverage of HALT's assembler path.
 %   The two-operand memory form's base-address spelling (a pure address
-%             resolved against a preceding GREG, e.g. `LDO $1,Data` with a
-%             GREG base ahead of it) is not exercised above: it needs a
-%             GREG holding a nonzero base, and this file's first GREG would
-%             take $254 and move rG, where every test here is written for
-%             rG=32. tests/fixtures/greg_base_address.mms covers it
-%             instead, run by tests/cli_subcommands.rs.
+%             resolved against a preceding GREG, e.g. `LDO $1,Data` or
+%             `LDA $1,Data` with a GREG base ahead of it) is not exercised
+%             above: it needs a GREG holding a nonzero base, and this
+%             file's first GREG would take $254 and move rG, where every
+%             test here is written for rG=32.
+%             tests/fixtures/greg_base_address.mms covers it instead, run
+%             by tests/cli_subcommands.rs.
 % ========================================
 
 % ========================================
