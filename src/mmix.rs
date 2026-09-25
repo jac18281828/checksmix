@@ -353,10 +353,6 @@ impl MMix {
     /// Execute instructions starting from the current PC until the machine
     /// halts or `budget` instructions have run, whichever comes first.
     /// Returns the instruction count and which condition stopped it.
-    ///
-    /// `MMix` has no breakpoint concept, so the result is never
-    /// [`Stop::Breakpoint`] — that variant exists for [`crate::Debugger`]'s
-    /// use.
     #[instrument(skip(self))]
     pub fn run_bounded(&mut self, budget: usize) -> (usize, Stop) {
         debug!("Starting MMIX execution");
@@ -379,14 +375,13 @@ impl MMix {
                 "Execution paused at PC={:#018x} after {} instructions (budget exhausted)",
                 self.pc, count
             )),
-            Stop::Breakpoint(_) => unreachable!("run_bounded never returns Stop::Breakpoint"),
         }
         debug!(instruction_count = count, "Execution completed");
         (count, stop)
     }
 }
 
-/// Why [`MMix::run_bounded`] or a [`crate::Debugger`] step loop stopped.
+/// Why [`MMix::run_bounded`] stopped.
 ///
 /// More variants may be added in future releases, so downstream matches
 /// must carry a wildcard arm.
@@ -404,10 +399,6 @@ pub enum Stop {
     /// machine is unchanged; resuming from here is calling the same
     /// bounded-run method again.
     BudgetExhausted,
-    /// A breakpoint address was reached. `MMix` itself has no breakpoint
-    /// concept, so [`MMix::run_bounded`] never produces this — it exists for
-    /// [`crate::Debugger`], which owns the breakpoint set.
-    Breakpoint(u64),
 }
 
 #[cfg(test)]
