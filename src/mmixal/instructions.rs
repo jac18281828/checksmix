@@ -443,4 +443,5 @@ impl MMixAssembler {
 
 mod floating_point;
 mod integer;
+mod load_store;
 mod wyde_immediate;
