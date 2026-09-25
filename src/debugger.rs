@@ -1328,7 +1328,7 @@ Main\tdebug\t\"hi\"
 
     /// Text `parse_hex_address` rejects -- a bare prefix, a non-hex digit,
     /// or a value at or above 2^64 -- falls through to the label lookup and
-    /// gets the existing unresolvable-argument message.
+    /// gets the unresolvable-argument message.
     #[test]
     fn break_rejects_malformed_hex_address_text() {
         let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
