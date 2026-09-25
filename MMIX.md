@@ -139,6 +139,11 @@ label on a `LOC` line itself takes the location the counter held *before* the
 move: `X LOC @+500` names `X` as the first of the 500 bytes `LOC` skips, and
 assembly continues at `X+500`.
 
+The counter ends at `#FFFFFFFFFFFFFFFF`: an item may fill the address space's
+last bytes exactly, but any statement that then needs an address — an
+instruction, a data item, a label bound to the counter, or `@` — is an error
+until a `LOC` moves the counter to a valid one again.
+
 `BSPEC expr` opens special mode; `ESPEC` closes it. Inside, only `IS`,
 `PREFIX`, `GREG`, `LOCAL` and the four data directives are legal — an
 instruction or any other directive between them is an error, and `BSPEC`

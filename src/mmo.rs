@@ -33,8 +33,12 @@
 //! 4, a `lop_spec` payload tetra starting `#98` that isn't the `#98000001`
 //! escape, a `lop_spec` of any type but the debug-string one, a `lop_post`
 //! with a nonzero Y or a *G* below 32); a preamble whose version isn't 1;
-//! and a file that ends mid-record. Reading stops once the postamble's
-//! octabytes are consumed -- a symbol table after them, or
+//! and a file that ends mid-record. A data tetra or `lop_quote`, plain or
+//! escaped, whose load address lies past `#FFFFFFFFFFFFFFFF` is also an
+//! `Err`: an item may fill the address space's last byte exactly, the
+//! same shape the writer emits for one there, but nothing may load after
+//! it until a `lop_loc` sets a fresh address. Reading stops once the
+//! postamble's octabytes are consumed -- a symbol table after them, or
 //! `lop_file`/`lop_line`/fixup records from an MMIXAL build, are never
 //! read. A `.mmo` whose preamble reads `#98090001` (version 0) is rejected
 //! and must be rebuilt.
@@ -204,7 +208,7 @@ impl MmoGenerator {
             }
 
             pending_bytes.extend_from_slice(&bytes);
-            current_loc = Some(addr + bytes.len() as u64);
+            current_loc = Some(addr.wrapping_add(bytes.len() as u64));
         }
 
         if !pending_bytes.is_empty() {
@@ -403,6 +407,12 @@ impl MmoDecoder {
         format!(".mmo: unsupported lopcode #{lopcode:02x} at offset {offset:#x}")
     }
 
+    /// A `data past #FFFFFFFFFFFFFFFF` error at `offset`: a plain data
+    /// tetra's own offset, or an escaped one's `lop_quote` record offset.
+    fn data_past_end(offset: usize) -> String {
+        format!(".mmo: data past #FFFFFFFFFFFFFFFF at offset {offset:#x}")
+    }
+
     /// A `file ends inside a record` error at `offset`, the offset of the
     /// record (or data tetra) that ran out of bytes.
     fn truncated(offset: usize) -> String {
@@ -520,6 +530,15 @@ impl MmoDecoder {
         };
         i += consumed;
         let byte_len = u32::from_be_bytes(len_tetra) as usize;
+        // Checked against the bytes left before any arithmetic on byte_len
+        // itself: on wasm32 (32-bit usize) a declared length near u32::MAX
+        // overflows the padding multiply below, and one past isize::MAX
+        // overflows Vec's own capacity limit. A file too short for the
+        // declared length is truncated regardless, so this bails out with
+        // that same diagnosis, reserving nothing.
+        if byte_len > data.len().saturating_sub(i) {
+            return Err(Self::truncated(record_offset));
+        }
         let padded_len = byte_len.div_ceil(4) * 4;
 
         let mut payload = Vec::with_capacity(padded_len);
@@ -597,7 +616,9 @@ impl MmoDecoder {
         Self::parse_preamble(data)?;
         // Bytes 4..8: the creation-time tetra, always 0, never read.
         let mut i = 8usize;
-        let mut current_addr = 0u64;
+        // `None` once a tetra has filled the address space's last byte:
+        // nothing may load after it until a `lop_loc` sets a fresh address.
+        let mut current_addr = Some(0u64);
 
         loop {
             if i >= data.len() {
@@ -605,8 +626,16 @@ impl MmoDecoder {
             }
 
             if data[i] != MM {
-                let consumed = Self::parse_data_tetra(data, i, current_addr, write_byte)?;
-                current_addr += consumed as u64;
+                let Some(addr) = current_addr else {
+                    return Err(Self::data_past_end(i));
+                };
+                // `addr` is always a multiple of 4 (`parse_lop_loc` rejects
+                // an unaligned one, and every advance is by 4), so `addr +
+                // 4` never needs a byte past `#FFFFFFFFFFFFFFFF` without
+                // landing exactly on it.
+                let next = addr.checked_add(4);
+                let consumed = Self::parse_data_tetra(data, i, addr, write_byte)?;
+                current_addr = next;
                 i += consumed;
                 continue;
             }
@@ -620,14 +649,18 @@ impl MmoDecoder {
 
             match MmoRecordType::try_from(lopcode_byte) {
                 Ok(MmoRecordType::LopQuote) => {
+                    let Some(addr) = current_addr else {
+                        return Err(Self::data_past_end(record_offset));
+                    };
+                    let next = addr.checked_add(4);
                     let consumed =
-                        Self::parse_lop_quote(data, record_offset, y, z, current_addr, write_byte)?;
-                    current_addr += 4;
+                        Self::parse_lop_quote(data, record_offset, y, z, addr, write_byte)?;
+                    current_addr = next;
                     i = record_offset + consumed;
                 }
                 Ok(MmoRecordType::LopLoc) => {
                     let (addr, consumed) = Self::parse_lop_loc(data, record_offset, y, z)?;
-                    current_addr = addr;
+                    current_addr = Some(addr);
                     i = record_offset + consumed;
                 }
                 Ok(MmoRecordType::LopSpec) => {
@@ -1381,6 +1414,124 @@ Main\tTRAP\t0,Halt,0
         assert_machine_untouched(&mmix);
     }
 
+    // ---- the address space ends at #FFFFFFFFFFFFFFFF ------------------
+
+    /// A `lop_loc` to `#FFFFFFFFFFFFFFFC`, then one data tetra: the item
+    /// fills the address space's last four bytes exactly, the same shape
+    /// [`MmoGenerator::generate`] emits for an item there.
+    fn boundary_item_prefix() -> Vec<u8> {
+        let mut data = valid_preamble();
+        data.extend_from_slice(&[MM, MmoRecordType::LopLoc as u8, 0x00, 0x02]);
+        data.extend_from_slice(&0xFFFFFFFFu32.to_be_bytes());
+        data.extend_from_slice(&0xFFFFFFFCu32.to_be_bytes());
+        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        data
+    }
+
+    /// `lop_post`: G=255, entry `#100`.
+    fn boundary_item_postamble() -> [u8; 12] {
+        [0x98, 0x0A, 0x00, 0xFF, 0, 0, 0, 0, 0, 0, 0x01, 0x00]
+    }
+
+    #[test]
+    fn decode_loads_an_item_that_fills_the_last_four_bytes_exactly() {
+        let mut data = boundary_item_prefix();
+        data.extend_from_slice(&boundary_item_postamble());
+        let decoder = MmoDecoder::new(data);
+        let mut memory = HashMap::new();
+        let entry = decoder
+            .decode(|addr, byte| {
+                memory.insert(addr, byte);
+            })
+            .expect("well-formed object code");
+
+        assert_eq!(entry, 0x100);
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFC), Some(&0x01));
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFD), Some(&0x02));
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFE), Some(&0x03));
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFF), Some(&0x04));
+    }
+
+    #[test]
+    fn decode_rejects_a_plain_data_tetra_past_the_end() {
+        let mut data = boundary_item_prefix();
+        let past_end_offset = data.len();
+        data.extend_from_slice(&[0x05, 0x06, 0x07, 0x08]);
+        data.extend_from_slice(&boundary_item_postamble());
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: data past #FFFFFFFFFFFFFFFF at offset {past_end_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    #[test]
+    fn decode_rejects_an_escaped_data_tetra_past_the_end() {
+        let mut data = boundary_item_prefix();
+        let record_offset = data.len();
+        data.extend_from_slice(&[MM, MmoRecordType::LopQuote as u8, 0x00, 0x01]);
+        data.extend_from_slice(&[0x05, 0x06, 0x07, 0x08]);
+        data.extend_from_slice(&boundary_item_postamble());
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: data past #FFFFFFFFFFFFFFFF at offset {record_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    #[test]
+    fn decode_a_lop_loc_clears_the_past_end_state() {
+        let mut data = boundary_item_prefix();
+        data.extend_from_slice(&[MM, MmoRecordType::LopLoc as u8, 0x00, 0x02]);
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0x100u32.to_be_bytes());
+        data.extend_from_slice(&[0x05, 0x06, 0x07, 0x08]);
+        data.extend_from_slice(&boundary_item_postamble());
+        let decoder = MmoDecoder::new(data);
+        let mut memory = HashMap::new();
+        let entry = decoder
+            .decode(|addr, byte| {
+                memory.insert(addr, byte);
+            })
+            .expect("well-formed object code");
+
+        assert_eq!(entry, 0x100);
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFC), Some(&0x01));
+        assert_eq!(memory.get(&0xFFFFFFFFFFFFFFFF), Some(&0x04));
+        assert_eq!(memory.get(&0x100), Some(&0x05));
+        assert_eq!(memory.get(&0x103), Some(&0x08));
+    }
+
+    /// The writer's own side of the boundary case: an item at
+    /// `#FFFFFFFFFFFFFFFC` generates and decodes back to the same bytes
+    /// there, the round trip the four tests above hand-build one half of.
+    #[test]
+    fn generate_and_decode_round_trip_an_item_at_the_top_of_memory() {
+        let instructions = vec![(0xFFFFFFFFFFFFFFFC, MMixInstruction::SWYM(0, 0, 0))];
+        let generator = MmoGenerator::new(instructions.clone(), HashMap::new());
+        let mmo_data = generator.generate();
+
+        let decoder = MmoDecoder::new(mmo_data);
+        let mut memory = HashMap::new();
+        decoder
+            .decode(|addr, byte| {
+                memory.insert(addr, byte);
+            })
+            .expect("well-formed object code");
+
+        let (addr, inst) = &instructions[0];
+        let bytes = encode_instruction_bytes(inst);
+        for (offset, &expected_byte) in bytes.iter().enumerate() {
+            assert_eq!(memory.get(&(addr + offset as u64)), Some(&expected_byte));
+        }
+    }
+
     /// A `lop_spec` of a type other than the debug-string one is a shape the
     /// writer never emits, so the reader rejects it rather than reading and
     /// discarding it.
@@ -1412,6 +1563,28 @@ Main\tTRAP\t0,Halt,0
         data.extend_from_slice(&[0x98, 0x12, 0x34, 0x56]);
         let decoder = MmoDecoder::new(data);
         let expected = format!(".mmo: unsupported lopcode #12 at offset {bad_offset:#x}");
+
+        assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
+
+        let mut mmix = MMix::new();
+        assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
+        assert_machine_untouched(&mmix);
+    }
+
+    /// A `lop_spec` length checked against the bytes left, before any
+    /// arithmetic on it: on a 32-bit `usize` (wasm32) `0xFFFFFFFF` both
+    /// overflows the padding multiply (`div_ceil(4) * 4`) and would
+    /// overflow `Vec::with_capacity`'s own limit past that. On every
+    /// target this 20-byte file is truncated regardless.
+    #[test]
+    fn decode_rejects_a_lop_spec_length_longer_than_the_file() {
+        let mut data = valid_preamble();
+        let spec_offset = data.len();
+        data.extend_from_slice(&[MM, MmoRecordType::LopSpec as u8, 0x44, 0x42]);
+        data.extend_from_slice(&0xFFFFFFFFu32.to_be_bytes()); // byte_len
+        data.extend_from_slice(&0u32.to_be_bytes()); // a lone payload tetra
+        let decoder = MmoDecoder::new(data);
+        let expected = format!(".mmo: file ends inside a record at offset {spec_offset:#x}");
 
         assert_eq!(decoder.decode(|_, _| {}).unwrap_err(), expected);
 

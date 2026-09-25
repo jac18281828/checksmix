@@ -1012,6 +1012,13 @@ pub struct MMixAssembler {
     symbol_origins: HashMap<String, (String, usize)>,
     pub instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
+    /// Whether the location counter has passed `#FFFFFFFFFFFFFFFF`: the
+    /// last item assembled reached the end of the address space, so
+    /// `current_addr` no longer names a valid address. Every statement
+    /// that needs one -- an instruction, a data item, a label bound to
+    /// the counter, or `@` -- is an error until a `LOC` clears this.
+    /// Reset alongside `current_addr` between the two passes.
+    past_end: bool,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
     pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
     /// How many of `greg_inits`' entries pass 2 has walked past so far --
@@ -1357,6 +1364,7 @@ impl MMixAssembler {
             symbol_origins: HashMap::new(),
             instructions: Vec::new(),
             current_addr: 0,
+            past_end: false,
             next_greg: 254, // Start allocating from $254, count down
             greg_inits: Vec::new(),
             greg_inits_seen: 0,
@@ -2150,7 +2158,9 @@ impl MMixAssembler {
         );
 
         let saved_addr = self.current_addr;
+        let saved_past_end = self.past_end;
         self.current_addr = 0;
+        self.past_end = false;
         self.current_prefix.clear();
         self.local_occurrence = [0; 10];
         self.in_special_mode = false;
@@ -2179,6 +2189,7 @@ impl MMixAssembler {
         }
 
         self.current_addr = saved_addr;
+        self.past_end = saved_past_end;
         Ok(())
     }
 
@@ -2283,20 +2294,20 @@ impl MMixAssembler {
     /// at the same address.
     #[instrument(skip(self, pair), fields(current_addr = format!("0x{:X}", self.current_addr)))]
     fn first_pass_statement(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let mut pending_label: Option<(String, usize)> = None;
-        let mut pending_local: Option<(u8, usize)> = None;
+        let mut pending_label: Option<(String, usize, usize)> = None;
+        let mut pending_local: Option<(u8, usize, usize)> = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::label_def => {
-                    let (line, _) = inner_pair.line_col();
                     let ident = inner_pair.into_inner().next().unwrap();
-                    pending_label = Some((ident.as_str().to_string(), line));
+                    let (line, col) = ident.line_col();
+                    pending_label = Some((ident.as_str().to_string(), line, col));
                 }
                 Rule::local_label_def => {
-                    let (line, _) = inner_pair.line_col();
+                    let (line, col) = inner_pair.line_col();
                     let digit = Self::local_digit(inner_pair.as_str());
-                    pending_local = Some((digit, line));
+                    pending_local = Some((digit, line, col));
                     self.local_pending_digit = Some(digit);
                 }
                 Rule::instruction => {
@@ -2307,21 +2318,26 @@ impl MMixAssembler {
                             "an instruction",
                         ));
                     }
-                    self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
+                    let item = inner_pair.line_col();
+                    Self::require_addr(
+                        self.align_current_addr(Self::INSTRUCTION_ALIGNMENT),
+                        &self.current_filename,
+                        Self::leftmost_site(&pending_label, &pending_local, item),
+                    )?;
                     self.scan_uses_for_redefinition(&inner_pair);
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
-                    if let Some((raw, line)) = pending_label.take() {
+                    if let Some((raw, line, _)) = pending_label.take() {
                         self.define_label(&raw, self.current_addr, line)?;
                     }
-                    if let Some((digit, _)) = pending_local.take() {
+                    if let Some((digit, _, _)) = pending_local.take() {
                         self.record_local_label(
                             digit,
                             SymbolType::Constant(self.current_addr),
                             true,
                         );
                     }
-                    self.current_addr += size;
+                    Self::require_addr(self.place_item(size), &self.current_filename, item)?;
                 }
                 Rule::directive => {
                     let directive_pair = inner_pair.into_inner().next().unwrap();
@@ -2331,10 +2347,12 @@ impl MMixAssembler {
                                 // Discarded: no bytes, no address movement,
                                 // but a label on the line still binds to
                                 // the (unmoved) current address.
-                                if let Some((raw, line)) = pending_label.take() {
+                                if let Some((raw, line, col)) = pending_label.take() {
+                                    self.require_valid((line, col))?;
                                     self.define_label(&raw, self.current_addr, line)?;
                                 }
-                                if let Some((digit, _)) = pending_local.take() {
+                                if let Some((digit, line, col)) = pending_local.take() {
+                                    self.require_valid((line, col))?;
                                     self.record_local_label(
                                         digit,
                                         SymbolType::Constant(self.current_addr),
@@ -2342,21 +2360,30 @@ impl MMixAssembler {
                                     );
                                 }
                             } else {
+                                let item = directive_pair.line_col();
                                 self.scan_uses_for_redefinition(&directive_pair);
                                 let alignment = Self::data_directive_alignment(&directive_pair)?;
-                                self.align_current_addr(alignment);
+                                Self::require_addr(
+                                    self.align_current_addr(alignment),
+                                    &self.current_filename,
+                                    Self::leftmost_site(&pending_label, &pending_local, item),
+                                )?;
                                 let size = self.data_directive_size(directive_pair.clone())?;
-                                if let Some((raw, line)) = pending_label.take() {
+                                if let Some((raw, line, _)) = pending_label.take() {
                                     self.define_label(&raw, self.current_addr, line)?;
                                 }
-                                if let Some((digit, _)) = pending_local.take() {
+                                if let Some((digit, _, _)) = pending_local.take() {
                                     self.record_local_label(
                                         digit,
                                         SymbolType::Constant(self.current_addr),
                                         true,
                                     );
                                 }
-                                self.current_addr += size;
+                                Self::require_addr(
+                                    self.place_item(size),
+                                    &self.current_filename,
+                                    item,
+                                )?;
                             }
                         }
                         Rule::loc_directive => {
@@ -2369,17 +2396,25 @@ impl MMixAssembler {
                             }
                             // A label on a LOC line names the location the
                             // counter held before LOC moves it, per the
-                            // MMIXAL reference's `X LOC @+500`. The operand
-                            // is evaluated before this line's own local
-                            // label (if any) is recorded, so a same-digit
-                            // reference in it never resolves to itself.
+                            // MMIXAL reference's `X LOC @+500`. Both past-end
+                            // checks run before the operand is evaluated, so
+                            // an operand that itself needs the address (`@`)
+                            // never outranks this line's own label or local
+                            // label for which site gets reported. The local
+                            // label's own value is still recorded after the
+                            // operand, so a same-digit reference in it never
+                            // resolves to itself.
                             let addr_before = self.current_addr;
-                            if let Some((raw, line)) = pending_label.take() {
+                            if let Some((raw, line, col)) = pending_label.take() {
+                                self.require_valid((line, col))?;
                                 self.define_label(&raw, addr_before, line)?;
+                            }
+                            if let Some(&(_, line, col)) = pending_local.as_ref() {
+                                self.require_valid((line, col))?;
                             }
                             self.scan_uses_for_redefinition(&directive_pair);
                             self.parse_loc_directive(directive_pair)?;
-                            if let Some((digit, _)) = pending_local.take() {
+                            if let Some((digit, _, _)) = pending_local.take() {
                                 self.record_local_label(
                                     digit,
                                     SymbolType::Constant(addr_before),
@@ -2416,14 +2451,14 @@ impl MMixAssembler {
                             };
                             self.greg_inits.push((allocated_reg, value));
 
-                            if let Some((raw, line)) = pending_label.take() {
+                            if let Some((raw, line, _)) = pending_label.take() {
                                 self.define_symbol(
                                     &raw,
                                     SymbolType::Register(allocated_reg),
                                     line,
                                 )?;
                             }
-                            if let Some((digit, _)) = pending_local.take() {
+                            if let Some((digit, _, _)) = pending_local.take() {
                                 self.record_local_label(
                                     digit,
                                     SymbolType::Register(allocated_reg),
@@ -2473,15 +2508,32 @@ impl MMixAssembler {
         }
 
         // Standalone labels (no instruction or directive on the line)
-        if let Some((raw, line)) = pending_label {
+        if let Some((raw, line, col)) = pending_label {
+            self.require_valid((line, col))?;
             self.define_label(&raw, self.current_addr, line)?;
         }
-        if let Some((digit, _)) = pending_local {
+        if let Some((digit, line, col)) = pending_local {
+            self.require_valid((line, col))?;
             self.record_local_label(digit, SymbolType::Constant(self.current_addr), true);
         }
         self.local_pending_digit = None;
 
         Ok(())
+    }
+
+    /// The leftmost site to report if `item` turns out past the end: a
+    /// statement has at most one of `pending_label`/`pending_local`, and
+    /// either one's own site sits ahead of `item`'s.
+    fn leftmost_site(
+        pending_label: &Option<(String, usize, usize)>,
+        pending_local: &Option<(u8, usize, usize)>,
+        item: (usize, usize),
+    ) -> (usize, usize) {
+        pending_label
+            .as_ref()
+            .map(|&(_, l, c)| (l, c))
+            .or_else(|| pending_local.as_ref().map(|&(_, l, c)| (l, c)))
+            .unwrap_or(item)
     }
 
     /// Diagnostic for an instruction or `LOC` found between `BSPEC` and
@@ -2577,15 +2629,16 @@ impl MMixAssembler {
         // line in the ACTIVE translation unit's PREPROCESSED text.
         // `record_debug_info` maps it back to the original source line.
         let (line, _) = pair.line_col();
-        let mut label_name: Option<String> = None;
+        let mut label_name: Option<(String, usize, usize)> = None;
         let mut pending_local: Option<u8> = None;
-        let mut inst: Option<MMixInstruction> = None;
+        let mut inst: Option<(MMixInstruction, (usize, usize))> = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::label_def => {
                     let ident = inner_pair.into_inner().next().unwrap();
-                    label_name = Some(ident.as_str().to_string());
+                    let (line, col) = ident.line_col();
+                    label_name = Some((ident.as_str().to_string(), line, col));
                 }
                 Rule::local_label_def => {
                     let digit = Self::local_digit(inner_pair.as_str());
@@ -2593,15 +2646,20 @@ impl MMixAssembler {
                     self.local_pending_digit = Some(digit);
                 }
                 Rule::instruction => {
-                    self.align_current_addr(Self::INSTRUCTION_ALIGNMENT);
-                    if let Some(raw) = label_name.take() {
+                    let item = inner_pair.line_col();
+                    Self::require_addr(
+                        self.align_current_addr(Self::INSTRUCTION_ALIGNMENT),
+                        &self.current_filename,
+                        item,
+                    )?;
+                    if let Some((raw, _, _)) = label_name.take() {
                         let qualified = self.qualify_name(&raw);
                         self.labels.insert(qualified, self.current_addr);
                     }
                     // Evaluated before this line's own local label (if any)
                     // is recorded, so a same-digit reference in an operand
                     // never resolves to itself.
-                    inst = Some(self.parse_instruction(inner_pair)?);
+                    inst = Some((self.parse_instruction(inner_pair)?, item));
                     if let Some(digit) = pending_local.take() {
                         self.record_local_label(digit, SymbolType::Constant(0), false);
                     }
@@ -2611,7 +2669,8 @@ impl MMixAssembler {
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
                             if self.in_special_mode {
-                                if let Some(raw) = label_name.take() {
+                                if let Some((raw, line, col)) = label_name.take() {
+                                    self.require_valid((line, col))?;
                                     let qualified = self.qualify_name(&raw);
                                     self.labels.insert(qualified, self.current_addr);
                                 }
@@ -2619,9 +2678,14 @@ impl MMixAssembler {
                                     self.record_local_label(digit, SymbolType::Constant(0), false);
                                 }
                             } else {
+                                let item = directive_pair.line_col();
                                 let alignment = Self::data_directive_alignment(&directive_pair)?;
-                                self.align_current_addr(alignment);
-                                if let Some(raw) = label_name.take() {
+                                Self::require_addr(
+                                    self.align_current_addr(alignment),
+                                    &self.current_filename,
+                                    item,
+                                )?;
+                                if let Some((raw, _, _)) = label_name.take() {
                                     let qualified = self.qualify_name(&raw);
                                     self.labels.insert(qualified, self.current_addr);
                                 }
@@ -2633,7 +2697,11 @@ impl MMixAssembler {
                                     let size = Self::instruction_size(&instruction);
                                     self.record_debug_info(self.current_addr, line);
                                     self.instructions.push((self.current_addr, instruction));
-                                    self.current_addr += size;
+                                    Self::require_addr(
+                                        self.place_item(size),
+                                        &self.current_filename,
+                                        item,
+                                    )?;
                                 }
                             }
                         }
@@ -2642,7 +2710,8 @@ impl MMixAssembler {
                             // location before LOC moves the counter, and
                             // the operand is evaluated before this line's
                             // own local label is recorded.
-                            if let Some(raw) = label_name.take() {
+                            if let Some((raw, line, col)) = label_name.take() {
+                                self.require_valid((line, col))?;
                                 let qualified = self.qualify_name(&raw);
                                 self.labels.insert(qualified, self.current_addr);
                             }
@@ -2657,7 +2726,7 @@ impl MMixAssembler {
                             // bounds itself to the GREGs seen by this point
                             // in source order, so pass 2 replays the count.
                             self.greg_inits_seen += 1;
-                            if let Some(raw) = label_name.take() {
+                            if let Some((raw, _, _)) = label_name.take() {
                                 let qualified = self.qualify_name(&raw);
                                 if !self.symbols.contains_key(&qualified) {
                                     return Err(format!(
@@ -2690,16 +2759,17 @@ impl MMixAssembler {
             }
         }
 
-        if let Some(instruction) = inst {
+        if let Some((instruction, item)) = inst {
             let size = Self::instruction_size(&instruction);
             debug!(inst = ?instruction, addr = format!("0x{:X}", self.current_addr), size, "Added instruction");
             self.record_debug_info(self.current_addr, line);
             self.instructions.push((self.current_addr, instruction));
-            self.current_addr += size;
+            Self::require_addr(self.place_item(size), &self.current_filename, item)?;
         }
 
         // Standalone labels (no instruction or directive on the line)
-        if let Some(raw) = label_name {
+        if let Some((raw, line, col)) = label_name {
+            self.require_valid((line, col))?;
             let qualified = self.qualify_name(&raw);
             self.labels.insert(qualified, self.current_addr);
         }
@@ -2762,16 +2832,82 @@ impl MMixAssembler {
         }
     }
 
+    /// `Err` once the counter has passed the end, for a site that names no
+    /// item of its own -- a standalone label, a `LOC` label, a `BSPEC`
+    /// label or the `@` symbol.
+    fn valid_addr(&self) -> Result<(), ()> {
+        if self.past_end { Err(()) } else { Ok(()) }
+    }
+
+    /// [`Self::valid_addr`] at `site`, as the located error
+    /// [`Self::require_addr`] reports.
+    fn require_valid(&self, site: (usize, usize)) -> Result<(), String> {
+        Self::require_addr(self.valid_addr(), &self.current_filename, site)
+    }
+
     /// Round the location counter up to `alignment`, the way MMIXAL does
     /// before it assembles an item: a label on that line names the rounded
     /// address, and the skipped bytes are a gap rather than emitted padding.
+    /// `Err` when the counter has already passed the end, or rounding up
+    /// would need an address past it -- `current_addr` is left unchanged in
+    /// that case.
     ///
     /// Both passes round at the same point, ahead of the item's operands.
     /// `peek_instruction_type` sizes the two-operand `LDA` from its operand's
     /// value, so rounding on opposite sides of operand evaluation would let
     /// the passes disagree about a forward reference with no other symptom.
-    fn align_current_addr(&mut self, alignment: u64) {
-        self.current_addr = self.current_addr.next_multiple_of(alignment);
+    fn align_current_addr(&mut self, alignment: u64) -> Result<(), ()> {
+        if self.past_end {
+            return Err(());
+        }
+        match self.current_addr.checked_next_multiple_of(alignment) {
+            Some(addr) => {
+                self.current_addr = addr;
+                Ok(())
+            }
+            None => {
+                self.past_end = true;
+                Err(())
+            }
+        }
+    }
+
+    /// Reserves `size` bytes at the current address for one item, advancing
+    /// the counter past them. `Err` when the counter is already past the
+    /// end, or when this item's own bytes would need one past
+    /// `#FFFFFFFFFFFFFFFF` -- `current_addr` is left unchanged either way.
+    /// `Ok` even when the item fills the address space's last byte exactly,
+    /// which only marks the counter past the end for whatever comes next.
+    fn place_item(&mut self, size: u64) -> Result<(), ()> {
+        if self.past_end {
+            return Err(());
+        }
+        let end = u128::from(self.current_addr) + u128::from(size);
+        let past_last_addr = u128::from(u64::MAX) + 1;
+        if end > past_last_addr {
+            return Err(());
+        }
+        if end == past_last_addr {
+            self.past_end = true;
+        } else {
+            self.current_addr = end as u64;
+        }
+        Ok(())
+    }
+
+    /// `Ok` when the address `align_current_addr`/`place_item`/`valid_addr`
+    /// reported passes through unchanged; `Err` naming `site` -- a pending
+    /// label's or local label's own site when one sits ahead of the item
+    /// that failed, the item's own site otherwise.
+    fn require_addr(
+        result: Result<(), ()>,
+        filename: &str,
+        site: (usize, usize),
+    ) -> Result<(), String> {
+        result.map_err(|()| {
+            let (line, col) = site;
+            format!("{filename}:{line}:{col}: address past #FFFFFFFFFFFFFFFF")
+        })
     }
 
     /// Alignment of a data directive, taken from the directive's kind and
@@ -4821,11 +4957,15 @@ impl MMixAssembler {
         Ok(result)
     }
 
+    /// `LOC`'s operand may itself read `@`, which errors here (via
+    /// `parse_number`) when the counter is already past the end. Otherwise
+    /// a `LOC` always restores a valid counter, whatever state it found.
     fn parse_loc_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
         let mut parts = pair.into_inner();
         let _directive = parts.next(); // Skip "LOC" keyword
         let addr = self.parse_number(parts.next().unwrap())?;
         self.current_addr = addr;
+        self.past_end = false;
         Ok(())
     }
 
@@ -5086,7 +5226,11 @@ impl MMixAssembler {
             // Reached only through `data_group_primary`: a parenthesized
             // group always needs a single value.
             Rule::string_literal => self.eval_group_string(pair),
-            Rule::at_symbol => Ok(ExprValue::Pure(self.current_addr)),
+            Rule::at_symbol => {
+                let (line, col) = pair.line_col();
+                self.require_valid((line, col))?;
+                Ok(ExprValue::Pure(self.current_addr))
+            }
             Rule::constant => self.eval_literal(
                 pair.into_inner()
                     .next()
@@ -6255,6 +6399,354 @@ mod tests {
         let mut asm = MMixAssembler::new("LOC #101\nHERE: BYTE 0", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.labels.get("HERE"), Some(&0x101));
+    }
+
+    // ---- the address space ends at #FFFFFFFFFFFFFFFF ------------------
+
+    #[test]
+    fn test_swym_at_the_top_of_memory_assembles() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions,
+            vec![(0xFFFFFFFFFFFFFFFC, MMixInstruction::SWYM(0, 0, 0))]
+        );
+    }
+
+    #[test]
+    fn test_octa_at_the_top_of_memory_assembles() {
+        let source = " LOC #FFFFFFFFFFFFFFF8\n OCTA 1\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions,
+            vec![(0xFFFFFFFFFFFFFFF8, MMixInstruction::OCTA(1))]
+        );
+    }
+
+    #[test]
+    fn test_two_bytes_fill_the_last_two_addresses_exactly() {
+        let source = " LOC #FFFFFFFFFFFFFFFE\n BYTE 1\n BYTE 2\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions,
+            vec![
+                (0xFFFFFFFFFFFFFFFE, MMixInstruction::BYTE(1)),
+                (0xFFFFFFFFFFFFFFFF, MMixInstruction::BYTE(2)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_an_item_after_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_an_item_extending_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFF\n BYTE 1,2\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:2:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_alignment_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFD\n SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:2:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_at_symbol_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd IS @\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:8: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_standalone_label_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_loc_after_past_end_restores_a_valid_counter() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n LOC #100\nMain SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Main"), Some(&0x100));
+    }
+
+    #[test]
+    fn test_past_end_resets_between_the_two_passes() {
+        // Pass 1 ends past the end (the second SWYM fills the last byte);
+        // pass 2 must start over clean rather than inherit that state, or
+        // its own second SWYM would spuriously error.
+        let source = " SWYM\n LOC #FFFFFFFFFFFFFFFC\n SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions,
+            vec![
+                (0, MMixInstruction::SWYM(0, 0, 0)),
+                (0xFFFFFFFFFFFFFFFC, MMixInstruction::SWYM(0, 0, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_standalone_local_label_past_the_end_is_an_error() {
+        // A bare `1H` binds to the counter the same as a named label, so
+        // one past the end is an error rather than silently binding to
+        // the last item's address (`$0` reading `#FFFFFFFFFFFFFFF8`
+        // through the `1B` reference below, never reached once this
+        // errors).
+        let source = " LOC #FFFFFFFFFFFFFFF8\n OCTA 7\n1H\n LOC #100\nMain GETA $0,1B\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_loc_lines_own_label_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd LOC #100\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_loc_lines_own_local_label_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n1H LOC #100\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_loc_lines_own_local_label_outranks_at_in_its_operand() {
+        // The local label's own site is leftmost on the line, so it is
+        // reported even though the operand's `@` needs the same missing
+        // address.
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n1H LOC @+4\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_a_label_inside_bspec_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n BSPEC 0\nEnd BYTE 1\n ESPEC\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:4:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_a_local_label_inside_bspec_past_the_end_is_an_error() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n BSPEC 0\n1H BYTE 1\n ESPEC\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:4:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// A label and its instruction both need the address past the end;
+    /// the label's own column (leftmost) is reported, not the mnemonic's.
+    #[test]
+    fn test_a_label_and_its_item_past_the_end_reports_the_labels_column() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_a_local_label_and_its_item_past_the_end_reports_its_column() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\n1H SWYM\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_a_label_and_its_data_item_past_the_end_reports_the_labels_column() {
+        let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd BYTE 1\n";
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// Pass 1 sizes a forward-referenced `LDA` conservatively (16 bytes,
+    /// the `SET` expansion) since the reference isn't resolved yet; pass 2
+    /// resolves it to a value `<= #FF` and emits the short 4-byte form
+    /// instead. An `IS` symbol computed from a label between them then
+    /// sees a different address each pass -- `#FF` in pass 1, past `#FF`
+    /// in pass 2 -- so the `LDA`s that reference it grow from 4 bytes back
+    /// to 16 in pass 2, running the whole block past the end pass 1 never
+    /// saw. Pass 2 must report the located error, never panic.
+    #[test]
+    fn test_pass_2_disagreeing_with_pass_1_on_size_is_a_located_error_not_a_panic() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:13:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// The same pass-1/pass-2 size disagreement as the test above, tuned
+    /// so pass 1's aggregate check on the `OCTA` list below sees it fit
+    /// exactly (224 bytes to the end it assumes), while pass 2's real
+    /// address -- 12 bytes later, from the two `LDA`s growing 4 to 16
+    /// bytes each -- has room for only 27 of the list's 28 items before
+    /// the 27th lands exactly on the last byte. `place_item` has to reject
+    /// every item once the counter is past the end, not only the first
+    /// one, or the 28th item in the same directive's loop reuses the 27th
+    /// item's own address instead of reporting one.
+    #[test]
+    fn test_items_after_the_end_within_one_directive_never_overlap() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFF00\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFF10-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " OCTA 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:7:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// The same pass-1/pass-2 size disagreement as
+    /// `test_pass_2_disagreeing_with_pass_1_on_size_is_a_located_error_not_a_panic`,
+    /// tuned so pass 1 never lands on the boundary (no error) while pass
+    /// 2's extra growth fills the last byte exactly after the sixth
+    /// `SWYM`, leaving a standalone label past the end for only pass 2 to
+    /// catch.
+    #[test]
+    fn test_pass_2_only_overrun_on_a_standalone_label_is_an_error() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
+            "End\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:13:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// Same construction, with the trailing label owning a `LOC` line
+    /// instead of standing alone, pinning `second_pass_statement`'s
+    /// `loc_directive` label site.
+    #[test]
+    fn test_pass_2_only_overrun_on_a_locs_own_label_is_an_error() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
+            "End LOC #100\n",
+            "Main SWYM\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:13:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// Same construction, with the trailing label bound inside `BSPEC`,
+    /// pinning `second_pass_statement`'s special-mode label site: pass 1
+    /// takes the identical path and never overruns, so only pass 2's
+    /// extra growth reaches it past the end.
+    #[test]
+    fn test_pass_2_only_overrun_on_a_label_inside_bspec_is_an_error() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
+            " BSPEC 0\n",
+            "End BYTE 1\n",
+            " ESPEC\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:14:1: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// Same construction, with a data directive past the six `SWYM`s
+    /// instead of a bare label, pinning the data-directive alignment's
+    /// `require_addr` call, which `.expect` also passed until now.
+    #[test]
+    fn test_pass_2_only_overrun_on_a_data_directives_alignment_is_an_error() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n SWYM\n",
+            " OCTA 1\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:13:2: address past #FFFFFFFFFFFFFFFF");
+    }
+
+    /// Same construction, with fewer `SWYM`s so the boundary falls on the
+    /// final instruction's own place call instead of an alignment,
+    /// pinning that `require_addr` call.
+    #[test]
+    fn test_pass_2_only_overrun_on_the_final_instructions_place_is_an_error() {
+        let source = concat!(
+            " LOC #FFFFFFFFFFFFFFC0\n",
+            " LDA $1,Small\n",
+            "L SWYM\n",
+            "X IS #FFFFFFFFFFFFFFD0-L+#FF\n",
+            " LDA $2,X\n",
+            " LDA $3,X\n",
+            " SWYM\n SWYM\n SWYM\n SWYM\n",
+            " LDA $4,X\n",
+            "Small IS 5\n",
+        );
+        let mut asm = MMixAssembler::new(source, "<test>");
+        let err = asm.parse().unwrap_err();
+        assert_eq!(err, "<test>:11:2: address past #FFFFFFFFFFFFFFFF");
     }
 
     #[test]
