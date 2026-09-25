@@ -1,7 +1,8 @@
 % Pi to 1000 decimals by Machin's formula, pi = 16*arctan(1/5) -
 % 4*arctan(1/239), each arctan its alternating series 1/x - 1/(3x^3) +
 % 1/(5x^5) - ... The digits are known from two independent computations
-% of Machin's formula at higher precision, agreeing with each other.
+% that agree: bc's 4*a(1) at scale 1100, and integer Machin in Python at
+% 10^1020. The test pins them by their SHA-256.
 %
 % A number is a Words-word unsigned fixed-point value: word[0] is the
 % integer part, word[1..Words-1] the fraction, most significant word

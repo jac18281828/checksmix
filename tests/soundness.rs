@@ -569,6 +569,7 @@ fn a_run_that_never_reaches_a_halt_trap_fails_naming_it() {
         Err(err) => err,
     };
     assert!(err.contains("halted without a Halt trap"), "{err}");
+    assert!(err.contains("Register TRAP"), "{err}");
 }
 
 #[test]
