@@ -995,6 +995,10 @@ struct SourceUnit {
     original: String,
 }
 
+/// The file, line and column of the first `debug` directive past the
+/// string table's 256-entry limit, if the program has one.
+type DebugDirectiveOverflow = Option<(String, usize, usize)>;
+
 pub struct MMixAssembler {
     /// Input translation units in command-line order.
     sources: Vec<SourceUnit>,
@@ -1039,10 +1043,10 @@ pub struct MMixAssembler {
     /// `debug_strings()` returns, and what `generate_object_code` hands the
     /// `.mmo` writer.
     debug_strings: Vec<Vec<u8>>,
-    /// The file and original line of the first `debug` directive past the
-    /// table's 256-entry limit, if the program has one. `parse` turns this
-    /// into an assembly error before walking either pass.
-    debug_directive_overflow: Option<(String, usize)>,
+    /// The file, original line and column of the first `debug` directive
+    /// past the table's 256-entry limit, if the program has one. `parse`
+    /// turns this into an assembly error before walking either pass.
+    debug_directive_overflow: DebugDirectiveOverflow,
     /// The ten local-label lists, one per digit: each holds every `dH`
     /// occurrence's bound value, in source order, across the whole program.
     /// Built by pass 1; pass 2 reads them and appends nothing.
@@ -1063,12 +1067,12 @@ pub struct MMixAssembler {
     local_pending_digit: Option<u8>,
     /// Every `LOCAL` declaration seen in pass 1: the declared register, and
     /// the site for the end-of-assembly threshold diagnostic.
-    local_declarations: Vec<(u8, String, usize)>,
+    local_declarations: Vec<(u8, String, usize, usize)>,
     /// Whether the walk is currently between a `BSPEC` and its `ESPEC`.
     in_special_mode: bool,
     /// Where the currently open `BSPEC` was written, for the
     /// unterminated-at-end-of-input diagnostic.
-    bspec_open_site: Option<(String, usize)>,
+    bspec_open_site: Option<(String, usize, usize)>,
     /// Every predefined symbol's root-namespace key, snapshotted right
     /// after `new` seeds them, before any user statement runs.
     predefined_names: HashSet<String>,
@@ -1139,18 +1143,18 @@ impl MMixAssembler {
     /// generated, so `K` costs one byte and the directive costs one tetra.
     ///
     /// Returns the preprocessed source, the strings this source's
-    /// directives contributed (in `K` order), and the file/line of the
-    /// first directive to exceed the table's 256-entry limit, if any —
+    /// directives contributed (in `K` order), and the file/line/column of
+    /// the first directive to exceed the table's 256-entry limit, if any —
     /// `parse` turns that into an assembly error rather than emitting a `K`
     /// that cannot fit `TRAP`'s one-byte `Z`.
     fn preprocess_debug(
         source: &str,
         filename: &str,
         start_index: usize,
-    ) -> (String, Vec<Vec<u8>>, Option<(String, usize)>) {
+    ) -> (String, Vec<Vec<u8>>, DebugDirectiveOverflow) {
         // A directive, optionally preceded by its own label. A fixed,
         // valid pattern compiled once per call: infallible.
-        let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?debug\s+"([^"]*)"\s*$"#).unwrap();
+        let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?(debug)\s+"([^"]*)"\s*$"#).unwrap();
 
         let mut result = String::new();
         let mut strings = Vec::new();
@@ -1162,7 +1166,8 @@ impl MMixAssembler {
                     let k = start_index + strings.len();
                     if k > 255 {
                         if overflow.is_none() {
-                            overflow = Some((filename.to_string(), index + 1));
+                            let col = caps.get(1).map_or(0, |m| m.as_str().chars().count()) + 1;
+                            overflow = Some((filename.to_string(), index + 1, col));
                         }
                     } else {
                         let label = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
@@ -1173,7 +1178,7 @@ impl MMixAssembler {
                     // outside guest memory, going straight to the host's
                     // handle 1, not through a data directive's per-character
                     // value.
-                    strings.push(caps[2].as_bytes().to_vec());
+                    strings.push(caps[3].as_bytes().to_vec());
                 }
                 None => {
                     result.push_str(line);
@@ -1450,6 +1455,7 @@ impl MMixAssembler {
         name: &str,
         candidate: SymbolType,
         line: usize,
+        col: usize,
     ) -> Result<bool, String> {
         if let Some((prev_file, prev_line)) = self
             .label_origins
@@ -1460,8 +1466,8 @@ impl MMixAssembler {
                 Ok(false)
             } else {
                 Err(format!(
-                    "{}:{}: symbol '{}' redefined (first defined at {}:{})",
-                    self.current_filename, line, name, prev_file, prev_line
+                    "{}:{}:{}: symbol '{}' redefined (first defined at {}:{})",
+                    self.current_filename, line, col, name, prev_file, prev_line
                 ))
             };
         }
@@ -1469,17 +1475,23 @@ impl MMixAssembler {
             && let Some((used_file, used_line)) = self.predefined_used_at.get(name)
         {
             return Err(format!(
-                "{}:{}: predefined symbol '{}' redefined after its value was used at {}:{}",
-                self.current_filename, line, name, used_file, used_line
+                "{}:{}:{}: predefined symbol '{}' redefined after its value was used at {}:{}",
+                self.current_filename, line, col, name, used_file, used_line
             ));
         }
         Ok(true)
     }
 
     /// Define a label (instruction/data/standalone) at the current address.
-    fn define_label(&mut self, raw: &str, addr: u64, line: usize) -> Result<(), String> {
+    fn define_label(
+        &mut self,
+        raw: &str,
+        addr: u64,
+        line: usize,
+        col: usize,
+    ) -> Result<(), String> {
         let name = self.qualify_name(raw);
-        if self.check_definable(&name, SymbolType::Constant(addr), line)? {
+        if self.check_definable(&name, SymbolType::Constant(addr), line, col)? {
             self.label_origins
                 .insert(name.clone(), (self.current_filename.clone(), line));
             self.labels.insert(name, addr);
@@ -1488,9 +1500,15 @@ impl MMixAssembler {
     }
 
     /// Define an IS- or GREG-bound symbol.
-    fn define_symbol(&mut self, raw: &str, ty: SymbolType, line: usize) -> Result<(), String> {
+    fn define_symbol(
+        &mut self,
+        raw: &str,
+        ty: SymbolType,
+        line: usize,
+        col: usize,
+    ) -> Result<(), String> {
         let name = self.qualify_name(raw);
-        if self.check_definable(&name, ty, line)? {
+        if self.check_definable(&name, ty, line, col)? {
             self.symbol_origins
                 .insert(name.clone(), (self.current_filename.clone(), line));
             self.symbols.insert(name, ty);
@@ -1524,6 +1542,19 @@ impl MMixAssembler {
         }
         for inner in pair.clone().into_inner() {
             self.scan_uses_for_redefinition(&inner);
+        }
+    }
+
+    /// Prefix a statement's error with its own `{file}:{line}:{col}: ` when
+    /// it names no location of its own. Every reachable error already names
+    /// its own precise column before reaching here; only a grammar-invariant
+    /// arm (unreachable from valid source) is still unlocated when a
+    /// statement's dispatch returns it.
+    fn locate_fallback(&self, err: String, line: usize, col: usize) -> String {
+        if err.starts_with(&format!("{}:", self.current_filename)) {
+            err
+        } else {
+            format!("{}:{}:{}: {}", self.current_filename, line, col, err)
         }
     }
 
@@ -2075,9 +2106,9 @@ impl MMixAssembler {
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
         self.warnings.clear();
-        if let Some((file, line)) = &self.debug_directive_overflow {
+        if let Some((file, line, col)) = &self.debug_directive_overflow {
             return Err(format!(
-                "{file}:{line}: error: too many `debug` directives in this \
+                "{file}:{line}:{col}: error: too many `debug` directives in this \
                  program; the string table holds at most 256"
             ));
         }
@@ -2132,9 +2163,9 @@ impl MMixAssembler {
             }
         }
 
-        if let Some((file, line)) = &self.bspec_open_site {
+        if let Some((file, line, col)) = &self.bspec_open_site {
             return Err(format!(
-                "{file}:{line}: syntax error: BSPEC has no matching ESPEC before end of input"
+                "{file}:{line}:{col}: syntax error: BSPEC has no matching ESPEC before end of input"
             ));
         }
 
@@ -2143,10 +2174,10 @@ impl MMixAssembler {
         // lowest -- $0..$31 are local on every MMIX regardless of GREG
         // activity.
         let threshold = (self.next_greg as u16).saturating_add(1).max(32);
-        for (reg, file, line) in &self.local_declarations {
+        for (reg, file, line, col) in &self.local_declarations {
             if u16::from(*reg) >= threshold {
                 return Err(format!(
-                    "{file}:{line}: LOCAL ${reg} is not below the global threshold ${threshold}"
+                    "{file}:{line}:{col}: LOCAL ${reg} is not below the global threshold ${threshold}"
                 ));
             }
         }
@@ -2179,7 +2210,9 @@ impl MMixAssembler {
                         if line_pair.as_rule() == Rule::line {
                             for stmt_pair in line_pair.into_inner() {
                                 if stmt_pair.as_rule() == Rule::statement {
-                                    self.second_pass_statement(stmt_pair)?;
+                                    let (line, col) = stmt_pair.line_col();
+                                    self.second_pass_statement(stmt_pair)
+                                        .map_err(|e| self.locate_fallback(e, line, col))?;
                                 }
                             }
                         }
@@ -2234,7 +2267,9 @@ impl MMixAssembler {
                     bare_label = Self::statement_is_label_only(&stmt_pair)
                         .then(|| stmt_pair.clone().into_inner().next())
                         .flatten();
-                    self.first_pass_statement(stmt_pair)?;
+                    let (line, col) = stmt_pair.line_col();
+                    self.first_pass_statement(stmt_pair)
+                        .map_err(|e| self.locate_fallback(e, line, col))?;
                 }
                 Rule::remark => {
                     if let Some(label_pair) = bare_label.as_ref()
@@ -2300,8 +2335,8 @@ impl MMixAssembler {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::label_def => {
+                    let (line, col) = inner_pair.line_col();
                     let ident = inner_pair.into_inner().next().unwrap();
-                    let (line, col) = ident.line_col();
                     pending_label = Some((ident.as_str().to_string(), line, col));
                 }
                 Rule::local_label_def => {
@@ -2327,8 +2362,8 @@ impl MMixAssembler {
                     self.scan_uses_for_redefinition(&inner_pair);
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
-                    if let Some((raw, line, _)) = pending_label.take() {
-                        self.define_label(&raw, self.current_addr, line)?;
+                    if let Some((raw, line, col)) = pending_label.take() {
+                        self.define_label(&raw, self.current_addr, line, col)?;
                     }
                     if let Some((digit, _, _)) = pending_local.take() {
                         self.record_local_label(
@@ -2349,7 +2384,7 @@ impl MMixAssembler {
                                 // the (unmoved) current address.
                                 if let Some((raw, line, col)) = pending_label.take() {
                                     self.require_valid((line, col))?;
-                                    self.define_label(&raw, self.current_addr, line)?;
+                                    self.define_label(&raw, self.current_addr, line, col)?;
                                 }
                                 if let Some((digit, line, col)) = pending_local.take() {
                                     self.require_valid((line, col))?;
@@ -2369,8 +2404,8 @@ impl MMixAssembler {
                                     Self::leftmost_site(&pending_label, &pending_local, item),
                                 )?;
                                 let size = self.data_directive_size(directive_pair.clone())?;
-                                if let Some((raw, line, _)) = pending_label.take() {
-                                    self.define_label(&raw, self.current_addr, line)?;
+                                if let Some((raw, line, col)) = pending_label.take() {
+                                    self.define_label(&raw, self.current_addr, line, col)?;
                                 }
                                 if let Some((digit, _, _)) = pending_local.take() {
                                     self.record_local_label(
@@ -2407,7 +2442,7 @@ impl MMixAssembler {
                             let addr_before = self.current_addr;
                             if let Some((raw, line, col)) = pending_label.take() {
                                 self.require_valid((line, col))?;
-                                self.define_label(&raw, addr_before, line)?;
+                                self.define_label(&raw, addr_before, line, col)?;
                             }
                             if let Some(&(_, line, col)) = pending_local.as_ref() {
                                 self.require_valid((line, col))?;
@@ -2457,11 +2492,12 @@ impl MMixAssembler {
                             };
                             self.greg_inits.push((allocated_reg, value));
 
-                            if let Some((raw, line, _)) = pending_label.take() {
+                            if let Some((raw, line, col)) = pending_label.take() {
                                 self.define_symbol(
                                     &raw,
                                     SymbolType::Register(allocated_reg),
                                     line,
+                                    col,
                                 )?;
                             }
                             if let Some((digit, _, _)) = pending_local.take() {
@@ -2482,27 +2518,24 @@ impl MMixAssembler {
                         Rule::local_directive => {
                             Self::require_blank_label(
                                 &self.current_filename,
-                                &directive_pair,
                                 "LOCAL",
-                                pending_label.is_some() || pending_local.is_some(),
+                                Self::pending_label_loc(&pending_label, &pending_local),
                             )?;
                             self.handle_local_directive(directive_pair)?;
                         }
                         Rule::bspec_directive => {
                             Self::require_blank_label(
                                 &self.current_filename,
-                                &directive_pair,
                                 "BSPEC",
-                                pending_label.is_some() || pending_local.is_some(),
+                                Self::pending_label_loc(&pending_label, &pending_local),
                             )?;
                             self.open_special_mode(directive_pair)?;
                         }
                         Rule::espec_directive => {
                             Self::require_blank_label(
                                 &self.current_filename,
-                                &directive_pair,
                                 "ESPEC",
-                                pending_label.is_some() || pending_local.is_some(),
+                                Self::pending_label_loc(&pending_label, &pending_local),
                             )?;
                             self.close_special_mode(&directive_pair)?;
                         }
@@ -2516,7 +2549,7 @@ impl MMixAssembler {
         // Standalone labels (no instruction or directive on the line)
         if let Some((raw, line, col)) = pending_label {
             self.require_valid((line, col))?;
-            self.define_label(&raw, self.current_addr, line)?;
+            self.define_label(&raw, self.current_addr, line, col)?;
         }
         if let Some((digit, line, col)) = pending_local {
             self.require_valid((line, col))?;
@@ -2550,21 +2583,32 @@ impl MMixAssembler {
         pair: &pest::iterators::Pair<Rule>,
         what: &str,
     ) -> String {
-        let (line, _) = pair.line_col();
-        format!("{filename}:{line}: syntax error: {what} is not allowed inside BSPEC/ESPEC")
+        let (line, col) = pair.line_col();
+        format!("{filename}:{line}:{col}: syntax error: {what} is not allowed inside BSPEC/ESPEC")
+    }
+
+    /// The line and column of whichever of a statement's label fields is
+    /// pending, if any -- `pending_label` when both are somehow set, since
+    /// grammar admits at most one.
+    fn pending_label_loc(
+        pending_label: &Option<(String, usize, usize)>,
+        pending_local: &Option<(u8, usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        pending_label
+            .as_ref()
+            .map(|&(_, line, col)| (line, col))
+            .or_else(|| pending_local.as_ref().map(|&(_, line, col)| (line, col)))
     }
 
     /// `LOCAL`, `BSPEC` and `ESPEC` take no label field.
     fn require_blank_label(
         filename: &str,
-        pair: &pest::iterators::Pair<Rule>,
         keyword: &str,
-        has_pending_label: bool,
+        pending_label_loc: Option<(usize, usize)>,
     ) -> Result<(), String> {
-        if has_pending_label {
-            let (line, _) = pair.line_col();
+        if let Some((line, col)) = pending_label_loc {
             return Err(format!(
-                "{filename}:{line}: syntax error: {keyword} takes no label"
+                "{filename}:{line}:{col}: syntax error: {keyword} takes no label"
             ));
         }
         Ok(())
@@ -2573,51 +2617,52 @@ impl MMixAssembler {
     /// `LOCAL expr`: `expr` must resolve to a register, checked at the
     /// close of assembly against the global threshold `next_greg` derives.
     fn handle_local_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let (line, _) = pair.line_col();
         let mut parts = pair.into_inner();
         let _keyword = parts.next();
         let operand = parts.next().unwrap();
+        let (line, col) = operand.line_col();
         self.scan_uses_for_redefinition(&operand);
         let reg = self.parse_register(operand)?;
         self.local_declarations
-            .push((reg, self.current_filename.clone(), line));
+            .push((reg, self.current_filename.clone(), line, col));
         Ok(())
     }
 
     /// `BSPEC expr`: opens special mode. `BSPEC` does not nest, and its
     /// operand must fit in two bytes.
     fn open_special_mode(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let (line, _) = pair.line_col();
+        let (line, col) = pair.line_col();
         if self.in_special_mode {
             return Err(format!(
-                "{}:{}: syntax error: BSPEC does not nest",
-                self.current_filename, line
+                "{}:{}:{}: syntax error: BSPEC does not nest",
+                self.current_filename, line, col
             ));
         }
         let mut parts = pair.into_inner();
         let _keyword = parts.next();
         let operand = parts.next().unwrap();
+        let (op_line, op_col) = operand.line_col();
         self.scan_uses_for_redefinition(&operand);
         let value = self.parse_number(operand)?;
         if value > 0xFFFF {
             return Err(format!(
-                "{}:{}: syntax error: BSPEC operand {} does not fit in two bytes",
-                self.current_filename, line, value
+                "{}:{}:{}: syntax error: BSPEC operand {} does not fit in two bytes",
+                self.current_filename, op_line, op_col, value
             ));
         }
         self.in_special_mode = true;
-        self.bspec_open_site = Some((self.current_filename.clone(), line));
+        self.bspec_open_site = Some((self.current_filename.clone(), line, col));
         Ok(())
     }
 
     /// `ESPEC`: closes special mode; an `ESPEC` with no open `BSPEC` is an
     /// error.
     fn close_special_mode(&mut self, pair: &pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let (line, _) = pair.line_col();
+        let (line, col) = pair.line_col();
         if !self.in_special_mode {
             return Err(format!(
-                "{}:{}: syntax error: ESPEC has no matching BSPEC",
-                self.current_filename, line
+                "{}:{}:{}: syntax error: ESPEC has no matching BSPEC",
+                self.current_filename, line, col
             ));
         }
         self.in_special_mode = false;
@@ -4947,7 +4992,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let lhs = parts.next().unwrap();
         let lhs_rule = lhs.as_rule();
-        let (line, _) = lhs.line_col();
+        let (line, col) = lhs.line_col();
         let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
         let value_pair = parts.next().unwrap();
@@ -4964,7 +5009,7 @@ impl MMixAssembler {
         if lhs_rule == Rule::local_label_def {
             self.record_local_label(Self::local_digit(&raw_name), symbol_type, checking);
         } else if checking {
-            self.define_symbol(&raw_name, symbol_type, line)?;
+            self.define_symbol(&raw_name, symbol_type, line, col)?;
         } else {
             let qualified = self.qualify_name(&raw_name);
             self.symbols.insert(qualified, symbol_type);
@@ -5240,8 +5285,8 @@ impl MMixAssembler {
             other => {
                 let (line, col) = pair.line_col();
                 Err(format!(
-                    "Line {}:{}: Expected expression, got: {:?}",
-                    line, col, other
+                    "{}:{}:{}: Expected expression, got: {:?}",
+                    self.current_filename, line, col, other
                 ))
             }
         }
@@ -5526,8 +5571,8 @@ impl MMixAssembler {
             })?,
             other => {
                 return Err(format!(
-                    "Line {}:{}: Expected a literal, got: {:?}",
-                    line, col, other
+                    "{}:{}:{}: Expected a literal, got: {:?}",
+                    self.current_filename, line, col, other
                 ));
             }
         };
@@ -5847,15 +5892,23 @@ impl MMixAssembler {
             segment.clear();
 
             let target = Self::normalize_lexically(&base_dir.join(&operand));
+            let include_col = content.chars().take_while(|c| c.is_whitespace()).count() + 1;
             if chain.contains(&target) {
                 let mut names: Vec<String> =
                     chain.iter().map(|p| p.display().to_string()).collect();
                 names.push(target.display().to_string());
-                return Err(format!("include cycle detected: {}", names.join(" -> ")));
+                return Err(format!(
+                    "{root_filename}:{current_line}:{include_col}: include cycle detected: {}",
+                    names.join(" -> ")
+                ));
             }
 
             let included_source = read(&target).map_err(|err| {
-                format!("cannot read included file '{}': {}", target.display(), err)
+                format!(
+                    "{root_filename}:{current_line}:{include_col}: cannot read included file '{}': {}",
+                    target.display(),
+                    err
+                )
             })?;
             let included_filename = target.display().to_string();
             let included_base_dir = target
@@ -8992,7 +9045,7 @@ Foo\tIS\t2
             .parse()
             .expect_err("redefining Foo must still be rejected");
         assert_eq!(
-            err, "<test>:6: symbol 'Foo' redefined (first defined at <test>:4)",
+            err, "<test>:6:1: symbol 'Foo' redefined (first defined at <test>:4)",
             "both sites must report their ORIGINAL lines, not the \
              preprocessed lines two debug expansions shift them to"
         );
@@ -11372,6 +11425,141 @@ Main    SETI    $1,7
 
         assert_eq!(mmix.get_special(SpecialReg::RG), 254);
         assert_eq!(mmix.get_register(254), 0x1234);
+    }
+
+    // ---- Locations: file:line:col on every assembler error ----------------
+
+    #[test]
+    fn test_symbol_redefined_names_file_line_and_column() {
+        assert_eq!(
+            assemble_err("X IS 1\nMain HALT;X IS 2\n"),
+            "<test>:2:11: symbol 'X' redefined (first defined at <test>:1)"
+        );
+    }
+
+    #[test]
+    fn test_predefined_symbol_redefined_after_use_names_file_line_and_column() {
+        assert_eq!(
+            assemble_err("Main SET $1,Fputs\nSetup HALT;Fputs IS 9\n"),
+            "<test>:2:12: predefined symbol 'Fputs' redefined after its \
+             value was used at <test>:1"
+        );
+    }
+
+    #[test]
+    fn test_too_many_debug_directives_names_file_line_and_column() {
+        let mut source = String::new();
+        for _ in 0..256 {
+            source.push_str("debug \"x\"\n");
+        }
+        source.push_str("L debug \"overflow\"\n");
+        assert_eq!(
+            assemble_err(&source),
+            "<test>:257:3: error: too many `debug` directives in this \
+             program; the string table holds at most 256"
+        );
+    }
+
+    #[test]
+    fn test_bspec_unterminated_names_the_bspec_keywords_column() {
+        assert_eq!(
+            assemble_err("Main HALT\n\tBSPEC 1\nBYTE 1\n"),
+            "<test>:2:2: syntax error: BSPEC has no matching ESPEC before end of input"
+        );
+    }
+
+    #[test]
+    fn test_local_over_threshold_names_the_operands_column() {
+        assert_eq!(
+            assemble_err("G1 GREG 0\nLOCAL $254\nMain HALT\n"),
+            "<test>:2:7: LOCAL $254 is not below the global threshold $254"
+        );
+    }
+
+    #[test]
+    fn test_bspec_content_error_names_the_offending_opcodes_column() {
+        assert_eq!(
+            assemble_err("BSPEC 1\nMain HALT\nESPEC\n"),
+            "<test>:2:6: syntax error: an instruction is not allowed inside BSPEC/ESPEC"
+        );
+    }
+
+    #[test]
+    fn test_takes_no_label_names_the_labels_column() {
+        assert_eq!(
+            assemble_err("Main HALT;Foo ESPEC\n"),
+            "<test>:1:11: syntax error: ESPEC takes no label"
+        );
+    }
+
+    #[test]
+    fn test_bspec_does_not_nest_names_the_inner_keywords_column() {
+        assert_eq!(
+            assemble_err("BSPEC 1\n\tBSPEC 2\nESPEC\nESPEC\nMain HALT\n"),
+            "<test>:2:2: syntax error: BSPEC does not nest"
+        );
+    }
+
+    #[test]
+    fn test_bspec_operand_too_wide_names_the_operands_column() {
+        assert_eq!(
+            assemble_err("BSPEC #10000\nMain HALT\nESPEC\n"),
+            "<test>:1:7: syntax error: BSPEC operand 65536 does not fit in two bytes"
+        );
+    }
+
+    #[test]
+    fn test_espec_unmatched_names_the_espec_keywords_column() {
+        assert_eq!(
+            assemble_err("Main HALT\n\tESPEC\n"),
+            "<test>:2:2: syntax error: ESPEC has no matching BSPEC"
+        );
+    }
+
+    #[test]
+    fn test_include_cycle_names_the_including_files_own_include_line() {
+        let reader = fixture_reader(vec![
+            ("a.mms", "INCLUDE b.mms\n"),
+            ("b.mms", "  INCLUDE a.mms\n"),
+        ]);
+        let err = MMixAssembler::resolve_includes(
+            "INCLUDE a.mms\n",
+            "driver.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "b.mms:1:3: include cycle detected: a.mms -> b.mms -> a.mms"
+        );
+    }
+
+    #[test]
+    fn test_include_unreadable_file_names_the_including_files_own_include_line() {
+        let reader = fixture_reader(vec![]);
+        let err = MMixAssembler::resolve_includes(
+            "\n\tINCLUDE missing.mms\n",
+            "root.mms",
+            std::path::Path::new(""),
+            &reader,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "root.mms:2:2: cannot read included file 'missing.mms': no such fixture file"
+        );
+    }
+
+    #[test]
+    fn test_locate_fallback_prefixes_an_unlocated_error_and_passes_a_located_one_through() {
+        let asm = MMixAssembler::new("", "<test>");
+        assert_eq!(
+            asm.locate_fallback("Empty instruction".to_string(), 3, 5),
+            "<test>:3:5: Empty instruction"
+        );
+        let located = "<test>:1:1: symbol 'X' redefined (first defined at <test>:1)".to_string();
+        assert_eq!(asm.locate_fallback(located.clone(), 3, 5), located);
     }
 
     // ---- Operand counts and kinds ----------------------------------------
