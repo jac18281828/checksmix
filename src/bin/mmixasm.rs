@@ -81,6 +81,9 @@ fn main() {
         eprintln!("{}", e);
         process::exit(1);
     }
+    for warning in assembler.warnings() {
+        eprintln!("{}", warning);
+    }
 
     // Debug: print labels and instructions
     eprintln!("Labels:");

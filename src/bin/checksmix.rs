@@ -51,7 +51,8 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         program_files: Vec<String>,
     },
-    /// Parse and encode .mms source(s); silent on success, errors on failure
+    /// Parse and encode .mms source(s); prints any assembler warning to
+    /// stderr, errors on failure, and exits 0 on success regardless
     Check {
         /// MMIX assembly source file(s)
         #[arg(required = true, num_args = 1.., value_name = "FILE.mms")]
@@ -163,6 +164,9 @@ fn assemble_sources(paths: &[PathBuf]) -> Result<MMixAssembler, String> {
         asm.add_source(src, name);
     }
     asm.parse()?;
+    for warning in asm.warnings() {
+        eprintln!("{}", warning);
+    }
     Ok(asm)
 }
 

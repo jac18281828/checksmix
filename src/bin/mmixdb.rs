@@ -121,5 +121,8 @@ fn assemble_sources(filenames: &[String]) -> Result<MMixAssembler, String> {
         asm.add_source(src, name);
     }
     asm.parse()?;
+    for warning in asm.warnings() {
+        eprintln!("{}", warning);
+    }
     Ok(asm)
 }

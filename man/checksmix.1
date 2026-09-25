@@ -42,7 +42,8 @@ assembles them into one shared symbol space, then executes.
 .B check FILE.mms...
 Parse and encode one or more
 .B .mms
-source files; exits silently on success, with error messages on failure.
+source files; prints any assembler warning to standard error and still
+exits 0, with error messages and exit 1 on failure.
 .TP
 .B build [--output OUT.mmo] FILE.mms...
 Assemble one or more
@@ -50,6 +51,13 @@ Assemble one or more
 source files into a single
 .B .mmo
 object file. Multiple inputs are assembled into one shared symbol space.
+.PP
+.B build
+and
+.B run
+print any assembler warning to standard error the same way
+.B check
+does; a warning never fails the run.
 .SH OPTIONS
 .TP
 .BI \-\-max\-steps " " N

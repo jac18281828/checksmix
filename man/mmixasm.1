@@ -15,7 +15,8 @@ symbol space, as if their contents were concatenated.
 .PP
 On success it writes the object bytes to the chosen file. During
 assembly it prints labels and encoded instructions to standard error to
-help with debugging.
+help with debugging. Any assembler warning also goes to standard error;
+it never fails the run.
 .PP
 .B Options:
 .TP

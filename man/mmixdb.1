@@ -23,7 +23,8 @@ debugging requires the source. Multiple
 files are assembled into one shared symbol space before execution, exactly
 as
 .B checksmix run
-does.
+does. Any assembler warning goes to standard error before the command
+loop opens; it never fails the assembly.
 .SH OPTIONS
 .TP
 .BR \-\-fullname , \ \-\-emacs

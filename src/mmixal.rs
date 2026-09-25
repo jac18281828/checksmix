@@ -1069,6 +1069,10 @@ pub struct MMixAssembler {
     /// A later label/IS/GREG redefining that name is an error exactly when
     /// this is populated: the reference already saw the predefined value.
     predefined_used_at: HashMap<String, (String, usize)>,
+    /// Every warning the last `parse()` raised, in source order: a data
+    /// value that overflowed its unit or a bare empty string. `parse()`
+    /// still returns `Ok` when these are the only findings.
+    warnings: Vec<String>,
 }
 
 /// The original (user-facing) source location of an assembled instruction:
@@ -1368,6 +1372,7 @@ impl MMixAssembler {
             bspec_open_site: None,
             predefined_names,
             predefined_used_at: HashMap::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -1396,6 +1401,11 @@ impl MMixAssembler {
     /// newline added.
     pub fn debug_strings(&self) -> &[Vec<u8>] {
         &self.debug_strings
+    }
+
+    /// Every warning the last `parse()` raised, in source order.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     /// Apply the active PREFIX to a raw identifier. The root prefix is the
@@ -2056,6 +2066,7 @@ impl MMixAssembler {
 
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
+        self.warnings.clear();
         if let Some((file, line)) = &self.debug_directive_overflow {
             return Err(format!(
                 "{file}:{line}: error: too many `debug` directives in this \
@@ -2814,11 +2825,12 @@ impl MMixAssembler {
     /// n₁ … n_k characters contributes n₁ + … + n_k − k + 1, whatever
     /// operators surround them. An empty string is an error at its own
     /// position, the same rule pass 2 applies, unless it is the value's
-    /// only content, which contributes zero.
+    /// only content: a bare `""` assembles as one zero unit, so it
+    /// contributes one, matching pass 2's synthesized zero.
     fn data_value_unit_count(&self, value: pest::iterators::Pair<Rule>) -> Result<u64, String> {
         let data_expr = Self::data_expr(value)?;
         if Self::is_bare_empty_string(&data_expr) {
-            return Ok(0);
+            return Ok(1);
         }
 
         let mut char_total = 0u64;
@@ -4737,6 +4749,39 @@ impl MMixAssembler {
         }
     }
 
+    /// A data unit's name in a diagnostic, from its width in bytes.
+    fn data_unit_name(width: u64) -> &'static str {
+        match width {
+            1 => "byte",
+            2 => "wyde",
+            4 => "tetra",
+            _ => "octa",
+        }
+    }
+
+    /// The bits a data unit of `width` bytes holds. A value outside this
+    /// mask doesn't fit the unit; its low bytes assemble and it warns.
+    /// `OCTA`'s mask is every 64-bit value, so it never warns.
+    fn data_unit_mask(width: u64) -> u64 {
+        if width >= 8 {
+            u64::MAX
+        } else {
+            (1u64 << (width * 8)) - 1
+        }
+    }
+
+    /// Record a warning at `line:col`, `message` following "warning: ".
+    fn warn(&mut self, line: usize, col: usize, message: String) {
+        self.warnings.push(format!(
+            "{}:{}:{}: warning: {}",
+            self.current_filename, line, col, message
+        ));
+    }
+
+    /// Parse a data directive and expand its value list to one instruction
+    /// per unit (e.g. `BYTE "Hello"` becomes five `BYTE` instructions). A
+    /// value that doesn't fit its unit warns and keeps its low bytes, the
+    /// MMIXAL reference's own rule for a data directive.
     fn parse_data_directive(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
@@ -4744,12 +4789,32 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let directive_kind = parts.next().ok_or("Empty data directive")?.as_rule();
         let values_pair = parts.next().ok_or("Missing data values")?;
+        let unit_width = Self::data_directive_unit_width(directive_kind)?;
+        let unit = Self::data_unit_name(unit_width);
+        let mask = Self::data_unit_mask(unit_width);
 
         let mut result = Vec::new();
         for value in values_pair.into_inner() {
             let (line, col) = value.line_col();
+            if Self::is_bare_empty_string(&Self::data_expr(value.clone())?) {
+                self.warn(
+                    line,
+                    col,
+                    format!("an empty string assembles as one zero {unit}"),
+                );
+            }
             for item in self.eval_data_value_items(value)? {
                 let val = self.require_pure(item, line, col)?;
+                if val & mask != val {
+                    self.warn(
+                        line,
+                        col,
+                        format!(
+                            "value {} does not fit in a {unit}; its low {unit} assembles",
+                            val as i64
+                        ),
+                    );
+                }
                 result.push(Self::data_directive_unit(directive_kind, val)?);
             }
         }
@@ -5089,8 +5154,8 @@ impl MMixAssembler {
 
     /// Whether `data_expr` is `BYTE ""`'s one exempt shape: a bare string,
     /// with no unary wrap, sibling term or primary, and no content. Its
-    /// empty string contributes zero items, not the error every other
-    /// position gives one.
+    /// empty string assembles as one zero unit and warns, not the error
+    /// every other position gives one.
     fn is_bare_empty_string(data_expr: &pest::iterators::Pair<Rule>) -> bool {
         let mut terms = data_expr.clone().into_inner();
         let Some(term) = terms.next() else {
@@ -5155,14 +5220,15 @@ impl MMixAssembler {
     /// first character (a leading unary or the operator before it) or its
     /// last (the operator after it), and each character between stays its
     /// own item. A string standing alone, with no operator anywhere,
-    /// contributes one item per character, none for an empty string.
+    /// contributes one item per character. A bare `""`, the value's only
+    /// content, contributes one zero item; the caller warns.
     fn eval_data_value_items(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<ExprValue>, String> {
         let data_expr = Self::data_expr(pair)?;
         if Self::is_bare_empty_string(&data_expr) {
-            return Ok(Vec::new());
+            return Ok(vec![ExprValue::Pure(0)]);
         }
         Ok(self.eval_data_expr_atoms(data_expr)?.into_vec())
     }
@@ -11846,5 +11912,186 @@ Main    SETI    $1,7
         );
         assert_first_instruction("SET $1,#FFFF", MMixInstruction::SETL(1, 0xFFFF));
         assert_first_instruction("SETI $1,-1", MMixInstruction::SET(1, u64::MAX));
+    }
+
+    // ---- The data-unit warning channel ----------------------------------
+
+    #[test]
+    fn test_data_unit_overflow_warns_and_keeps_low_bytes() {
+        let mut asm = MMixAssembler::new("BYTE 300", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(0x2C));
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: value 300 does not fit in a byte; \
+              its low byte assembles"]
+        );
+
+        let mut asm = MMixAssembler::new("WYDE #12345", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::WYDE(0x2345));
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: value 74565 does not fit in a wyde; \
+              its low wyde assembles"]
+        );
+
+        let mut asm = MMixAssembler::new("TETRA #100000000", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::TETRA(0));
+        assert_eq!(
+            asm.warnings(),
+            [
+                "<test>:1:7: warning: value 4294967296 does not fit in a tetra; \
+              its low tetra assembles"
+            ]
+        );
+
+        let mut asm = MMixAssembler::new("BYTE -1", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: value -1 does not fit in a byte; \
+              its low byte assembles"]
+        );
+
+        for src in ["BYTE 255", "OCTA -1"] {
+            let mut asm = MMixAssembler::new(src, "<test>");
+            asm.parse().unwrap();
+            assert!(asm.warnings().is_empty(), "{src:?} should not warn");
+        }
+    }
+
+    #[test]
+    fn test_data_list_two_overflowing_items_warn_in_order_once_each() {
+        let mut asm = MMixAssembler::new("BYTE 300,300", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.warnings(),
+            [
+                "<test>:1:6: warning: value 300 does not fit in a byte; \
+                 its low byte assembles",
+                "<test>:1:10: warning: value 300 does not fit in a byte; \
+                 its low byte assembles",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_warnings_reports_only_the_last_parse() {
+        let mut asm = MMixAssembler::new("BYTE 300", "<test>");
+        asm.parse().unwrap();
+        asm.parse().unwrap();
+        assert_eq!(asm.warnings().len(), 1);
+    }
+
+    #[test]
+    fn test_data_item_two_overflowing_values_warn_twice_at_its_column() {
+        let mut asm = MMixAssembler::new(r#"BYTE 300+"ab"+300"#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.warnings(),
+            [
+                "<test>:1:6: warning: value 397 does not fit in a byte; \
+                 its low byte assembles",
+                "<test>:1:6: warning: value 398 does not fit in a byte; \
+                 its low byte assembles",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_string_character_overflow_warns_at_its_opening_quote() {
+        let mut asm = MMixAssembler::new(r#"BYTE "a"+300"#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(141));
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: value 397 does not fit in a byte; \
+              its low byte assembles"]
+        );
+    }
+
+    #[test]
+    fn test_string_character_above_ff_warns_as_a_byte_overflow() {
+        let mut asm = MMixAssembler::new("BYTE \"€\"", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(0xAC));
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: value 8364 does not fit in a byte; \
+              its low byte assembles"]
+        );
+
+        let mut asm = MMixAssembler::new("BYTE \"€€\"", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions.len(), 2);
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(0xAC));
+        assert_eq!(asm.instructions[1].1, MMixInstruction::BYTE(0xAC));
+        assert_eq!(
+            asm.warnings(),
+            [
+                "<test>:1:6: warning: value 8364 does not fit in a byte; \
+                 its low byte assembles",
+                "<test>:1:6: warning: value 8364 does not fit in a byte; \
+                 its low byte assembles",
+            ]
+        );
+    }
+
+    // ---- The bare empty string --------------------------------------------
+
+    #[test]
+    fn test_bare_empty_string_assembles_one_zero_unit_and_warns() {
+        let mut asm = MMixAssembler::new(r#"BYTE """#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::BYTE(0));
+        assert_eq!(
+            asm.warnings(),
+            ["<test>:1:6: warning: an empty string assembles as one zero byte"]
+        );
+
+        let mut asm = MMixAssembler::new(r#"WYDE """#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::WYDE(0));
+
+        let mut asm = MMixAssembler::new(r#"OCTA """#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(0));
+
+        let mut asm = MMixAssembler::new(r#"BYTE "",1"#, "<test>");
+        asm.parse().unwrap();
+        assert_eq!(
+            asm.instructions[0..2]
+                .iter()
+                .map(|(_, i)| i.clone())
+                .collect::<Vec<_>>(),
+            vec![MMixInstruction::BYTE(0), MMixInstruction::BYTE(1)]
+        );
+    }
+
+    /// A bare `""` sizes to one unit in pass 1 (`data_value_unit_count`)
+    /// the same as pass 2's synthesized zero, so a forward reference past
+    /// it lands at the same address either pass computes -- the same
+    /// property `test_byte_string_pass1_pass2_agree` proves for a string.
+    #[test]
+    fn test_bare_empty_string_pass1_pass2_agree() {
+        let mut asm = MMixAssembler::new("OCTA Label\nBYTE \"\"\nLabel BYTE 7", "<test>");
+        asm.parse().unwrap();
+        assert_eq!(asm.labels.get("Label"), Some(&9));
+        assert_eq!(asm.instructions[0].1, MMixInstruction::OCTA(9));
+        assert_eq!(asm.instructions[2].1, MMixInstruction::BYTE(7));
+    }
+
+    #[test]
+    fn test_bare_empty_string_beside_an_operator_or_in_parens_is_an_error() {
+        assert_eq!(
+            assemble_err(r#"BYTE 2*"""#),
+            "<test>:1:8: an empty string is not a value inside an expression"
+        );
+        assert_eq!(
+            assemble_err(r#"BYTE ("")"#),
+            "<test>:1:7: an empty string is not a value inside an expression"
+        );
     }
 }

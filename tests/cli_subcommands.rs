@@ -702,3 +702,90 @@ fn run_max_steps_rejects_zero_and_non_numeric_values() {
         );
     }
 }
+
+// ── An overflowing data value warns to stderr and still exits 0 ──────────────
+
+fn overflow_warning() -> String {
+    format!(
+        "{}:5:17: warning: value 300 does not fit in a byte; its low byte assembles",
+        fixture("overflowing_byte.mms").display()
+    )
+}
+
+#[test]
+fn check_overflowing_byte_warns_and_exits_zero() {
+    let out = checksmix()
+        .args(["check"])
+        .arg(fixture("overflowing_byte.mms"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "an overflowing data value warns, it does not fail; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&overflow_warning()),
+        "check should print the overflow warning; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn mmixasm_overflowing_byte_warns_and_exits_zero() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_overflowing_byte.mmo");
+    let out = mmixasm()
+        .args(["-o"])
+        .arg(&tmp_mmo)
+        .arg(fixture("overflowing_byte.mms"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&tmp_mmo);
+    assert!(
+        out.status.success(),
+        "an overflowing data value warns, it does not fail; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&overflow_warning()),
+        "mmixasm should print the overflow warning; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn mmixdb_overflowing_byte_warns_and_exits_zero() {
+    let out = mmixdb()
+        .arg(fixture("overflowing_byte.mms"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "an overflowing data value warns, it does not fail; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&overflow_warning()),
+        "mmixdb should print the overflow warning; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn run_overflowing_byte_warns_and_halts_cleanly() {
+    let out = checksmix()
+        .args(["run"])
+        .arg(fixture("overflowing_byte.mms"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "an overflowing data value warns, it does not stop the run; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&overflow_warning()),
+        "run should print the overflow warning; stderr: {stderr}"
+    );
+}
