@@ -136,8 +136,8 @@ accepts 32\-255 and at least \fBrL\fR; any other value is rejected and
 changes nothing. A symbol whose type is a register alias
 (produced by \fBGREG\fR or by an \fBIS\fR bound to a register, e.g.
 \fBSp\fR) is settable the same way; a plain label and a symbol whose type
-is a constant (an \fBIS\fR bound to a non-register value) are not \(em
-neither names a storage location. \fIVALUE\fR is decimal or
+is a constant (an \fBIS\fR bound to a non-register value) are not; neither
+names a storage location. \fIVALUE\fR is decimal or
 \fB0x\fR/\fB#\fR-prefixed hex.
 .TP
 .BR bt ", " backtrace ", " "info reg" ", " "info registers"
@@ -165,15 +165,9 @@ and
 are refused with
 .RB \(lq "The program is not being run." \(rq;
 .B run
-restarts it.
-.BR print ,
-.BR state ,
-.BR list ,
-.B delete
-and
-.B "info break"
-keep answering, since the register file is what the program was run to
-show.
+restarts it. Every other command keeps answering, including the
+state-reading commands
+.RB ( bt ", " "info registers" ).
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG
@@ -201,7 +195,7 @@ Debug multiple sources assembled into one shared symbol space:
 .PP
 .RS
 .nf
-mmixdb examples/module1.mms examples/module2.mms
+mmixdb main.mms lib.mms
 .fi
 .RE
 .PP

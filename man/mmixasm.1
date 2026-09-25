@@ -13,16 +13,14 @@ assembles MMIX assembly source
 into an MMO object file. Multiple input files are loaded into one shared
 symbol space, as if their contents were concatenated.
 .PP
-On success it writes the object bytes to the chosen file. During
-assembly it prints labels and encoded instructions to standard error to
-help with debugging. Any assembler warning also goes to standard error;
-it never fails the run.
+On success it writes the object bytes to the chosen file. Any assembler
+warning goes to standard error; it never fails the run.
 .PP
 .B Options:
 .TP
 .BR \-o , \ \-\-output \ \fIOUTPUT.mmo\fR
 Write the object file to the specified path. If not provided, the first
-input's basename is used with a
+input's own path is used with a
 .B .mmo
 extension.
 .SH ENVIRONMENT
@@ -53,7 +51,7 @@ Assemble multiple source files into one shared symbol space:
 .PP
 .RS
 .nf
-mmixasm module1.mms module2.mms -o combined.mmo
+mmixasm main.mms lib.mms -o combined.mmo
 .fi
 .RE
 .SH SEE ALSO
