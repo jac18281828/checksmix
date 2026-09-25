@@ -1,10 +1,12 @@
+% hello_world.mms -- print a string to standard output.
+
 	LOC	Data_Segment
 	GREG	@
 Text	BYTE	"Hello world!",10,0
 
 	LOC	#100
 
-Main	debug "Version 0.1: Hello World Example"	
-	LDA		$255,Text
+Main	LDA		$255,Text
 	TRAP	0,Fputs,StdOut
+	SET	$255,0
 	TRAP	0,Halt,0

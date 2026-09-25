@@ -1,7 +1,8 @@
-% ----------------------------------------------------
-% Fibonacci with big integers: prints fib(100) = 354224848179261915075.
-% That value needs 69 bits, more than one octa holds. A number is MAXLIMBS
-% octas, least significant first, with room to spare.
+% big_fib.mms -- compute fib(100) in multi-precision arithmetic.
+%
+% Prints fib(100) = 354224848179261915075. That value needs 69 bits, more
+% than one octa holds. A number is MAXLIMBS octas, least significant
+% first, with room to spare.
 %
 % Register rules this file follows:
 % - Arguments travel in the global registers Arg0-Arg2, not through the
@@ -13,7 +14,6 @@
 %   routine that calls another saves rJ with GET on entry and restores it
 %   with PUT before its POP.
 % - Zero is a GREG because $255 is not zero at startup on MMIXware.
-% ----------------------------------------------------
 
 Zero    GREG    0
 Arg0    GREG    0

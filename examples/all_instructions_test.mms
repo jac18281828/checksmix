@@ -1,6 +1,6 @@
-% MMIX Comprehensive Instruction Test
-% This program tests all major instruction families
-% It validates itself - if it completes without error, all tests passed
+% all_instructions_test.mms -- run every mnemonic as a regression suite.
+%
+% It validates itself: if it completes without error, all tests passed.
 %
 % No GREG declares a global register here, so MMIX starts this program at
 % rG = 255; the corpus's bookkeeping ($252-$254) and its SAVE and PUT rG
@@ -3603,14 +3603,14 @@ Test269b LDOI   Result,$10,184    % the new value must now be in memory
         JMP     TestFail
 
 % ========================================
-% Test 270: the cache and sync hints with an immediate Z
+% Test 270: the cache and sync hints, register and immediate Z
 % ========================================
 % These five are hints and no-ops in simulation, so no comparison against
-% their *I spelling can be non-vacuous. What is verified is that the base
-% spelling assembles with an immediate Z and executes without disturbing
-% anything -- the same bar Test 177 sets for the register form. That covers
-% the routing this release changed, which is separate from the effect the
-% exception note below still records as unobservable.
+% their *I spelling can be non-vacuous. What is verified is that each
+% spelling assembles and executes without disturbing anything -- the same
+% bar Test 177 sets for the register form. SYNCD and SYNCID exercise both
+% the register-Z base spelling and the explicit SYNCDI/SYNCIDI immediate
+% spelling.
 % ========================================
 Test270 ADDUI   TestNum,TestNum,1
         GETA    $10,PreloadData
@@ -3620,6 +3620,11 @@ Test270 ADDUI   TestNum,TestNum,1
         PREST   $12,$10,8       % base spelling, immediate Z
         SYNCD   $12,$10,8       % base spelling, immediate Z
         SYNCID  $12,$10,8       % base spelling, immediate Z
+        SET     $11,8
+        SYNCD   $12,$10,$11     % base spelling, register Z
+        SYNCID  $12,$10,$11     % base spelling, register Z
+        SYNCDI  $12,$10,8       % explicit immediate spelling
+        SYNCIDI $12,$10,8       % explicit immediate spelling
         SET     Result,1
         SET     Expect,1
         CMP     Temp,Result,Expect
@@ -4127,25 +4132,14 @@ Test285Data OCTA 42
 % ========================================
 % Intentional coverage exceptions
 % ========================================
-% The following grammar-defined mnemonics are deliberately not exercised
-% above:
-%   SYNCD, SYNCDI, SYNCID, SYNCIDI - each handler is exactly
-%             "self.advance_pc(); true" with no observable state change at
-%             all, so no operand choice can make a CMP/PBZ against them
-%             non-vacuous. Test 270 still runs the base spellings with an
-%             immediate Z to cover the opcode selection; only their effect
-%             is beyond this harness.
-% HALT itself is not on this list: TestPass below now executes plain HALT
-% (byte-identical to the TRAP 0,Halt,0 it replaces) instead of being
-% skipped, which is real (if narrow) coverage of HALT's assembler path.
-%   The two-operand memory form's base-address spelling (a pure address
-%             resolved against a preceding GREG, e.g. `LDO $1,Data` or
-%             `LDA $1,Data` with a GREG base ahead of it) is not exercised
-%             above: it needs a GREG holding a nonzero base, and this
-%             file's first GREG would take $254 and move rG, where every
-%             test here is written for rG=32.
-%             tests/fixtures/greg_base_address.mms covers it instead, run
-%             by tests/cli_subcommands.rs.
+% Deliberately not exercised above:
+%   the two-operand memory form's base-address spelling (a pure address
+%   resolved against a preceding GREG, e.g. `LDO $1,Data` or
+%   `LDA $1,Data` with a GREG base ahead of it): it needs a GREG holding
+%   a nonzero base, and this file's first GREG would take $254 and move
+%   rG, where every test here is written for rG=32.
+%   tests/fixtures/greg_base_address.mms covers it instead, run
+%   by tests/cli_subcommands.rs.
 % ========================================
 
 % ========================================

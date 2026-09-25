@@ -1,11 +1,11 @@
-% ----------------------------------------------------
-% Subroutine call demo: pass two args via the register
-% window slide; receive a sum at the caller's hole.
+% subroutine.mms -- call a subroutine and return its result, halts with 42.
+%
+% Pass two args via the register window slide; receive a sum at the
+% caller's hole.
 %
 % PUSHJ $X with args staged at $X+1, $X+2 makes them
 % visible to the callee as $0, $1.  POP 1 places the
 % callee's $0 at the caller's $X (the "hole").
-% ----------------------------------------------------
         LOC     #100
 
 Main    SETI    $1,40                   % arg0 → callee's $0
