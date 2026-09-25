@@ -213,12 +213,12 @@ set (i.e. when run from Emacs's `gud-mode`).
 | stepi | `si`, `stepi` | Execute exactly one instruction, following into calls/branches. |
 | continue | `c`, `continue` | Resume, single-stepping until a breakpoint or halt. |
 | run/reset | `r`, `run` | Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires. |
-| break | `b <line>`, `b <label>`, `b <addr>`, `break …` | Set a breakpoint at a source line, a label, or the tetra holding a hex address (`0x...`/`#...`). |
+| break | `b <line>`, `b <label>`, `b <addr>`, `break …` | Set a breakpoint on the tetra holding a source line, a label, or a hex address (`0x...`/`#...`); it fires when execution reaches any address in that tetra. |
 | delete | `d`, `delete`, `d <line>`, `d <label>`, `d <addr>` | Delete one breakpoint, or every breakpoint given no argument. |
 | print | `p <arg>`, `print <arg>`, `p/f <arg>`, `p/x <arg>` | Print a register (`$N`/`N`), special register (`rJ`, `rA`, ...), label address, IS/GREG symbol, or the memory octa at a hex address's aligned 8-byte base (`0x...`/`#...`). `/f` and `/x`, attached or detached (`p /f <arg>`), print the same octabyte as an IEEE double or in hex instead. |
 | set | `set <target> <value>` | Write a register (`$N`/`N`), special register — `rL` at most `rG`, `rG` 32-255 and at least `rL`, any other value rejected and unchanged — or the memory octa at a hex address's aligned 8-byte base. A symbol whose type is a register alias (from `GREG` or a register-valued `IS`, e.g. `Sp`) is settable the same way; a label or a symbol whose type is a constant (an `IS` bound to a non-register value) is not; neither names a storage location. `value` is decimal or `0x`/`#`-prefixed hex. |
 | state | `bt`, `backtrace`, `info reg`, `info registers` | Print the full register dump. |
-| breakpoints | `info break`, `info breakpoints` | List every currently-set breakpoint with its source location. |
+| breakpoints | `info break`, `info breakpoints` | List every currently-set breakpoint by its tetra and the source line holding that tetra's first byte. |
 | list | `l`, `list` | Print source lines around the current PC. |
 | help | `h`, `help`, `?` | Show this help. |
 | quit | `q`, `quit`, `exit` | Exit the debugger. |

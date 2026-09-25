@@ -413,9 +413,9 @@ impl Debugger {
     }
 
     /// `step`: run until the PC reaches an address on a different source
-    /// line, following into calls. Also stops on a breakpoint, a halt, or
-    /// `STEP_BUDGET` (a line that never ends can't hang this). An address
-    /// with no source location is not a new line.
+    /// line, following into calls. Also stops when the PC's tetra holds a
+    /// breakpoint, on a halt, or `STEP_BUDGET` (a line that never ends can't
+    /// hang this). An address with no source location is not a new line.
     fn do_step(&mut self) -> Vec<String> {
         if let Some(refusal) = self.refuse_when_exited() {
             return refusal;
@@ -434,7 +434,9 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&self.mmix.get_pc()) || self.reached_new_line(&origin) {
+            if self.breakpoints.contains(&(self.mmix.get_pc() & !3))
+                || self.reached_new_line(&origin)
+            {
                 break;
             }
         }
@@ -445,7 +447,8 @@ impl Debugger {
     /// counts once the call depth is back at or below where it started
     /// (PUSHJ/PUSHGO push a frame; GO does not) -- a callee's first
     /// instruction is on a different source line, so testing the line alone
-    /// would stop inside the call.
+    /// would stop inside the call. Also stops when the PC's tetra holds a
+    /// breakpoint.
     fn do_next(&mut self) -> Vec<String> {
         if let Some(refusal) = self.refuse_when_exited() {
             return refusal;
@@ -465,7 +468,7 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&self.mmix.get_pc()) {
+            if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
                 break;
             }
             if self.mmix.call_depth() <= depth && self.reached_new_line(&origin) {
@@ -496,8 +499,8 @@ impl Debugger {
         }
     }
 
-    /// `continue`: single-step from the current PC until a breakpoint
-    /// address is hit, the program halts, or `STEP_BUDGET` is reached (a
+    /// `continue`: single-step from the current PC until the PC's tetra
+    /// holds a breakpoint, the program halts, or `STEP_BUDGET` is reached (a
     /// program that never halts can't hang this).
     fn do_continue(&mut self) -> Vec<String> {
         if let Some(refusal) = self.refuse_when_exited() {
@@ -516,7 +519,7 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&self.mmix.get_pc()) {
+            if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
                 break;
             }
         }
@@ -524,14 +527,14 @@ impl Debugger {
     }
 
     /// `run`/reset: reset the machine to the freshly-loaded image, stop
-    /// there if a breakpoint sits on the entry point, and otherwise behave
-    /// like `continue`. `continue` executes an instruction before testing
-    /// the breakpoint set, so that resuming from a stop does not re-trigger
-    /// on the breakpoint it is sitting at; after a reset nothing has run
-    /// yet, so the entry breakpoint has to be honored first.
+    /// there if the entry point's tetra holds a breakpoint, and otherwise
+    /// behave like `continue`. `continue` executes an instruction before
+    /// testing the breakpoint set, so that resuming from a stop does not
+    /// re-trigger on the breakpoint it is sitting at; after a reset nothing
+    /// has run yet, so the entry breakpoint has to be honored first.
     fn do_run(&mut self) -> Vec<String> {
         self.reset();
-        if self.breakpoints.contains(&self.mmix.get_pc()) {
+        if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
             return self.report(false);
         }
         self.do_continue()
@@ -548,15 +551,17 @@ impl Debugger {
         }
     }
 
-    /// Resolve a `break`/`delete` argument to an address, in priority order:
-    /// a decimal source line in the current file, an exact label, or a `#`/
-    /// `0x` hex address rounded down to its tetra (`addr & !3`), since MMIX
-    /// executes instructions only at multiples of 4. A leading ':' (the
-    /// root-namespace spelling) is stripped before the label lookup, since
-    /// `MMixAssembler::labels` keys a root name without it.
+    /// Resolve a `break`/`delete` argument to the tetra holding its address,
+    /// in priority order: a decimal source line in the current file, an
+    /// exact label, or a `#`/`0x` hex address. Every path rounds down to its
+    /// tetra (`addr & !3`), since MMIX executes instructions only at
+    /// multiples of 4: a line, a label and a hex address naming one tetra
+    /// key the same breakpoint. A leading ':' (the root-namespace spelling)
+    /// is stripped before the label lookup, since `MMixAssembler::labels`
+    /// keys a root name without it.
     fn resolve_break_location(&self, arg: &str) -> Option<u64> {
         let arg = arg.trim();
-        if let Ok(line) = arg.parse::<usize>() {
+        let addr = if let Ok(line) = arg.parse::<usize>() {
             self.current_file()
                 .and_then(|file| self.assembler.addr_for_line(&file, line))
         } else {
@@ -565,8 +570,9 @@ impl Debugger {
                 .labels
                 .get(key)
                 .copied()
-                .or_else(|| self.parse_hex_address(arg).map(|addr| addr & !3))
-        }
+                .or_else(|| self.parse_hex_address(arg))
+        };
+        addr.map(|addr| addr & !3)
     }
 
     fn do_delete(&mut self, arg: Option<String>) -> String {
@@ -849,12 +855,12 @@ next (over)   n, next                          Execute one source line, stepping
 stepi         si, stepi                        Execute exactly one instruction, following into calls/branches.
 continue      c, continue                      Resume, single-stepping until a breakpoint or halt.
 run/reset     r, run                           Reset to the freshly-loaded image, then run on; a breakpoint on the entry point fires.
-break         b <line>, b <label>, b <addr>, break …   Set a breakpoint at a source line, label, or hex address.
+break         b <line>, b <label>, b <addr>, break …   Set a breakpoint on the tetra holding a source line, label, or hex address; it fires when execution reaches any address in that tetra.
 delete        d, delete, d <line>, d <label>, d <addr>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base. p/f and p/x, attached or detached, print it as an IEEE double or in hex.
 set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not. rL accepts at most rG and rG accepts 32-255 and at least rL; any other value is rejected and changes nothing.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
-breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
+breakpoints   info break, info breakpoints     List every currently-set breakpoint by its tetra and the source line holding that tetra's first byte.
 list          l, list                          Print source lines around the current PC.
 help          h, help, ?                       Show this help.
 quit          q, quit, exit                    Exit the debugger.
@@ -931,6 +937,44 @@ Main\tLDA\t$255,Text
 \tTRAP\t0,Fputs,1
 \tTRAP\t0,Halt,0
 Text\tBYTE\t\"Hi\",0
+";
+
+    /// A9's introduction: `T` is line 5 at `#10C`; the `GO` jumps past it to
+    /// `#10D`.
+    const GO_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tGETA\t$1,T
+\tADDU\t$1,$1,1
+\tGO\t$0,$1,0
+T\tSET\t$2,5
+\tSET\t$255,0
+\tTRAP\t0,Halt,0
+";
+
+    /// `Loop` is line 4 at `#108`; its `GO` jumps to `#109`, inside the same
+    /// tetra, forever.
+    const LOOP_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tGETA\t$1,Loop
+\tADDU\t$1,$1,1
+Loop\tGO\t$0,$1,0
+";
+
+    /// The `BYTE 1` line (4) is at `#108`; `Odd` (line 5) is at `#109`.
+    const ODD_PROGRAM: &str = "\
+\tLOC\t#100
+Main\tSET\t$255,0
+\tTRAP\t0,Halt,0
+\tBYTE\t1
+Odd\tBYTE\t2
+";
+
+    /// `Main` sits at `#101`, off a tetra boundary; the tetra there decodes
+    /// as `TRAP 1,0,0`, which halts with exit code 1.
+    const ENTRY_PROGRAM: &str = "\
+\tLOC\t#100
+\tBYTE\t0
+Main\tBYTE\t1
 ";
 
     /// Records what a program writes to stdout, shared with the test.
@@ -1406,6 +1450,133 @@ Gap     LOC     #300
             dbg.execute(Command::Breakpoints),
             vec!["0x104  (no source line)".to_string()]
         );
+    }
+
+    /// `b T`, `b 5` and `b #10C` all name the tetra at `#10C`: a label, a
+    /// line and a hex address. The `GO` jumps past `T` to `#10D`; the
+    /// breakpoint still fires there, since `#10D` lies in the same tetra.
+    #[test]
+    fn breakpoint_on_a_label_line_or_hex_address_fires_anywhere_in_its_tetra() {
+        for arg in ["T", "5", "#10C"] {
+            let mut dbg = Debugger::load(assemble(GO_PROGRAM, "go.mms"));
+            dbg.execute(Command::Break(arg.to_string()));
+            let stop = dbg.execute(Command::Run);
+            assert_eq!(dbg.mmix.get_pc(), 0x10D, "break {arg}");
+            assert_eq!(
+                stop,
+                vec!["0x000000000000010d\tgo.mms:5\tT\tSET\t$2,5".to_string()],
+                "break {arg}"
+            );
+        }
+    }
+
+    /// `Loop`'s `GO` jumps from `#108` to `#109`, inside the same tetra;
+    /// `run` stops at `#108` first, and `continue` fires the breakpoint
+    /// again once the PC returns to that tetra rather than looping forever.
+    #[test]
+    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_continue() {
+        let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
+        dbg.execute(Command::Break("Loop".to_string()));
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x108);
+        let stop = dbg.execute(Command::Continue);
+        assert_eq!(dbg.mmix.get_pc(), 0x109);
+        assert_eq!(
+            stop,
+            vec!["0x0000000000000109\tloop.mms:4\tLoop\tGO\t$0,$1,0".to_string()]
+        );
+    }
+
+    /// `step` fires the same breakpoint `continue` does, once the PC returns
+    /// to the tetra it left.
+    #[test]
+    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_step() {
+        let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
+        dbg.execute(Command::Break("Loop".to_string()));
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x108);
+        let stop = dbg.execute(Command::Step);
+        assert_eq!(dbg.mmix.get_pc(), 0x109);
+        assert_eq!(
+            stop,
+            vec!["0x0000000000000109\tloop.mms:4\tLoop\tGO\t$0,$1,0".to_string()]
+        );
+    }
+
+    /// `next` fires the same breakpoint `continue` does, once the PC returns
+    /// to the tetra it left.
+    #[test]
+    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_next() {
+        let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
+        dbg.execute(Command::Break("Loop".to_string()));
+        dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x108);
+        let stop = dbg.execute(Command::Next);
+        assert_eq!(dbg.mmix.get_pc(), 0x109);
+        assert_eq!(
+            stop,
+            vec!["0x0000000000000109\tloop.mms:4\tLoop\tGO\t$0,$1,0".to_string()]
+        );
+    }
+
+    /// `entry.mms` starts execution at `Main`, `#101`, off a tetra boundary.
+    /// `break` keys the label on its tetra (`#100`); `run`'s reset lands on
+    /// `#101` itself, whose tetra already holds the breakpoint, so the
+    /// program stops through the exact match before executing anything.
+    #[test]
+    fn run_stops_at_the_entry_point_even_when_its_label_is_off_the_tetra() {
+        let mut dbg = Debugger::load(assemble(ENTRY_PROGRAM, "entry.mms"));
+        let msg = dbg.execute(Command::Break("Main".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x100 (Main)".to_string()]);
+        let stop = dbg.execute(Command::Run);
+        assert_eq!(dbg.mmix.get_pc(), 0x101);
+        assert_eq!(stop, vec!["entry.mms:3\tMain\tBYTE\t1".to_string()]);
+    }
+
+    /// A label off its tetra sets, lists and deletes as that tetra: `Odd`
+    /// (`#109`) keys `0x108`, and `info break` names the `BYTE 1` line that
+    /// holds the tetra's first byte, not `Odd`'s own line.
+    #[test]
+    fn breakpoint_on_a_label_off_its_tetra_lists_and_deletes_by_the_tetra() {
+        let mut dbg = Debugger::load(assemble(ODD_PROGRAM, "odd.mms"));
+        let msg = dbg.execute(Command::Break("Odd".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x108 (Odd)".to_string()]);
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["0x108  odd.mms:4".to_string()]
+        );
+        let msg = dbg.execute(Command::Delete(Some("0x109".to_string())));
+        assert_eq!(msg, vec!["Deleted breakpoint at 0x108 (0x109)".to_string()]);
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["No breakpoints set.".to_string()]
+        );
+    }
+
+    /// A breakpoint set by line deletes by the label naming the same tetra.
+    #[test]
+    fn breakpoint_on_a_line_off_its_tetra_deletes_by_the_label_naming_it() {
+        let mut dbg = Debugger::load(assemble(ODD_PROGRAM, "odd.mms"));
+        let msg = dbg.execute(Command::Break("5".to_string()));
+        assert_eq!(msg, vec!["Breakpoint set at 0x108 (5)".to_string()]);
+        let msg = dbg.execute(Command::Delete(Some("Odd".to_string())));
+        assert_eq!(msg, vec!["Deleted breakpoint at 0x108 (Odd)".to_string()]);
+    }
+
+    /// A label, a hex address and a line all naming one tetra set exactly
+    /// one breakpoint: `delete` with no argument clears it alone.
+    #[test]
+    fn label_hex_and_line_naming_one_tetra_set_one_breakpoint() {
+        let mut dbg = Debugger::load(assemble(ODD_PROGRAM, "odd.mms"));
+        dbg.execute(Command::Break("Odd".to_string()));
+        dbg.execute(Command::Break("#108".to_string()));
+        dbg.execute(Command::Break("4".to_string()));
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["0x108  odd.mms:4".to_string()]
+        );
+        let msg = dbg.execute(Command::Delete(None));
+        assert_eq!(msg, vec!["Deleted 1 breakpoint(s).".to_string()]);
     }
 
     /// Deleting one of two breakpoints by line number stops it from firing

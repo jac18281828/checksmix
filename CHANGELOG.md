@@ -1,6 +1,7 @@
 0.4.0 (unreleased)
 
 * `break` and `delete` take a `#` or `0x` hex address as `print` does, rounded down to its tetra, and an unprefixed number is still a source line
+* After `GO` or `PUSHGO` to an address off a tetra boundary, a line, label or hex breakpoint on any instruction reached from there now fires under `step`, `next`, `continue` and `run`; every breakpoint is keyed on its tetra, so a label or data line at `#109` sets, lists and deletes as `0x108`
 * **Breaking: the MIX emulator is gone.** The library no longer exports `Mix`, `Computer`, `Program`, `Instruction` or `ProgramParseError`, and `checksmix` no longer runs `.mix` or `.mixal` files; it exits 1 on either as an unknown extension
 * **Breaking: `ValueFormat` is `#[non_exhaustive]`.** A downstream `match` on it needs a wildcard arm; naming a variant still works
 * **Breaking: `Stop::Breakpoint` is gone.** `MMix::run_bounded` never returned it; delete any arm that names it
