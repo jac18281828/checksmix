@@ -440,3 +440,5 @@ impl MMixAssembler {
         Ok(f(x, y, z))
     }
 }
+
+mod wyde_immediate;
