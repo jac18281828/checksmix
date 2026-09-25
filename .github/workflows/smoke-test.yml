@@ -1,9 +1,9 @@
 name: All Instruction Smoke Test
 on:
   push:
-    branches: [main, mmix]
+    branches: [main]
   pull_request:
-    branches: [main, mmix]
+    branches: [main]
 env:
   CARGO_TERM_COLOR: always
 jobs:
