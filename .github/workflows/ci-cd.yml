@@ -30,13 +30,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt --check
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --no-deps -- -D warnings
       - name: Build project
         run: cargo build --verbose
       - name: Run Rust tests
         run: cargo test --verbose
+      - name: Run tests without default features
+        run: cargo test --no-default-features
   wasm-check:
     name: Wasm Library Check
     runs-on: ubuntu-latest
@@ -89,3 +91,15 @@ jobs:
             groff -man -Tascii -ww -z "$page" || status=1
           done
           exit $status
+  ert-checks:
+    name: Emacs ERT Suites
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Emacs
+        run: sudo apt-get update && sudo apt-get install -y emacs-nox
+      - name: Run mmix-mode ERT suite
+        run: emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and-exit
+      - name: Run mmixdb ERT suite
+        run: emacs --batch -L contrib -l contrib/mmixdb-test.el -f ert-run-tests-batch-and-exit
