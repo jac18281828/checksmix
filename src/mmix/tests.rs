@@ -126,16 +126,6 @@ fn load_tetra(mmix: &mut MMix, addr: u64, value: u32) {
     }
 }
 
-/// Store `value` from $1 to address 0 with the given store opcode word,
-/// returning rA.
-fn run_store(word: u32, value: u64) -> u64 {
-    let mut mmix = MMix::new();
-    mmix.set_register(1, value);
-    mmix.write_tetra(0, word);
-    assert!(mmix.execute_instruction());
-    mmix.get_special(SpecialReg::RA)
-}
-
 mod dispatch_arithmetic;
 mod dispatch_branches;
 mod dispatch_misc;

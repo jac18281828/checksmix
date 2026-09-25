@@ -214,6 +214,16 @@ fn test_two_enabled_exceptions_trip_to_the_leftmost_and_drop_the_other_silently(
     );
 }
 
+/// Store `value` from $1 to address 0 with the given store opcode word,
+/// returning rA.
+fn run_store(word: u32, value: u64) -> u64 {
+    let mut mmix = MMix::new();
+    mmix.set_register(1, value);
+    mmix.write_tetra(0, word);
+    assert!(mmix.execute_instruction());
+    mmix.get_special(SpecialReg::RA)
+}
+
 #[test]
 fn test_signed_stores_raise_v_when_the_value_does_not_fit() {
     // Register form: ST* $1,$2,$3 with $2 = $3 = 0. Immediate form: Z = 0.
