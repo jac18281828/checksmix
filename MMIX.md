@@ -490,6 +490,13 @@ the octa there and the second as the octa at `$255+8`. The result replaces
 | `Fseek` | 9 | `$255` = offset | 0, or −1 |
 | `Ftell` | 10 | — | position, or −1 |
 
+`size` is a full octabyte for both `Fread` and `Fwrite`. `Fwrite` moves at
+most 1,048,576 bytes a call; a `size` beyond that writes the first
+1,048,576 bytes and returns the short write's `n − size`, guarding one
+`TRAP` from streaming unbounded host memory. `Fread` takes no such cap — a
+regular file ends on its own, and capping would misreport a short read as
+end of file.
+
 `Fopen`'s mode is one of `TextRead` (0), `TextWrite` (1), `BinaryRead` (2),
 `BinaryWrite` (3), `BinaryReadWrite` (4). A handle carries four capability
 bits: read, write, seek, and read-write. Text modes grant read or write
@@ -530,9 +537,9 @@ no file underneath to rebind, and a `StdIn` read always fails, since the
 host has no read primitive.
 
 **Departure from the reference:** the reference places no length limit on
-`Fopen`'s name, `Fputs`, or `Fputws`, and accepts any name the host
-filesystem does; checksmix caps the three calls as above and rejects an
-`Fopen` name that is not valid UTF-8.
+`Fwrite`, `Fopen`'s name, `Fputs`, or `Fputws`, and accepts any size or
+name the host allows; checksmix caps all four calls as above and rejects
+an `Fopen` name that is not valid UTF-8.
 
 ### Extensions
 

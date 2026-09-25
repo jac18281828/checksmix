@@ -5,10 +5,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tracing::debug;
 
-/// The per-call byte bound shared by `Fopen`'s name, `Fputs` and `Fputws`
-/// (`Fputws`'s own bound counted in wydes, `MAX_TRAP_WYDES` below).
-/// **Departure from the reference:** none of the three has one there. A
-/// fixed constant, read from no register.
+/// The per-call byte bound shared by `Fopen`'s name, `Fwrite`, `Fputs` and
+/// `Fputws` (`Fputws`'s own bound counted in wydes, `MAX_TRAP_WYDES`
+/// below). `Fread` has no bound of its own: it transfers in chunks of at
+/// most this size, stopping at `size` bytes, end of file or an error,
+/// whichever comes first. **Departure from the reference:** none of
+/// `Fopen`, `Fwrite`, `Fputs` or `Fputws` has one there. A fixed constant,
+/// read from no register.
 pub(super) const MAX_TRAP_BYTES: usize = 1_048_576;
 
 /// `Fputws`'s bound in wydes: the same byte budget as `MAX_TRAP_BYTES`,
@@ -329,15 +332,17 @@ impl MMix {
     }
 
     /// TRAP 3: Fread. `Z` is the handle; `$255` addresses a two-octa block
-    /// holding the buffer address and the byte count. Reads in a loop so a
-    /// short `Read::read` never masks bytes the file still has to give;
-    /// stops at the requested size, end of file, or an I/O error, whichever
-    /// comes first, and reports a mid-read error the same as an early EOF —
-    /// the short-read count, not the all-or-nothing failure value.
+    /// holding the buffer address and the byte count, read as a full
+    /// octabyte so no target narrows it. Reads in chunks of at most
+    /// `MAX_TRAP_BYTES`, so no allocation scales with the guest's
+    /// request; the loop ends at the guest's requested size, end of file,
+    /// or an I/O error, whichever comes first, and reports a mid-read
+    /// error the same as an early EOF — the short-read count, not the
+    /// all-or-nothing failure value. Every result is mod 2^64.
     fn handle_fread(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
         let buffer_addr = self.read_octa(param_addr);
-        let size = self.read_octa(param_addr.wrapping_add(8)) as usize;
+        let size = self.read_octa(param_addr.wrapping_add(8));
 
         debug!(
             handle,
@@ -349,20 +354,33 @@ impl MMix {
         // Handle 0 (StdIn) has no host read primitive.
         if self.fail_unless(
             self.handle_readable(handle) && handle != 0,
-            -1 - size as i64,
+            u64::MAX.wrapping_sub(size) as i64,
         ) {
             return true;
         }
         self.note_read(handle);
 
-        let mut buffer = vec![0u8; size];
-        let mut total = 0usize;
+        // Sized to what this call could possibly need: a size below the
+        // cap allocates and zeroes only that many bytes, so many small
+        // reads don't each pay for a 1 MiB buffer they never fill.
+        let chunk_size = size.min(MAX_TRAP_BYTES as u64) as usize;
+        let mut chunk = vec![0u8; chunk_size];
+        let mut total: u64 = 0;
         let mut had_error = false;
         while total < size {
+            let want = (size - total).min(chunk_size as u64) as usize;
             let file = self.open_file(handle);
-            match file.read(&mut buffer[total..]) {
+            match file.read(&mut chunk[..want]) {
                 Ok(0) => break,
-                Ok(n) => total += n,
+                Ok(n) => {
+                    for (i, &byte) in chunk[..n].iter().enumerate() {
+                        self.write_byte(
+                            buffer_addr.wrapping_add(total.wrapping_add(i as u64)),
+                            byte,
+                        );
+                    }
+                    total += n as u64;
+                }
                 Err(_) => {
                     had_error = true;
                     break;
@@ -370,15 +388,12 @@ impl MMix {
             }
         }
 
-        if had_error && total == 0 {
-            self.set_register(255, (-1i64 - size as i64) as u64);
+        let result = if had_error && total == 0 {
+            u64::MAX.wrapping_sub(size)
         } else {
-            for (i, &byte) in buffer[..total].iter().enumerate() {
-                self.write_byte(buffer_addr.wrapping_add(i as u64), byte);
-            }
-            let result = total as i64 - size as i64;
-            self.set_register(255, result as u64);
-        }
+            total.wrapping_sub(size)
+        };
+        self.set_register(255, result);
         self.advance_pc();
         true
     }
@@ -490,15 +505,19 @@ impl MMix {
     }
 
     /// TRAP 6: Fwrite. `Z` is the handle; `$255` addresses a two-octa block
-    /// holding the buffer address and the byte count. Writes in a loop, so
-    /// a short underlying write is reflected in the result rather than
-    /// masked. Returns 0 if all `size` bytes were written, else `n - size`
-    /// for the `n` bytes actually written (`-size` if the handle lacks
-    /// write access, `n` then being 0).
+    /// holding the buffer address and the byte count, read as a full
+    /// octabyte so no target narrows it. Moves at most `MAX_TRAP_BYTES`
+    /// bytes a call, a larger `size` written and reported as a short
+    /// write (departure from the reference, which streams the full
+    /// size). Writes in a loop, so a short underlying write is reflected
+    /// in the result rather than masked. Returns 0 if all `size` bytes
+    /// were written, else `n - size` mod 2^64 for the `n` bytes actually
+    /// written (`-size` mod 2^64 if the handle lacks write access, `n`
+    /// then being 0).
     fn handle_fwrite(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
         let buffer_addr = self.read_octa(param_addr);
-        let size = self.read_octa(param_addr.wrapping_add(8)) as usize;
+        let size = self.read_octa(param_addr.wrapping_add(8));
 
         debug!(
             handle,
@@ -507,13 +526,14 @@ impl MMix {
             "TRAP: Fwrite"
         );
 
-        if self.fail_unless(self.handle_writable(handle), -(size as i64)) {
+        if self.fail_unless(self.handle_writable(handle), 0u64.wrapping_sub(size) as i64) {
             return true;
         }
         self.note_write(handle);
 
-        let mut buffer = Vec::with_capacity(size);
-        for i in 0..size {
+        let capped = size.min(MAX_TRAP_BYTES as u64) as usize;
+        let mut buffer = Vec::with_capacity(capped);
+        for i in 0..capped {
             buffer.push(self.read_byte(buffer_addr.wrapping_add(i as u64)));
         }
 
@@ -536,8 +556,8 @@ impl MMix {
             }
         };
 
-        let result = written as i64 - size as i64;
-        self.set_register(255, result as u64);
+        let result = (written as u64).wrapping_sub(size);
+        self.set_register(255, result);
         self.advance_pc();
         true
     }

@@ -4,6 +4,87 @@ use super::*;
 
 // ========== TRAP Handler Tests ==========
 
+/// Points `$255` at the two-octa (buffer address, byte count) block
+/// `Fread`/`Fwrite` share, at a fixed scratch address.
+fn write_two_octa_params(mmix: &mut MMix, buffer_addr: u64, size: u64) {
+    let param_addr = 200_000u64;
+    mmix.write_octa(param_addr, buffer_addr);
+    mmix.write_octa(param_addr + 8, size);
+    mmix.set_register(255, param_addr);
+}
+
+/// `Fwrite` moves at most 1,048,576 bytes a call, however large the
+/// guest's declared size — no allocation sized from the guest's count.
+#[test]
+fn test_trap_fwrite_stdout_caps_at_one_mebibyte() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    let buffer_addr = 10_000u64;
+    mmix.write_byte(buffer_addr, b'H');
+    mmix.write_byte(buffer_addr + 1, b'i');
+
+    write_two_octa_params(&mut mmix, buffer_addr, 0xFFFFFFFFFFFFFFFF);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+
+    let captured = handle.stdout();
+    assert_eq!(captured.len(), 1_048_576);
+    assert_eq!(&captured[..2], b"Hi");
+    assert_eq!(captured[2], 0);
+    assert_eq!(mmix.get_register(255), 0x100001);
+}
+
+/// A `size` just over the cap reports the short write as a negative
+/// result; a `size` exactly at the cap writes it all and reports 0.
+#[test]
+fn test_trap_fwrite_stdout_reports_short_write_past_the_cap() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+
+    write_two_octa_params(&mut mmix, 10_000, 0x100001);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert_eq!(mmix.get_register(255), 0xFFFFFFFFFFFFFFFF);
+
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    write_two_octa_params(&mut mmix, 10_000, 0x100000);
+    mmix.write_tetra(0, 0x00000601);
+    assert!(mmix.execute_instruction());
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert_eq!(mmix.get_register(255), 0);
+}
+
+/// `Fwrite` to a handle a negate can't hold safely — the result and the
+/// failure value are both mod 2^64, never a signed overflow.
+#[test]
+fn test_trap_fwrite_stdin_rejects_and_does_not_negate_overflow() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+
+    write_two_octa_params(&mut mmix, 10_000, 0x8000000000000000);
+    mmix.write_tetra(0, 0x00000600); // TRAP 0, Fwrite (6), 0 (stdin)
+    assert!(mmix.execute_instruction());
+    assert!(handle.stdout().is_empty());
+    assert_eq!(mmix.get_register(255), 0x8000000000000000);
+}
+
+/// `Fwrite` to a writable handle with the same `size`: pins the wrapping
+/// (not signed) subtraction that turns the bytes written and the guest's
+/// size into the result.
+#[test]
+fn test_trap_fwrite_stdout_size_above_i64_max_wraps_correctly() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+
+    write_two_octa_params(&mut mmix, 10_000, 0x8000000000000000);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(handle.stdout().len(), 1_048_576);
+    assert_eq!(mmix.get_register(255), 0x8000000000100000);
+}
+
 #[test]
 fn test_trap_halt() {
     let mut mmix = MMix::new();

@@ -17,6 +17,7 @@
 * **Breaking: `SET $X,-1` is an error** naming `SETI` for a wider constant or `SETI`/`NEG` for a negative one, the same as any other out-of-range `SET` source; the carve-out that wrapped a negated literal into `SET`'s low wyde is gone
 * A data value wider than its unit warns and keeps its low bytes, the MMIXAL reference's own rule for a data directive: `BYTE 300` still assembles `#2C` and now warns, and a string's characters are data values like any other. `MMixAssembler` gains `pub fn warnings(&self) -> &[String]`, the warnings of the last `parse()` in source order; `checksmix`, `mmixasm` and `mmixdb` each print every warning to standard error after a successful assembly, never changing the exit status
 * **Breaking: a bare `""` in a data list assembles as one zero unit of the directive's width and warns**, shifting the address of anything after it; the same empty string beside an operator or inside parentheses keeps its existing error
+* **Breaking: `Fwrite` moves at most 1,048,576 bytes a call.** A larger `size` writes the first 1,048,576 bytes and returns the short write's `n − size`, where it used to size a host allocation from the guest's own count. `Fread`/`Fwrite` read `size` as a full octabyte on every target
 
 0.3.13 (2026-09-22)
 

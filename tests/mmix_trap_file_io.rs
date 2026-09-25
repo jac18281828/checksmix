@@ -462,6 +462,33 @@ fn fwrite_and_fread_round_trip_exact_size() {
     assert!(!path.exists());
 }
 
+/// A read past `MAX_TRAP_BYTES` (1,048,576) spans two chunks: the bytes on
+/// both sides of the boundary land at their own address, contiguous with
+/// the first chunk's.
+#[test]
+fn fread_across_multiple_chunks_reads_bytes_on_both_sides_of_the_boundary() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fread_multi_chunk.txt");
+    let guard = TempFileGuard(path.clone());
+
+    let mut data = vec![0xAAu8; 1_048_576];
+    data.extend_from_slice(&[0xBB, 0xCC, 0xDD, 0xEE]);
+    fs::write(&path, &data).unwrap();
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    let buffer_addr = 80_000u64;
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, data.len() as u64), 0);
+
+    assert_eq!(mmix.read_byte(buffer_addr), 0xAA);
+    assert_eq!(mmix.read_byte(buffer_addr + 1_048_575), 0xAA);
+    assert_eq!(mmix.read_byte(buffer_addr + 1_048_576), 0xBB);
+    assert_eq!(mmix.read_byte(buffer_addr + 1_048_577), 0xCC);
+    assert_eq!(mmix.read_byte(buffer_addr + 1_048_578), 0xDD);
+    assert_eq!(mmix.read_byte(buffer_addr + 1_048_579), 0xEE);
+
+    drop(guard);
+}
+
 #[test]
 fn fread_short_at_eof_returns_n_minus_size() {
     let mut mmix = MMix::new();
@@ -478,6 +505,73 @@ fn fread_short_at_eof_returns_n_minus_size() {
 
     drop(guard);
     assert!(!path.exists());
+}
+
+#[test]
+fn fread_with_max_size_reads_the_whole_short_file() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fread_max_size.txt");
+    let guard = TempFileGuard(path.clone());
+    fs::write(&path, "Abcdef").unwrap(); // 6 bytes
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    let buffer_addr = 79_000u64;
+    // size = u64::MAX: reads the 6 bytes there are, 6 - u64::MAX mod 2^64 = 7.
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, u64::MAX), 7);
+    let read: Vec<u8> = (0..6).map(|i| mmix.read_byte(buffer_addr + i)).collect();
+    assert_eq!(read, b"Abcdef");
+
+    drop(guard);
+}
+
+/// `size` sits one chunk plus a remainder past `MAX_TRAP_BYTES`
+/// (1,048,576), and the file holds a further whole chunk beyond `size`:
+/// the final, partial chunk's own bound governs, not `MAX_TRAP_BYTES`
+/// itself.
+#[test]
+fn fread_stops_exactly_at_size_when_the_file_holds_more() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fread_stops_at_size.bin");
+    let guard = TempFileGuard(path.clone());
+
+    let size: usize = 1_048_576 + 100;
+    let data = vec![0xABu8; size + 1_048_576];
+    fs::write(&path, &data).unwrap();
+
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_READ), 0);
+    let buffer_addr = 200_000_000u64;
+    let sentinel_len = 16u64;
+    for i in 0..sentinel_len {
+        mmix.write_byte(buffer_addr + size as u64 + i, 0xEE);
+    }
+
+    assert_eq!(fread(&mut mmix, 3, buffer_addr, size as u64), 0);
+
+    assert_eq!(mmix.read_byte(buffer_addr), 0xAB);
+    assert_eq!(mmix.read_byte(buffer_addr + size as u64 - 1), 0xAB);
+    for i in 0..sentinel_len {
+        assert_eq!(mmix.read_byte(buffer_addr + size as u64 + i), 0xEE);
+    }
+
+    drop(guard);
+}
+
+#[test]
+fn fwrite_larger_than_the_per_call_cap_writes_a_short_write() {
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fwrite_cap.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    let data = vec![0xABu8; 0x100001]; // one byte past the 1 MiB cap
+    assert_eq!(fwrite(&mut mmix, 3, &data), -1); // 1_048_576 - 1_048_577
+    assert_eq!(fclose(&mut mmix, 3), 0);
+
+    let written = fs::read(&path).unwrap();
+    assert_eq!(written.len(), 1_048_576);
+    assert!(written.iter().all(|&b| b == 0xAB));
+
+    drop(guard);
 }
 
 #[test]
