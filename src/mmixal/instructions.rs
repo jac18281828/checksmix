@@ -441,4 +441,5 @@ impl MMixAssembler {
     }
 }
 
+mod integer;
 mod wyde_immediate;
