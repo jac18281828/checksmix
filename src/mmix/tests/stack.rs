@@ -270,7 +270,7 @@ fn test_pushgo_pop_basic() {
 
 /// A `PUSHGO` target off a tetra boundary leaves those low bits in the
 /// PC; `GETA` reads the aligned instruction but adds its offset to the
-/// unrounded PC.
+/// unrounded PC, per the Instruction Reference's GO page.
 #[test]
 fn test_pushgo_off_tetra_target_keeps_low_bits_in_pc() {
     let mut mmix = MMix::new();
@@ -288,6 +288,8 @@ fn test_pushgo_off_tetra_target_keeps_low_bits_in_pc() {
     assert_eq!(mmix.get_pc(), 0x207);
 }
 
+/// `PUSHGOI`'s target off a tetra boundary leaves its low bits in the PC,
+/// per the Instruction Reference's GO page.
 #[test]
 fn test_pushgoi_off_tetra_target_keeps_low_bits_in_pc() {
     let mut mmix = MMix::new();
@@ -305,7 +307,7 @@ fn test_pushgoi_off_tetra_target_keeps_low_bits_in_pc() {
 }
 
 /// A `PUSHGO` fetched off a tetra boundary still sets `rJ` from its own
-/// address, not the aligned one.
+/// address, not the aligned one, per the Instruction Reference's GO page.
 #[test]
 fn test_pushgo_from_off_tetra_pc_return_address_carries_low_bits() {
     let mut mmix = MMix::new();
@@ -318,6 +320,8 @@ fn test_pushgo_from_off_tetra_pc_return_address_carries_low_bits() {
     assert_eq!(mmix.get_special(SpecialReg::RJ), 0x105);
 }
 
+/// A `PUSHGOI` fetched off a tetra boundary sets `rJ` from its own address,
+/// per the Instruction Reference's GO page.
 #[test]
 fn test_pushgoi_from_off_tetra_pc_return_address_carries_low_bits() {
     let mut mmix = MMix::new();

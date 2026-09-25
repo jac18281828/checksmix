@@ -13,7 +13,8 @@ or diagnostic. Byte access is unaffected — a byte is its own alignment. An
 instruction fetch is a tetra access too: `GO` or `PUSHGO` to an address off a
 tetra boundary runs the instruction at the aligned base, but the PC keeps the
 address's own two low bits, and `GETA`, `rJ` after `PUSHJ`/`PUSHGO`, and `rW`
-at an interrupt carry them (mmix.cs.hm.edu/doc/instructions/go.html).
+at an interrupt carry them, as the Instruction Reference's GO page states
+(<https://mmix.cs.hm.edu/doc/instructions/go.html>).
 
 Every load, store, `GO` and cache instruction that auto-selects its register
 or immediate opcode also takes a two-operand form: `LDO $X,$Y` fills Z with

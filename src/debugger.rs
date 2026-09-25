@@ -939,8 +939,7 @@ Main\tLDA\t$255,Text
 Text\tBYTE\t\"Hi\",0
 ";
 
-    /// A9's introduction: `T` is line 5 at `#10C`; the `GO` jumps past it to
-    /// `#10D`.
+    /// `T` is line 5 at `#10C`; the `GO` jumps one byte past it, to `#10D`.
     const GO_PROGRAM: &str = "\
 \tLOC\t#100
 Main\tGETA\t$1,T
@@ -1472,9 +1471,9 @@ Gap     LOC     #300
 
     /// `Loop`'s `GO` jumps from `#108` to `#109`, inside the same tetra;
     /// `run` stops at `#108` first, and `continue` fires the breakpoint
-    /// again once the PC returns to that tetra rather than looping forever.
+    /// again at `#109` rather than looping forever.
     #[test]
-    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_continue() {
+    fn breakpoint_fires_again_when_the_pc_moves_within_its_tetra_on_continue() {
         let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
         dbg.execute(Command::Break("Loop".to_string()));
         dbg.execute(Command::Run);
@@ -1487,10 +1486,10 @@ Gap     LOC     #300
         );
     }
 
-    /// `step` fires the same breakpoint `continue` does, once the PC returns
-    /// to the tetra it left.
+    /// `step` fires the same breakpoint `continue` does when the PC moves to
+    /// another byte of its tetra.
     #[test]
-    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_step() {
+    fn breakpoint_fires_again_when_the_pc_moves_within_its_tetra_on_step() {
         let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
         dbg.execute(Command::Break("Loop".to_string()));
         dbg.execute(Command::Run);
@@ -1503,10 +1502,10 @@ Gap     LOC     #300
         );
     }
 
-    /// `next` fires the same breakpoint `continue` does, once the PC returns
-    /// to the tetra it left.
+    /// `next` fires the same breakpoint `continue` does when the PC moves to
+    /// another byte of its tetra.
     #[test]
-    fn breakpoint_on_a_tetra_the_pc_leaves_and_returns_to_fires_on_next() {
+    fn breakpoint_fires_again_when_the_pc_moves_within_its_tetra_on_next() {
         let mut dbg = Debugger::load(assemble(LOOP_PROGRAM, "loop.mms"));
         dbg.execute(Command::Break("Loop".to_string()));
         dbg.execute(Command::Run);
@@ -1522,7 +1521,7 @@ Gap     LOC     #300
     /// `entry.mms` starts execution at `Main`, `#101`, off a tetra boundary.
     /// `break` keys the label on its tetra (`#100`); `run`'s reset lands on
     /// `#101` itself, whose tetra already holds the breakpoint, so the
-    /// program stops through the exact match before executing anything.
+    /// program stops through the tetra match before executing anything.
     #[test]
     fn run_stops_at_the_entry_point_even_when_its_label_is_off_the_tetra() {
         let mut dbg = Debugger::load(assemble(ENTRY_PROGRAM, "entry.mms"));

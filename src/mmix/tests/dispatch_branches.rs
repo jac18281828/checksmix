@@ -649,7 +649,7 @@ fn test_goi_at_top_of_memory_wraps_return_address() {
 
 /// A jump target off a tetra boundary leaves those low bits in the PC;
 /// `GETA` reads the aligned instruction but adds its offset to the
-/// unrounded PC.
+/// unrounded PC, per the Instruction Reference's GO page.
 #[test]
 fn test_go_off_tetra_target_keeps_low_bits_in_pc() {
     let mut mmix = MMix::new();
@@ -667,6 +667,8 @@ fn test_go_off_tetra_target_keeps_low_bits_in_pc() {
     assert_eq!(mmix.get_pc(), 0x205);
 }
 
+/// `GOI`'s target off a tetra boundary leaves its low bits in the PC, per
+/// the Instruction Reference's GO page.
 #[test]
 fn test_goi_off_tetra_target_keeps_low_bits_in_pc() {
     let mut mmix = MMix::new();
@@ -685,7 +687,7 @@ fn test_goi_off_tetra_target_keeps_low_bits_in_pc() {
 
 /// A `GO` fetched off a tetra boundary still returns from its own
 /// address: `$X` carries the fetch address's low bits, not the aligned
-/// one.
+/// one, per the Instruction Reference's GO page.
 #[test]
 fn test_go_from_off_tetra_pc_return_address_carries_low_bits() {
     let mut mmix = MMix::new();
@@ -698,6 +700,8 @@ fn test_go_from_off_tetra_pc_return_address_carries_low_bits() {
     assert_eq!(mmix.get_register(1), 0x106);
 }
 
+/// A `GOI` fetched off a tetra boundary returns from its own address, per
+/// the Instruction Reference's GO page.
 #[test]
 fn test_goi_from_off_tetra_pc_return_address_carries_low_bits() {
     let mut mmix = MMix::new();
@@ -710,7 +714,7 @@ fn test_goi_from_off_tetra_pc_return_address_carries_low_bits() {
 }
 
 /// The wrap rule and the low-bit rule compose: the return address wraps
-/// mod 2^64 from the fetch address's own low bits.
+/// mod 2^64 from the fetch address's own low bits, per the Instruction Reference's GO page.
 #[test]
 fn test_go_at_top_of_memory_off_tetra_wraps_return_address() {
     let mut mmix = MMix::new();
@@ -723,9 +727,9 @@ fn test_go_at_top_of_memory_off_tetra_wraps_return_address() {
     assert_eq!(mmix.get_register(1), 1);
 }
 
-/// End-to-end proof for the program from A9's introduction: a `GO` to an
-/// address off a tetra boundary runs the instruction at the aligned base
-/// while the PC keeps the address whole.
+/// End to end: a `GO` to an address off a tetra boundary runs the
+/// instruction at the aligned base while the PC keeps the address whole,
+/// per the Instruction Reference's GO page.
 #[test]
 fn test_go_off_tetra_target_halts_at_the_computed_pc() {
     use crate::debugger::{entry_point, write_image};
