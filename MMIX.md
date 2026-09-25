@@ -381,11 +381,22 @@ rather than spellings a program must supply itself.
 | X | `0x01` | floating | Result is inexact (rounded) |
 | Z | `0x02` | floating | A finite nonzero dividend divided by zero (`FDIV`); alone, never with O or X |
 | U | `0x04` | floating | Underflow |
-| O | `0x08` | floating | Overflow |
+| O | `0x08` | floating | Overflow: the value, rounded in rA's current mode with the exponent unbounded, exceeds the largest finite number — the largest short float for `STSF`/`STSFI`, the largest double for `FADD`/`FSUB`/`FMUL`/`FDIV`; always with X |
 | I | `0x10` | floating | A signaling NaN operand; a quiet one does not raise it. Also an invalid operation (0/0, ∞−∞, etc.), or `FIX`/`FIXU` of an infinite or NaN operand |
 | W | `0x20` | floating | `FIX`'s rounded result falls below `−2^63` or above `2^63 − 1`; `FIXU` never raises it |
 | V | `0x40` | integer | Integer overflow — `ADD`, `SUB`, `MUL`, `NEG`, `DIV` of `#8000000000000000` by −1, `SL`, and the signed stores `STB`/`STW`/`STT` |
 | D | `0x80` | integer | Divide check — signed division by zero |
+
+On overflow the delivered result depends on rA's mode: ROUND_NEAR gives
+±∞; ROUND_OFF gives ±the format's largest finite value; ROUND_UP gives +∞
+for a positive result and −the largest finite value for a negative one;
+ROUND_DOWN mirrors it, +the largest finite value and −∞. O follows the
+value rounded in rA's mode with the exponent unbounded: rounding to
+exactly the largest finite value is not itself overflow — ROUND_OFF of the
+largest double plus half its ulp rounds, exponent unbounded, back down to
+exactly that value and raises X alone, not O — but rounding, exponent
+unbounded, past that value does raise O, even where the ordinary
+(exponent-bounded) round-to-nearest result was itself still finite.
 
 There is no denormalized-operand event: a subnormal operand raises nothing.
 A rounded result below the normal range raises `U` only when the exact

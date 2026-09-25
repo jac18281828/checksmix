@@ -1683,10 +1683,10 @@ fn test_flotu_max_raises_x() {
 }
 
 #[test]
-fn test_sflotu_inexact_wide_step_raises_x() {
+fn test_sflotu_wide_integer_rounds_once_to_short_precision() {
     let mut mmix = MMix::new();
-    // 2^53+1 rounds to 2^53 on the way to f64; 2^53 then narrows to f32
-    // exactly, so only the integer-to-f64 step can raise X here.
+    // 2^53+1 needs 54 significant bits; rounded once, straight to short
+    // precision's 24, it drops to 2^53 and raises X for the lost bit.
     mmix.set_register(3, (1u64 << 53) + 1);
     mmix.write_tetra(0, 0x0E010003); // SFLOTU $1,$0,$3
     assert!(mmix.execute_instruction());
@@ -2404,4 +2404,442 @@ fn test_fix_with_illegal_round_mode_exits_1() {
     assert_eq!(mmix.get_exit_code(), 1);
     assert_eq!(handle.diagnostics().len(), 1);
     assert!(handle.diagnostics()[0].contains("FIX"));
+}
+
+// ============= SFLOT/SFLOTU round once; FREM is exact; O follows =============
+// ============= the exponent-unbounded rounded value =============
+//
+// Each row below (S/F/T/B/Z, numbered) pins one instruction, operand set
+// and mode against the contract table's specified result and flags.
+
+/// Collects mismatches across a shared test's rows so the test names every
+/// failing row at once instead of stopping at the first.
+#[derive(Default)]
+struct RowChecks(Vec<String>);
+
+impl RowChecks {
+    fn check(&mut self, row: &str, field: &str, actual: u64, expected: u64) {
+        if actual != expected {
+            self.0.push(format!(
+                "row {row} {field}: expected {expected:#018x}, got {actual:#018x}"
+            ));
+        }
+    }
+
+    fn check_tetra(&mut self, row: &str, field: &str, actual: u32, expected: u32) {
+        if actual != expected {
+            self.0.push(format!(
+                "row {row} {field}: expected {expected:#010x}, got {actual:#010x}"
+            ));
+        }
+    }
+
+    fn finish(self) {
+        assert!(self.0.is_empty(), "\n{}", self.0.join("\n"));
+    }
+}
+
+/// `SFLOT`/`SFLOTU` register form: `$Z` is `z_bits`, `Y` the mode override.
+/// Returns `(result_bits, rA_after)`.
+fn run_sflot_reg(opcode: u8, y: u8, z_bits: u64, ra_in: u64) -> (u64, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    mmix.set_register(3, z_bits);
+    let tetra = ((opcode as u32) << 24) | (1u32 << 16) | ((y as u32) << 8) | 3;
+    mmix.write_tetra(0, tetra);
+    assert!(mmix.execute_instruction());
+    (mmix.get_register(1), mmix.get_special(SpecialReg::RA))
+}
+
+/// `SFLOTI`/`SFLOTUI` immediate form: `Z` is the literal byte.
+fn run_sflot_imm(opcode: u8, y: u8, z: u8, ra_in: u64) -> (u64, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    let tetra = ((opcode as u32) << 24) | (1u32 << 16) | ((y as u32) << 8) | (z as u32);
+    mmix.write_tetra(0, tetra);
+    assert!(mmix.execute_instruction());
+    (mmix.get_register(1), mmix.get_special(SpecialReg::RA))
+}
+
+/// `FREM $1,$2,$3`.
+fn run_frem(y_bits: u64, z_bits: u64, ra_in: u64) -> (u64, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    mmix.set_register(2, y_bits);
+    mmix.set_register(3, z_bits);
+    mmix.write_tetra(0, 0x16010203);
+    assert!(mmix.execute_instruction());
+    (mmix.get_register(1), mmix.get_special(SpecialReg::RA))
+}
+
+/// `STSF $1,$2,$3`, base `$2 = 0x100`, offset `$3 = 0`.
+fn run_stsf(x_bits: u64, ra_in: u64) -> (u32, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    mmix.set_register(1, x_bits);
+    mmix.set_register(2, 0x100);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0, 0xB0010203);
+    assert!(mmix.execute_instruction());
+    (mmix.read_tetra(0x100), mmix.get_special(SpecialReg::RA))
+}
+
+/// `STSFI $1,$2,0`, base `$2 = 0x100`.
+fn run_stsfi(x_bits: u64, ra_in: u64) -> (u32, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    mmix.set_register(1, x_bits);
+    mmix.set_register(2, 0x100);
+    mmix.write_tetra(0, 0xB1010200);
+    assert!(mmix.execute_instruction());
+    (mmix.read_tetra(0x100), mmix.get_special(SpecialReg::RA))
+}
+
+/// `FADD`/`FSUB`/`FMUL`/`FDIV $1,$2,$3`.
+fn run_binop(opcode: u8, y_bits: u64, z_bits: u64, ra_in: u64) -> (u64, u64) {
+    let mut mmix = MMix::new();
+    mmix.set_special(SpecialReg::RA, ra_in);
+    mmix.set_register(2, y_bits);
+    mmix.set_register(3, z_bits);
+    let tetra = ((opcode as u32) << 24) | (1u32 << 16) | (2u32 << 8) | 3;
+    mmix.write_tetra(0, tetra);
+    assert!(mmix.execute_instruction());
+    (mmix.get_register(1), mmix.get_special(SpecialReg::RA))
+}
+
+// ---- SFLOT family: one rounding, straight to short precision ----
+
+#[test]
+fn test_sflot_rounds_the_integer_once() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x1000001000000001, 0x0);
+    c.check("S1", "result", r, 0x43B0000020000000);
+    c.check("S1", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x1000002FFFFFFFFF, 0x0);
+    c.check("S2", "result", r, 0x43B0000020000000);
+    c.check("S2", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0C, 2, 0x1000000000000001, 0x0);
+    c.check("S3", "result", r, 0x43B0000020000000);
+    c.check("S3", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x1000000000000001, 0x20000);
+    c.check("S4", "result", r, 0x43B0000020000000);
+    c.check("S4", "rA", ra, 0x20001);
+    let (r, ra) = run_sflot_reg(0x0C, 1, 0x1000001FFFFFFFFF, 0x0);
+    c.check("S5", "result", r, 0x43B0000000000000);
+    c.check("S5", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0C, 3, 0xEFFFFFFFFFFFFFFF, 0x0);
+    c.check("S6", "result", r, 0xC3B0000020000000);
+    c.check("S6", "rA", ra, 0x1);
+    c.finish();
+}
+
+#[test]
+fn test_sflotu_rounds_the_integer_once() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_sflot_reg(0x0E, 0, 0x8000008000000001, 0x0);
+    c.check("S7", "result", r, 0x43E0000020000000);
+    c.check("S7", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0E, 3, 0xFFFFFFFFFFFFFFFF, 0x0);
+    c.check("S8", "result", r, 0x43EFFFFFE0000000);
+    c.check("S8", "rA", ra, 0x1);
+    c.finish();
+}
+
+#[test]
+fn test_sflot_stays_correct_where_double_rounding_would_not_differ() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_sflot_reg(0x0C, 2, 0xEFFFFFFFFFFFFFFF, 0x0);
+    c.check("S9", "result", r, 0xC3B0000000000000);
+    c.check("S9", "rA", ra, 0x1);
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x8000000000000000, 0x0);
+    c.check("S11", "result", r, 0xC3E0000000000000);
+    c.check("S11", "rA", ra, 0x0);
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x1000002000000000, 0x0);
+    c.check("S12", "result", r, 0x43B0000020000000);
+    c.check("S12", "rA", ra, 0x0);
+    let (r, ra) = run_sflot_reg(0x0C, 0, 0x0000000001000001, 0x0);
+    c.check("S13", "result", r, 0x4170000000000000);
+    c.check("S13", "rA", ra, 0x1);
+    c.finish();
+}
+
+#[test]
+fn test_sflotu_max_rounds_up_to_two_pow_64() {
+    let (r, ra) = run_sflot_reg(0x0E, 0, 0xFFFFFFFFFFFFFFFF, 0x0);
+    assert_eq!(r, 0x43F0000000000000, "row S10 result");
+    assert_eq!(ra, 0x1, "row S10 rA");
+}
+
+#[test]
+fn test_sflotui_immediate_is_always_exact() {
+    // Row S14: an immediate byte needs at most 8 significant bits, well
+    // under the 24 the single rounding step allows, so it never rounds.
+    let (r, ra) = run_sflot_imm(0x0F, 0, 255, 0x20000);
+    assert_eq!(r, 0x406FE00000000000, "row S14 result");
+    assert_eq!(ra, 0x20000, "row S14 rA");
+}
+
+#[test]
+fn test_sfloti_immediate_is_always_exact() {
+    // Row S15: same guarantee as S14, signed immediate.
+    let (r, ra) = run_sflot_imm(0x0D, 0, 200, 0x20000);
+    assert_eq!(r, 0x4069000000000000, "row S15 result");
+    assert_eq!(ra, 0x20000, "row S15 rA");
+}
+
+// ---- FREM: the exact IEEE remainder ----
+
+#[test]
+fn test_frem_is_exact() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_frem(0x43B0000000000000, 0x4008000000000000, 0x0);
+    c.check("F1", "result", r, 0x3FF0000000000000);
+    c.check("F1", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0xC3B0000000000000, 0x4008000000000000, 0x0);
+    c.check("F2", "result", r, 0xBFF0000000000000);
+    c.check("F2", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x43B0000000000000, 0xC008000000000000, 0x0);
+    c.check("F3", "result", r, 0x3FF0000000000000);
+    c.check("F3", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x7FEFFFFFFFFFFFFF, 0x4008000000000000, 0x0);
+    c.check("F4", "result", r, 0xBFF0000000000000);
+    c.check("F4", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x7FEFFFFFFFFFFFFF, 0x0000000000000003, 0x0);
+    c.check("F5", "result", r, 0x8000000000000001);
+    c.check("F5", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x7FEFFFFFFFFFFFFF, 0x0000000000000001, 0x0);
+    c.check("F6", "result", r, 0x0000000000000000);
+    c.check("F6", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0xFFEFFFFFFFFFFFFF, 0x0000000000000001, 0x0);
+    c.check("F7", "result", r, 0x8000000000000000);
+    c.check("F7", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x401E4B06CFABE967, 0x3FF18072E8F9C859, 0x0);
+    c.check("F8", "result", r, 0xBFB57092024D4D30);
+    c.check("F8", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x41FC2CE6F4E623B1, 0x3FF414C3423C5FD7, 0x0);
+    c.check("F9", "result", r, 0x3FDC758743355304);
+    c.check("F9", "rA", ra, 0x0);
+    c.finish();
+}
+
+#[test]
+fn test_frem_stays_exact_regardless_of_mode() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_frem(0x401E000000000000, 0x4014000000000000, 0x0);
+    c.check("F10", "result", r, 0xC004000000000000);
+    c.check("F10", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x0000000000000005, 0x0000000000000002, 0x0);
+    c.check("F11", "result", r, 0x0000000000000001);
+    c.check("F11", "rA", ra, 0x0);
+    let (r, ra) = run_frem(0x4008000000000000, 0x3FF8000000000000, 0x30000);
+    c.check("F12", "result", r, 0x0000000000000000);
+    c.check("F12", "rA", ra, 0x30000);
+    c.finish();
+}
+
+// ---- STSF/STSFI: O follows the rounded result, not the clamp ----
+
+#[test]
+fn test_stsf_overflow_raises_o() {
+    let mut c = RowChecks::default();
+    let (bits, ra) = run_stsf(0x7E37000000000000, 0x10000);
+    c.check_tetra("T1", "stores", bits, 0x7F7FFFFF);
+    c.check("T1", "rA", ra, 0x10009);
+    let (bits, ra) = run_stsf(0x7E37000000000000, 0x30000);
+    c.check_tetra("T2", "stores", bits, 0x7F7FFFFF);
+    c.check("T2", "rA", ra, 0x30009);
+    let (bits, ra) = run_stsf(0xFE37000000000000, 0x10000);
+    c.check_tetra("T3", "stores", bits, 0xFF7FFFFF);
+    c.check("T3", "rA", ra, 0x10009);
+    let (bits, ra) = run_stsf(0xFE37000000000000, 0x20000);
+    c.check_tetra("T4", "stores", bits, 0xFF7FFFFF);
+    c.check("T4", "rA", ra, 0x20009);
+    let (bits, ra) = run_stsf(0x47F0000000000000, 0x10000);
+    c.check_tetra("T5", "stores", bits, 0x7F7FFFFF);
+    c.check("T5", "rA", ra, 0x10009);
+    c.finish();
+}
+
+#[test]
+fn test_stsfi_overflow_raises_o() {
+    let (bits, ra) = run_stsfi(0x7E37000000000000, 0x10000);
+    assert_eq!(bits, 0x7F7FFFFF, "row T6 stores");
+    assert_eq!(ra, 0x10009, "row T6 rA");
+}
+
+#[test]
+fn test_stsf_exact_overflow_to_infinity_raises_o() {
+    let mut c = RowChecks::default();
+    let (bits, ra) = run_stsf(0x7E37000000000000, 0x0);
+    c.check_tetra("T7", "stores", bits, 0x7F800000);
+    c.check("T7", "rA", ra, 0x9);
+    let (bits, ra) = run_stsf(0x7E37000000000000, 0x20000);
+    c.check_tetra("T8", "stores", bits, 0x7F800000);
+    c.check("T8", "rA", ra, 0x20009);
+    let (bits, ra) = run_stsf(0xFE37000000000000, 0x30000);
+    c.check_tetra("T9", "stores", bits, 0xFF800000);
+    c.check("T9", "rA", ra, 0x30009);
+    c.finish();
+}
+
+#[test]
+fn test_stsf_near_max_boundary_follows_exponent_unbounded_rounding() {
+    let mut c = RowChecks::default();
+    let (bits, ra) = run_stsf(0x47EFFFFFF0000000, 0x10000);
+    c.check_tetra("T10", "stores", bits, 0x7F7FFFFF);
+    c.check("T10", "rA", ra, 0x10001);
+    let (bits, ra) = run_stsf(0x47EFFFFFF0000000, 0x30000);
+    c.check_tetra("T11", "stores", bits, 0x7F7FFFFF);
+    c.check("T11", "rA", ra, 0x30001);
+    let (bits, ra) = run_stsf(0x47EFFFFFF0000000, 0x0);
+    c.check_tetra("T12", "stores", bits, 0x7F800000);
+    c.check("T12", "rA", ra, 0x9);
+    let (bits, ra) = run_stsf(0x47EFFFFFE0000000, 0x20000);
+    c.check_tetra("T13", "stores", bits, 0x7F7FFFFF);
+    c.check("T13", "rA", ra, 0x20000);
+    let (bits, ra) = run_stsf(0x47EFFFFFE0000001, 0x20000);
+    c.check_tetra("T14", "stores", bits, 0x7F800000);
+    c.check("T14", "rA", ra, 0x20009);
+    let (bits, ra) = run_stsf(0x7FF0000000000000, 0x10000);
+    c.check_tetra("T15", "stores", bits, 0x7F800000);
+    c.check("T15", "rA", ra, 0x10000);
+    c.finish();
+}
+
+// ---- FADD/FSUB/FMUL/FDIV: O follows the rounded result at double precision ----
+
+#[test]
+fn test_fadd_overflow_follows_rounded_result() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7C90000000000000, 0x10000);
+    c.check("B1", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B1", "rA", ra, 0x10001);
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7C90000000000000, 0x30000);
+    c.check("B2", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B2", "rA", ra, 0x30001);
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7C80000000000000, 0x20000);
+    c.check("B4", "result", r, 0x7FF0000000000000);
+    c.check("B4", "rA", ra, 0x20009);
+    let (r, ra) = run_binop(0x04, 0xFFEFFFFFFFFFFFFF, 0xFC80000000000000, 0x30000);
+    c.check("B6", "result", r, 0xFFF0000000000000);
+    c.check("B6", "rA", ra, 0x30009);
+    c.finish();
+}
+
+#[test]
+fn test_fsub_overflow_follows_rounded_result() {
+    let (r, ra) = run_binop(0x06, 0x7FEFFFFFFFFFFFFF, 0xFC80000000000000, 0x20000);
+    assert_eq!(r, 0x7FF0000000000000, "row B5 result");
+    assert_eq!(ra, 0x20009, "row B5 rA");
+}
+
+#[test]
+fn test_fmul_overflow_follows_rounded_result() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x10, 0x7FEFFFFFFFFFFFFE, 0x3FF0000000000001, 0x10000);
+    c.check("B3", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B3", "rA", ra, 0x10001);
+    let (r, ra) = run_binop(0x10, 0x7FE8000000000001, 0x3FF5555555555554, 0x20000);
+    c.check("B12", "result", r, 0x7FF0000000000000);
+    c.check("B12", "rA", ra, 0x20009);
+    c.finish();
+}
+
+// `f64::MAX + ulp(f64::MAX)` and `2^1023 * 2.0` both land exactly on
+// `2^1024`, the first value beyond `f64::MAX` — the tie
+// `magnitude_sum_exceeds`/`fmul_exceeds_thresholds` must resolve as
+// "exceeds", not the boundary's more common "does not" default. Under
+// ROUND_OFF the delivered value still clamps to `f64::MAX`, but O must
+// fire: the exact product/sum needs a wider exponent than the format
+// allows, which ROUND_OFF's own truncation cannot undo.
+
+#[test]
+fn test_fadd_round_off_exact_next_binade_boundary_raises_o() {
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7CA0000000000000, 0x10000);
+    assert_eq!(r, 0x7FEFFFFFFFFFFFFF, "result");
+    assert_eq!(ra, 0x10009, "rA");
+}
+
+#[test]
+fn test_fmul_round_off_exact_next_binade_boundary_raises_o() {
+    let (r, ra) = run_binop(0x10, 0x7FE0000000000000, 0x4000000000000000, 0x10000);
+    assert_eq!(r, 0x7FEFFFFFFFFFFFFF, "result");
+    assert_eq!(ra, 0x10009, "rA");
+}
+
+/// The exact opposite boundary: a true result that lands exactly on
+/// `f64::MAX` itself, under ROUND_UP (`exceeds_max`'s own threshold,
+/// same-direction for a positive result). `exceeds_max` must resolve as
+/// "does not exceed" here — the more common case at this boundary, but
+/// the one `magnitude_sum_exceeds`'s `smaller > gap`, and
+/// `fmul_exceeds_thresholds`'s two `> 0` residual checks, could each get
+/// backwards by one comparison operator without any other test noticing.
+#[test]
+fn test_exact_max_boundary_under_round_up_does_not_raise_o() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x0000000000000000, 0x20000);
+    c.check("MAX+0", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("MAX+0", "rA", ra, 0x20000);
+    let (r, ra) = run_binop(0x10, 0x7FEFFFFFFFFFFFFF, 0x3FF0000000000000, 0x20000);
+    c.check("MAX*1", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("MAX*1", "rA", ra, 0x20000);
+    let (r, ra) = run_binop(0x14, 0x7FEFFFFFFFFFFFFF, 0x3FF0000000000000, 0x20000);
+    c.check("MAX/1", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("MAX/1", "rA", ra, 0x20000);
+    // `2^1023 + (2^1023 - 2^971)` sums to exactly `f64::MAX` through the
+    // addition path `fmul`/`fdiv` above don't exercise.
+    let (r, ra) = run_binop(0x04, 0x7FE0000000000000, 0x7FDFFFFFFFFFFFFE, 0x20000);
+    c.check("2^1023+rest", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("2^1023+rest", "rA", ra, 0x20000);
+    c.finish();
+}
+
+#[test]
+fn test_fadd_ties_and_directed_overflow_raise_o() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7C90000000000000, 0x0);
+    c.check("B7", "result", r, 0x7FF0000000000000);
+    c.check("B7", "rA", ra, 0x9);
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7FEFFFFFFFFFFFFF, 0x10000);
+    c.check("B10", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B10", "rA", ra, 0x10009);
+    c.finish();
+}
+
+/// B8: a quarter-ulp excess rounds back down under ROUND_NEAR — the
+/// round-to-nearest result itself never overflowed, so O never applies.
+/// B13: an already-infinite operand — `finalize_fp_binop` gates the whole
+/// O test on both operands being finite, so this never reaches it.
+#[test]
+fn test_fadd_stays_finite_or_already_infinite_without_raising_o() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x04, 0x7FEFFFFFFFFFFFFF, 0x7C80000000000000, 0x0);
+    c.check("B8", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B8", "rA", ra, 0x1);
+    let (r, ra) = run_binop(0x04, 0x7FF0000000000000, 0x3FF0000000000000, 0x10000);
+    c.check("B13", "result", r, 0x7FF0000000000000);
+    c.check("B13", "rA", ra, 0x10000);
+    c.finish();
+}
+
+#[test]
+fn test_fmul_near_overflow_raises_o() {
+    let (r, ra) = run_binop(0x10, 0x7FEFFFFFFFFFFFFE, 0x3FF0000000000001, 0x0);
+    assert_eq!(r, 0x7FF0000000000000, "row B9 result");
+    assert_eq!(ra, 0x9, "row B9 rA");
+}
+
+#[test]
+fn test_fdiv_overflow_raises_o_and_zero_divisor_raises_z_alone() {
+    let mut c = RowChecks::default();
+    let (r, ra) = run_binop(0x14, 0x7FEFFFFFFFFFFFFF, 0x3FEFFFFFFFFFFFFF, 0x10000);
+    c.check("B11", "result", r, 0x7FEFFFFFFFFFFFFF);
+    c.check("B11", "rA", ra, 0x10009);
+    let (r, ra) = run_binop(0x14, 0x3FF0000000000000, 0x0000000000000000, 0x20000);
+    c.check("Z1", "result", r, 0x7FF0000000000000);
+    c.check("Z1", "rA", ra, 0x20002);
+    let (r, ra) = run_binop(0x14, 0xBFF0000000000000, 0x0000000000000000, 0x30000);
+    c.check("Z2", "result", r, 0xFFF0000000000000);
+    c.check("Z2", "rA", ra, 0x30002);
+    c.finish();
 }

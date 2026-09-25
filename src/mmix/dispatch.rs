@@ -1,5 +1,6 @@
 //! Instruction dispatch: `execute_instruction`, the opcode `match`, and the small branch/conditional-set helpers it shares with no one else.
 
+use super::float::FpOp;
 use super::{MMix, PopFrame, RA_D, RA_I, RA_V, RA_W, RA_X, RA_Z, SpecialReg, TrapCode};
 use tracing::{debug, instrument};
 
@@ -319,7 +320,8 @@ impl MMix {
                 i2f_conv_ri!(self, op_byte, x, y, z, "FLOTUI")
             }
             Opcode::SFLOT => {
-                // SFLOT $X, Y, $Z - Convert signed integer to f32 (in f64 register)
+                // SFLOT $X, Y, $Z - convert a signed integer straight to
+                // short precision (in an f64 register), one rounding.
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOT", y),
@@ -328,14 +330,13 @@ impl MMix {
                 let y_val = y as u64;
                 let z_val = self.get_register(z);
                 let v = z_val as i64;
-                let flags = Self::int_to_f64_inexact(v.unsigned_abs());
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
-                self.set_register(x, Self::f64_to_u64(narrowed));
-                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
+                let (result, flags) = Self::int_to_f32_rounded(v < 0, v.unsigned_abs(), mode);
+                self.set_register(x, Self::f64_to_u64(result));
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SFLOTI => {
                 // SFLOTI $X, Y, Z - Z is an unsigned byte, like every
-                // immediate operand.
+                // immediate operand, so always exact.
                 let mode = match self.resolved_round_mode(y) {
                     Ok(m) => m,
                     Err(()) => return self.illegal_round_mode("SFLOTI", y),
@@ -344,10 +345,9 @@ impl MMix {
                 // neither a register.
                 let y_val = y as u64;
                 let z_val = z as u64;
-                let flags = Self::int_to_f64_inexact(z_val);
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z_val as f64, mode);
-                self.set_register(x, Self::f64_to_u64(narrowed));
-                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
+                let (result, flags) = Self::int_to_f32_rounded(false, z_val, mode);
+                self.set_register(x, Self::f64_to_u64(result));
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::SFLOTU => {
                 let mode = match self.resolved_round_mode(y) {
@@ -357,10 +357,9 @@ impl MMix {
                 // Y is the rounding-mode field, not a register operand.
                 let y_val = y as u64;
                 let v = self.get_register(z);
-                let flags = Self::int_to_f64_inexact(v);
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(v as f64, mode);
-                self.set_register(x, Self::f64_to_u64(narrowed));
-                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, v)
+                let (result, flags) = Self::int_to_f32_rounded(false, v, mode);
+                self.set_register(x, Self::f64_to_u64(result));
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, v)
             }
             Opcode::SFLOTUI => {
                 let mode = match self.resolved_round_mode(y) {
@@ -371,10 +370,9 @@ impl MMix {
                 // neither a register.
                 let y_val = y as u64;
                 let z_val = z as u64;
-                let flags = Self::int_to_f64_inexact(z as u64);
-                let (narrowed, narrow_flags) = self.f64_to_f32_rounded(z as f64, mode);
-                self.set_register(x, Self::f64_to_u64(narrowed));
-                self.raise_exceptions(flags | narrow_flags, op_byte, x, y, z, y_val, z_val)
+                let (result, flags) = Self::int_to_f32_rounded(false, z_val, mode);
+                self.set_register(x, Self::f64_to_u64(result));
+                self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
             Opcode::FMUL => {
                 let y_val = self.get_register(y);
@@ -389,7 +387,7 @@ impl MMix {
                 let err = Self::fmul_error_sign(a, b, r_near);
                 // A product of nonzero finite operands is never
                 // mathematically zero.
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, false);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, FpOp::Mul);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }
@@ -486,7 +484,7 @@ impl MMix {
                 };
                 // A quotient of nonzero finite operands is never mathematically
                 // zero, so a zero result from such operands underflowed.
-                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, false);
+                let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, false, FpOp::Div);
                 self.set_register(x, Self::f64_to_u64(r));
                 self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
             }

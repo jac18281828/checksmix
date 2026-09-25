@@ -1,6 +1,39 @@
 //! IEEE 754 float<->fix conversions, rounding modes, and the shared flag/epsilon helpers behind the FP opcodes.
 
 use super::{MMix, RA_I, RA_O, RA_ROUND_SHIFT, RA_U, RA_X, SpecialReg};
+use std::cmp::Ordering;
+
+/// Where an exact value's magnitude sits relative to a target format's
+/// largest finite number: `exceeds_max` is whether it exceeds that at
+/// all, `exceeds_next` whether it clears a full ulp beyond it. What each
+/// `*_exceeds_thresholds` helper computes, and `overflow_raises_o`'s
+/// directed-mode input.
+#[derive(Clone, Copy)]
+pub(super) struct OverflowExtent {
+    exceeds_max: bool,
+    exceeds_next: bool,
+}
+
+/// Which binary FP op `finalize_fp_binop` is closing out: selects
+/// `FADD`/`FSUB`'s ROUND_DOWN zero-sign rule, and — lazily, only once
+/// `finalize_fp_binop` actually needs one — the op's own exact
+/// overflow-extent test.
+#[derive(Clone, Copy)]
+pub(super) enum FpOp {
+    Add,
+    Mul,
+    Div,
+}
+
+impl FpOp {
+    fn exceeds_thresholds(self, a: f64, b: f64) -> OverflowExtent {
+        match self {
+            FpOp::Add => MMix::fadd_exceeds_thresholds(a, b),
+            FpOp::Mul => MMix::fmul_exceeds_thresholds(a, b),
+            FpOp::Div => MMix::fdiv_exceeds_thresholds(a, b),
+        }
+    }
+}
 
 impl MMix {
     /// Convert u64 to f64 (reinterpret bits)
@@ -268,6 +301,107 @@ impl MMix {
         }
     }
 
+    /// The overflow rule's O test, every mode. ROUND_NEAR fires exactly
+    /// when the round-to-nearest result itself overflowed
+    /// (`near_overflowed`) — hardware's own halfulp threshold is already
+    /// the right one, and `extent` goes uncalled. A directed mode (1–3)
+    /// needs `extent` instead: ROUND_UP for a positive value (or
+    /// ROUND_DOWN for a negative one) points away from zero, so any
+    /// excess at all overflows; every other combination rounds back to
+    /// the format's own maximum unless the excess reaches a full ulp.
+    #[inline]
+    fn overflow_raises_o(
+        mode: u64,
+        negative: bool,
+        near_overflowed: bool,
+        extent: impl FnOnce() -> OverflowExtent,
+    ) -> bool {
+        if mode == 0 {
+            return near_overflowed;
+        }
+        let same_direction = matches!((mode & 0x3, negative), (2, false) | (3, true));
+        let extent = extent();
+        if same_direction {
+            extent.exceeds_max
+        } else {
+            extent.exceeds_next
+        }
+    }
+
+    /// Whether O belongs in the result flags under `overflow_raises_o`'s
+    /// rule, once `finite` — the tail both `finalize_fp_binop` and
+    /// `f64_to_f32_rounded` share. `finite` is `operands_finite` for the
+    /// former, `value.is_finite()` for the latter. `extent` runs at most
+    /// once, and only when `finite` and a directed mode both need it.
+    #[inline]
+    fn raise_o_if_overflowed(
+        finite: bool,
+        mode: u64,
+        negative: bool,
+        near_overflowed: bool,
+        extent: impl FnOnce() -> OverflowExtent,
+    ) -> bool {
+        finite && Self::overflow_raises_o(mode, negative, near_overflowed, extent)
+    }
+
+    /// Exact overflow extent for summing two nonnegative magnitudes
+    /// against `threshold` (the format's largest finite number) and
+    /// `threshold + threshold_ulp` (the first value beyond it). `bigger
+    /// >= smaller` — the caller orders them.
+    ///
+    /// Sums below half of `threshold` can never reach it, so `bigger`
+    /// being at least that much is the only case needing arithmetic;
+    /// there, `threshold - bigger` is exact by Sterbenz's lemma (`bigger`
+    /// is between half of `threshold` and `threshold` itself), and
+    /// comparing `smaller` against that gap — and against the gap plus
+    /// one ulp, via `two_sum` for the second comparison's own exactness —
+    /// decides both thresholds without ever forming `bigger + smaller`
+    /// itself, which is exactly the addition that can overflow.
+    #[inline]
+    fn magnitude_sum_exceeds(
+        bigger: f64,
+        smaller: f64,
+        threshold: f64,
+        threshold_ulp: f64,
+    ) -> OverflowExtent {
+        if bigger < threshold / 2.0 {
+            return OverflowExtent {
+                exceeds_max: false,
+                exceeds_next: false,
+            };
+        }
+        let gap = threshold - bigger;
+        let exceeds_max = smaller > gap;
+        let (next_gap, next_gap_err) = Self::two_sum(gap, threshold_ulp);
+        let exceeds_next = smaller > next_gap || (smaller == next_gap && next_gap_err <= 0.0);
+        OverflowExtent {
+            exceeds_max,
+            exceeds_next,
+        }
+    }
+
+    /// Exact overflow extent for `a + b` against `f64::MAX` and the
+    /// first value beyond it, `FADD`/`FSUB`'s overflow-rule test.
+    /// Opposite-signed operands can never exceed `f64::MAX` — each is
+    /// already within it — so only same-signed operands need
+    /// `magnitude_sum_exceeds`.
+    #[inline]
+    fn fadd_exceeds_thresholds(a: f64, b: f64) -> OverflowExtent {
+        if a.is_sign_negative() != b.is_sign_negative() {
+            return OverflowExtent {
+                exceeds_max: false,
+                exceeds_next: false,
+            };
+        }
+        let (bigger, smaller) = if a.abs() >= b.abs() {
+            (a.abs(), b.abs())
+        } else {
+            (b.abs(), a.abs())
+        };
+        let max_ulp = f64::MAX - f64::MAX.next_down();
+        Self::magnitude_sum_exceeds(bigger, smaller, f64::MAX, max_ulp)
+    }
+
     /// Signed zero for an exact `FADD`/`FSUB` result under ROUND_DOWN:
     /// `-0`, except `(+0) + (+0) = +0`. Callers apply this only in
     /// ROUND_DOWN — every other mode already gets the right sign from the
@@ -303,7 +437,7 @@ impl MMix {
         let (_, err) = Self::two_sum(a, b);
         // `two_sum` is exact for finite operands, so a zero sum with a
         // zero residual is exact cancellation, not an underflow.
-        let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0, true);
+        let (r, flags) = self.finalize_fp_binop(a, b, r_near, err, err == 0.0, FpOp::Add);
         self.set_register(x, Self::f64_to_u64(r));
         self.raise_exceptions(flags, op_byte, x, y, z, y_val, z_val)
     }
@@ -319,8 +453,15 @@ impl MMix {
     /// result was too small to represent, so a true result of exactly zero is
     /// never an underflow. Only the caller knows which its zero was.
     ///
-    /// `additive` selects `FADD`/`FSUB`'s ROUND_DOWN zero-sign rule; `FMUL`
-    /// and `FDIV` pass `false` and keep the ordinary sign-of-product zero.
+    /// `op` identifies the caller: it selects `FADD`/`FSUB`'s ROUND_DOWN
+    /// zero-sign rule (`FMUL`/`FDIV` keep the ordinary sign-of-product
+    /// zero), and computes the exact overflow-rule test
+    /// (`overflow_raises_o`'s directed-mode input) from the operation's
+    /// own exact arithmetic rather than from `r_near`/`err` — those lose
+    /// the precision the rule needs once `r_near` itself has overflowed.
+    /// That test runs at most once, and only for a directed mode with
+    /// finite operands; ROUND_NEAR needs neither, its own threshold
+    /// being exactly what `r_near.is_infinite()` already answers.
     pub(super) fn finalize_fp_binop(
         &self,
         a: f64,
@@ -328,13 +469,13 @@ impl MMix {
         r_near: f64,
         err: f64,
         true_result_is_zero: bool,
-        additive: bool,
+        op: FpOp,
     ) -> (f64, u64) {
         let mode = (self.get_special(SpecialReg::RA) >> RA_ROUND_SHIFT) & 0x3;
         let operands_finite = a.is_finite() && b.is_finite();
         let mut flags = 0u64;
         let result = if r_near.is_infinite() && operands_finite {
-            flags |= RA_O | RA_X;
+            flags |= RA_X;
             Self::clamp_overflow_for_mode(r_near, mode)
         } else if r_near.is_finite() {
             // A non-finite operand yields an exact result — ±0 or ±inf —
@@ -345,7 +486,7 @@ impl MMix {
                 flags |= RA_X;
             }
             let rounded = Self::apply_directed_rounding(r_near, err, mode);
-            if additive && rounded == 0.0 && mode & 0x3 == 3 {
+            if matches!(op, FpOp::Add) && rounded == 0.0 && mode & 0x3 == 3 {
                 Self::round_down_zero(a, b)
             } else {
                 rounded
@@ -353,6 +494,15 @@ impl MMix {
         } else {
             r_near
         };
+        if Self::raise_o_if_overflowed(
+            operands_finite,
+            mode,
+            r_near.is_sign_negative(),
+            r_near.is_infinite(),
+            || op.exceeds_thresholds(a, b),
+        ) {
+            flags |= RA_O;
+        }
         if operands_finite
             && a != 0.0
             && b != 0.0
@@ -389,13 +539,13 @@ impl MMix {
         (result, flags)
     }
 
-    /// IEEE 754 floating-point remainder: `r = a − round-half-to-even(a/b) · b`.
-    /// Rust's `%` operator is truncated remainder; this is the rounded remainder
-    /// required by the MMIX FREM spec.
+    /// IEEE 754 floating-point remainder: `r = a − round-half-to-even(a/b) · b`,
+    /// decided from the operands' exact bits rather than a host `a / b`
+    /// division, whose quotient can already have lost the bits the
+    /// remainder needs. Always exactly representable for finite `a` and
+    /// nonzero finite `b`, whatever the exponent gap, and raises nothing.
     ///
-    /// A zero remainder takes the sign of the dividend, per IEEE 754. The
-    /// subtraction cannot produce it: `x - x` is `+0.0` under every rounding
-    /// mode but ROUND_DOWN.
+    /// A zero remainder takes the sign of the dividend, per IEEE 754.
     #[inline]
     pub(super) fn ieee_remainder(a: f64, b: f64) -> f64 {
         if a.is_nan() || b.is_nan() || a.is_infinite() || b == 0.0 {
@@ -404,9 +554,90 @@ impl MMix {
         if b.is_infinite() {
             return a;
         }
-        let n = (a / b).round_ties_even();
-        let r = a - n * b;
-        if r == 0.0 { 0.0f64.copysign(a) } else { r }
+        let (negative_a, ma, ea) = Self::dyadic(a);
+        let (_, mb, eb) = Self::dyadic(b);
+        if ma == 0 {
+            return Self::dyadic_to_f64(negative_a, 0, 0);
+        }
+        let (units, sign_flip, scale_exp) = Self::remainder_units(ma, ea, mb, eb);
+        Self::dyadic_to_f64(negative_a ^ sign_flip, units, scale_exp)
+    }
+
+    /// The remainder's magnitude and its sign relative to `a`'s, decided
+    /// exactly from both operands' dyadic forms (`ma`/`ea`, `mb`/`eb`,
+    /// each already known nonzero). Returns `(units, sign_flip,
+    /// scale_exp)`: the magnitude is `units * 2^scale_exp`, and the
+    /// remainder's sign is `a`'s own sign flipped when `sign_flip`.
+    #[inline]
+    fn remainder_units(ma: u64, ea: i32, mb: u64, eb: i32) -> (u64, bool, i32) {
+        if ea >= eb {
+            // `a`'s magnitude is at least `b`'s: reduce `ma * 2^(ea-eb)`
+            // modulo `mb`. `r` stays below `mb` throughout, so the
+            // `u128 -> u64` narrowing below is lossless.
+            let (r, quotient_odd) = Self::reduce_scaled_mantissa(ma, mb, (ea - eb) as u32);
+            let (units, flip) = Self::round_half_even_pick(r, mb as u128, quotient_odd);
+            (units as u64, flip, eb)
+        } else {
+            let shift = (eb - ea) as u32;
+            if shift > 53 {
+                // `mb << shift` towers over the 53-bit `ma`: the quotient
+                // is exactly 0 (even), so the remainder is `a` itself.
+                return (ma, false, ea);
+            }
+            // `r = ma mod modulus` satisfies `r <= ma` (equality when
+            // `modulus > ma`, since the remainder is then `ma` itself),
+            // so the narrowing below is lossless. `round_half_even_pick`'s
+            // tie/greater branch returns `modulus - r`, and only takes
+            // that branch when `2r >= modulus`, i.e. `modulus - r <= r`,
+            // so its result stays within the same `ma` bound.
+            let modulus = (mb as u128) << shift;
+            let dividend = ma as u128;
+            let r = dividend % modulus;
+            let quotient_odd = (dividend / modulus) & 1 != 0;
+            let (units, flip) = Self::round_half_even_pick(r, modulus, quotient_odd);
+            (units as u64, flip, ea)
+        }
+    }
+
+    /// Reduce `ma * 2^shift` modulo `mb`, one exponent bit at a time,
+    /// tracking the truncated quotient's parity for the round-half-to-even
+    /// tie-break. Doubling a remainder below `mb` (at most 53 bits) never
+    /// leaves `u128`, so this stays exact throughout.
+    #[inline]
+    fn reduce_scaled_mantissa(ma: u64, mb: u64, shift: u32) -> (u128, bool) {
+        let modulus = mb as u128;
+        let mut r = (ma % mb) as u128;
+        let mut quotient_odd = (ma / mb) & 1 != 0;
+        for _ in 0..shift {
+            let doubled = r * 2;
+            quotient_odd = doubled >= modulus;
+            r = if quotient_odd {
+                doubled - modulus
+            } else {
+                doubled
+            };
+        }
+        (r, quotient_odd)
+    }
+
+    /// The round-half-to-even pick between a truncated division's
+    /// remainder `r` (in `[0, modulus)`) and `modulus - r`, given the
+    /// truncated quotient's parity. Returns `(magnitude, sign_flip)`:
+    /// `sign_flip` means the nearest multiple was the next one up, so the
+    /// true remainder sits on the other side of zero.
+    #[inline]
+    fn round_half_even_pick(r: u128, modulus: u128, quotient_odd: bool) -> (u128, bool) {
+        match (2 * r).cmp(&modulus) {
+            Ordering::Less => (r, false),
+            Ordering::Greater => (modulus - r, true),
+            Ordering::Equal => {
+                if quotient_odd {
+                    (modulus - r, true)
+                } else {
+                    (r, false)
+                }
+            }
+        }
     }
 
     /// Resolve the `Y` rounding-mode override that `FIX`, `FIXU`, `FSQRT`,
@@ -440,7 +671,7 @@ impl MMix {
 
     /// MMIX rounding mode (rA bits 17-16): 0=NEAR (default), 1=OFF (trunc), 2=UP
     /// (ceil toward +∞), 3=DOWN (floor toward −∞). Applies to FINT and to the
-    /// f64→f32 conversion in SFLOT/STSF.
+    /// f64→f32 conversion in STSF.
     #[inline]
     pub(super) fn round_with_mode(value: f64, mode: u64) -> f64 {
         match mode & 0x3 {
@@ -520,16 +751,46 @@ impl MMix {
         }
     }
 
-    /// X for the integer-to-`f64` step of the `SFLOT` family, whose narrowing to
-    /// `f32` reports its own flags through `f64_to_f32_rounded`. That first step
-    /// can lose bits above `2^53` and said nothing about it.
+    /// The `SFLOT` family's one rounding: an exact integer straight to short
+    /// precision (a 24-bit significand), in the given mode. `SFLOTI` and
+    /// `SFLOTUI` route through this too — their byte operand is always exact.
+    ///
+    /// No overflow is possible: the largest 64-bit magnitude is far inside
+    /// the short-float range, so only X can be raised. `magnitude`'s exact
+    /// rounded value fits `f64` exactly, since 24 significant bits is far
+    /// inside its 53-bit mantissa; widening that to `f32` later is exact
+    /// too, matching the 24 bits already rounded to.
     #[inline]
-    pub(super) fn int_to_f64_inexact(magnitude: u64) -> u64 {
-        if Self::u64_to_f64_residual(magnitude) != 0 {
-            RA_X
+    pub(super) fn int_to_f32_rounded(negative: bool, magnitude: u64, mode: u64) -> (f64, u64) {
+        let bits = 64 - magnitude.leading_zeros(); // 0 when magnitude == 0
+        let (value, inexact) = if bits <= 24 {
+            (magnitude as u128, false)
         } else {
-            0
-        }
+            let dropped = bits - 24;
+            let mask = (1u64 << dropped) - 1;
+            let low = magnitude & mask;
+            let truncated = (magnitude & !mask) as u128;
+            if low == 0 {
+                (truncated, false)
+            } else {
+                let half = 1u64 << (dropped - 1);
+                let round_away = match mode & 0x3 {
+                    0 => low > half || (low == half && (magnitude >> dropped) & 1 == 1),
+                    1 => false,
+                    2 => !negative,
+                    _ => negative, // mode 3, ROUND_DOWN
+                };
+                let rounded = if round_away {
+                    truncated + (1u128 << dropped)
+                } else {
+                    truncated
+                };
+                (rounded, true)
+            }
+        };
+        let flags = if inexact { RA_X } else { 0 };
+        let magnitude = value as f64;
+        (if negative { -magnitude } else { magnitude }, flags)
     }
 
     /// Convert an exact integer to `f64` under the given rounding mode,
@@ -553,11 +814,13 @@ impl MMix {
     }
 
     /// Convert f64 → f32 under the given rounding mode, reporting flags.
-    /// Returns `(narrowed_as_f64, flags)`. `STSF`/`STSFI` always pass rA's
-    /// own mode; `SFLOT`'s family passes its resolved `Y` override.
+    /// Returns `(narrowed_as_f64, flags)`. The only caller is
+    /// `narrow_for_store` (`STSF`/`STSFI`), always under rA's own mode;
+    /// `SFLOT`'s family rounds straight from the integer through
+    /// `int_to_f32_rounded` and never reaches this.
     ///
-    /// `value` is never NaN: `SFLOT`'s family converts from an integer, and
-    /// `STSF` quiets and truncates a NaN's bits itself, bypassing this.
+    /// `value` is never NaN: `STSF` quiets and truncates a NaN's bits
+    /// itself, bypassing this.
     #[inline]
     pub(super) fn f64_to_f32_rounded(&self, value: f64, mode: u64) -> (f64, u64) {
         let near = value as f32; // hardware default: round-to-nearest-even
@@ -592,7 +855,17 @@ impl MMix {
         };
         let result = narrowed as f64;
         let mut flags = 0u64;
-        if value.is_finite() && narrowed.is_infinite() {
+        let magnitude = value.abs();
+        if Self::raise_o_if_overflowed(
+            value.is_finite(),
+            mode,
+            value.is_sign_negative(),
+            narrowed.is_infinite(),
+            || OverflowExtent {
+                exceeds_max: magnitude > f32::MAX as f64,
+                exceeds_next: magnitude >= 2f64.powi(128),
+            },
+        ) {
             flags |= RA_O;
         }
         let inexact = value.is_finite() && result != value;
@@ -685,6 +958,38 @@ impl MMix {
         }
     }
 
+    /// The inverse of `dyadic`: construct the `f64` for `negative` ×
+    /// `mantissa` × `2^exponent`, exact. `mantissa` is a plain nonnegative
+    /// integer, no implicit leading bit assumed. The caller guarantees the
+    /// value is exactly representable — this builds the bit pattern
+    /// directly rather than through a scaling multiply, which would
+    /// overflow `f64`'s exponent range long before `exponent` does at the
+    /// widest gaps `ieee_remainder` computes.
+    #[inline]
+    fn dyadic_to_f64(negative: bool, mantissa: u64, exponent: i32) -> f64 {
+        if mantissa == 0 {
+            return if negative { -0.0 } else { 0.0 };
+        }
+        let significant = 64 - mantissa.leading_zeros();
+        let leading_exp = exponent + (significant as i32 - 1);
+        let bits = if leading_exp >= -1022 {
+            // Normal: shift so the leading bit sits at bit 52.
+            let shift = 53 - significant as i32;
+            let aligned_mantissa = if shift >= 0 {
+                mantissa << shift
+            } else {
+                mantissa >> (-shift)
+            };
+            let frac = aligned_mantissa & 0x000F_FFFF_FFFF_FFFF;
+            ((leading_exp + 1023) as u64) << 52 | frac
+        } else {
+            // Subnormal: the implicit exponent is -1022, so align the
+            // mantissa to a leading bit at `exponent` directly.
+            mantissa << (exponent + 1074)
+        };
+        f64::from_bits(if negative { bits | (1u64 << 63) } else { bits })
+    }
+
     /// Left-shift `m` by `shift`, saturating to `u128::MAX` if a set bit
     /// would be pushed past bit 127. `dyadic_sub_sign`'s comparison only
     /// needs to know that side dominates, never by how much.
@@ -720,12 +1025,61 @@ impl MMix {
         if sign_p == sign_q {
             sign_p
                 * match big_p.cmp(&big_q) {
-                    std::cmp::Ordering::Greater => 1,
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
                 }
         } else {
             sign_p
+        }
+    }
+
+    /// Exact overflow extent for `|a| * |b|` against `f64::MAX` and the
+    /// first value beyond it (`2^1024`), `FMUL`'s overflow-rule test. The
+    /// product's mantissa is a direct `u128` multiply — at most 106
+    /// bits, always exact, no alignment needed.
+    pub(super) fn fmul_exceeds_thresholds(a: f64, b: f64) -> OverflowExtent {
+        let (_, ma, ea) = Self::dyadic(a);
+        let (_, mb, eb) = Self::dyadic(b);
+        let mantissa = (ma as u128) * (mb as u128);
+        let exponent = ea + eb;
+        let (_, max_m, max_e) = Self::dyadic(f64::MAX);
+        let exceeds_max =
+            Self::dyadic_sub_sign(false, mantissa, exponent, false, max_m as u128, max_e) > 0;
+        let exceeds_next = Self::dyadic_sub_sign(false, mantissa, exponent, false, 1, 1024) >= 0;
+        OverflowExtent {
+            exceeds_max,
+            exceeds_next,
+        }
+    }
+
+    /// Exact overflow extent for `|a| / |b|` against the same two
+    /// thresholds, `FDIV`'s overflow-rule test. Cross-multiplies instead
+    /// of dividing — `|a|/|b| > t` iff `|a| > t·|b|` — so the generally
+    /// irrational exact quotient is never computed; `t`'s mantissa
+    /// (`f64::MAX`'s, or `1` for `2^1024`) times `|b|`'s is again a
+    /// direct, exact `u128` product.
+    pub(super) fn fdiv_exceeds_thresholds(a: f64, b: f64) -> OverflowExtent {
+        let (_, ma, ea) = Self::dyadic(a);
+        let (_, mb, eb) = Self::dyadic(b);
+        let (_, max_m, max_e) = Self::dyadic(f64::MAX);
+        let max_b_mantissa = (max_m as u128) * (mb as u128);
+        let max_b_exponent = max_e + eb;
+        let exceeds_max =
+            Self::dyadic_sub_sign(false, ma as u128, ea, false, max_b_mantissa, max_b_exponent) > 0;
+        let next_b_mantissa = mb as u128; // 2^1024's mantissa is 1.
+        let next_b_exponent = 1024 + eb;
+        let exceeds_next = Self::dyadic_sub_sign(
+            false,
+            ma as u128,
+            ea,
+            false,
+            next_b_mantissa,
+            next_b_exponent,
+        ) >= 0;
+        OverflowExtent {
+            exceeds_max,
+            exceeds_next,
         }
     }
 
