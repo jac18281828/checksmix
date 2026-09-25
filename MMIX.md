@@ -488,6 +488,11 @@ fails with the table's failure value and touches no file. `Fopen` lets the
 program choose the handle; opening one already open closes it first, and a
 failed open leaves the handle closed.
 
+`Fopen`'s name is the bytes at its address up to the first zero byte,
+passed to the host unchanged, capped at 1,048,576 bytes per call. A name
+with no zero within the bound, or one that is not valid UTF-8, fails with
+−1 and touches no file.
+
 `Fgets` reads until `size − 1` characters or a newline, then a zero byte,
 returning the count stored (a partial last line at end of file included), or
 −1 when `size` is 0 or nothing was read. `Fgetws`/`Fputws` move wyde
@@ -506,6 +511,10 @@ and leave the stream as it was, rather than letting the program rebind them
 — checksmix routes handles 1 and 2 through the host's own write, which has
 no file underneath to rebind, and a `StdIn` read always fails, since the
 host has no read primitive.
+
+**Departure from the reference:** the reference places no length limit on
+`Fopen`'s name, and accepts any name the host filesystem does; checksmix
+caps it at 1,048,576 bytes and rejects a name that is not valid UTF-8.
 
 ### Extensions
 

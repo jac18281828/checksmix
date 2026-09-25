@@ -27,6 +27,15 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// Removes its directory, and everything under it, on drop — panic
+/// included.
+struct TempDirGuard(PathBuf);
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 // TRAP codes (MMIXAL reference, plus checksmix's own Fputc extension).
 const FOPEN: u8 = 1;
 const FCLOSE: u8 = 2;
@@ -63,9 +72,12 @@ fn run_trap(mmix: &mut MMix, y: u8, handle: u8) -> i64 {
 }
 
 /// `Fopen`: builds the two-octa block (name address, mode) at a fixed
-/// scratch address, points `$255` at it, and runs the call.
-fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u64) -> i64 {
-    let mut filename = path.to_string_lossy().into_owned().into_bytes();
+/// scratch address, points `$255` at it, and runs the call. `name` is
+/// written to guest memory exactly as given, with a single terminating
+/// zero appended -- no UTF-8 assumption, so a caller can pass a name that
+/// is not valid UTF-8.
+fn fopen_bytes(mmix: &mut MMix, handle: u8, name: &[u8], mode: u64) -> i64 {
+    let mut filename = name.to_vec();
     filename.push(0);
     let filename_addr = 50_000u64;
     for (i, &byte) in filename.iter().enumerate() {
@@ -76,6 +88,16 @@ fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u64) -> i64 {
     mmix.write_octa(param_addr + 8, mode);
     mmix.set_register(255, param_addr);
     run_trap(mmix, FOPEN, handle)
+}
+
+/// `fopen_bytes`, naming the file by its host path's own UTF-8 bytes.
+fn fopen(mmix: &mut MMix, handle: u8, path: &Path, mode: u64) -> i64 {
+    fopen_bytes(
+        mmix,
+        handle,
+        path.to_string_lossy().into_owned().as_bytes(),
+        mode,
+    )
 }
 
 fn fclose(mmix: &mut MMix, handle: u8) -> i64 {
@@ -236,6 +258,24 @@ fn fopen_mode_above_four_fails_even_with_the_low_byte_valid() {
 }
 
 #[test]
+fn fopen_invalid_mode_leaves_a_previously_open_handle_closed() {
+    // Fopen(3, tmp) succeeds; reopening 3 with an invalid mode must fail
+    // and leave 3 closed, not still pointing at the file the first call
+    // opened.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_reopen_then_bad_mode.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    assert_eq!(fopen(&mut mmix, 3, &path, 5), -1);
+
+    assert_eq!(fputs(&mut mmix, 3, b"still open?"), -1);
+    assert_eq!(fclose(&mut mmix, 3), -1);
+
+    drop(guard);
+}
+
+#[test]
 fn fopen_and_fclose_on_standard_handles_fail() {
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fopen_standard.txt");
@@ -245,6 +285,11 @@ fn fopen_and_fclose_on_standard_handles_fail() {
         assert_eq!(fopen(&mut mmix, handle, &path, TEXT_WRITE), -1);
         assert_eq!(fclose(&mut mmix, handle), -1);
     }
+
+    // A failed Fopen on a standard handle leaves the stream as it was:
+    // StdOut and StdErr still accept writes afterward.
+    assert_eq!(fputs(&mut mmix, 1, b"hello"), 5);
+    assert_eq!(fputs(&mut mmix, 2, b"hello"), 5);
 
     drop(guard);
     assert!(!path.exists());
@@ -272,6 +317,128 @@ fn fopen_reopening_an_open_handle_closes_it_first() {
 
     drop(guard_a);
     drop(guard_b);
+}
+
+#[test]
+fn fopen_of_a_utf8_encoded_name_opens_the_file_it_names() {
+    // `BYTE #C3,#A9,".txt",0` is "é.txt"'s UTF-8 bytes: the guest's own
+    // encoding, passed to the host unchanged.
+    let mut mmix = MMix::new();
+    let dir = unique_tmp_path("fopen_utf8_dir");
+    fs::create_dir_all(&dir).unwrap();
+    let guard = TempDirGuard(dir.clone());
+    fs::write(dir.join("é.txt"), "content").unwrap();
+
+    let mut name = dir.to_string_lossy().into_owned().into_bytes();
+    name.push(b'/');
+    name.extend_from_slice(&[0xC3, 0xA9]);
+    name.extend_from_slice(b".txt");
+
+    assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_READ), 0);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_of_a_name_spelled_with_the_character_constant_fails_to_open_the_utf8_file() {
+    // `BYTE "é.txt"` assembles 'é' to its character constant, #E9, its
+    // whole code point: one byte, not the two bytes of its UTF-8
+    // encoding. That byte alone is not valid UTF-8, so it is not a name
+    // `Fopen` accepts, even though a file named by the real UTF-8 bytes
+    // exists right beside it.
+    let mut mmix = MMix::new();
+    let dir = unique_tmp_path("fopen_code_point_dir");
+    fs::create_dir_all(&dir).unwrap();
+    let guard = TempDirGuard(dir.clone());
+    fs::write(dir.join("é.txt"), "content").unwrap();
+
+    let mut name = dir.to_string_lossy().into_owned().into_bytes();
+    name.push(b'/');
+    name.push(0xE9);
+    name.extend_from_slice(b".txt");
+
+    assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_READ), -1);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_of_a_non_utf8_name_fails_and_creates_nothing() {
+    let mut mmix = MMix::new();
+    let dir = unique_tmp_path("fopen_non_utf8_dir");
+    fs::create_dir_all(&dir).unwrap();
+    let guard = TempDirGuard(dir.clone());
+
+    let mut name = dir.to_string_lossy().into_owned().into_bytes();
+    name.push(b'/');
+    name.push(0xFF);
+    name.extend_from_slice(b".txt");
+
+    assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_WRITE), -1);
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_of_a_non_utf8_name_leaves_a_previously_open_handle_closed() {
+    // Fopen(3, tmp) succeeds; reopening 3 with a non-UTF-8 name must fail
+    // and leave 3 closed, not still pointing at the file the first call
+    // opened.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_reopen_then_non_utf8.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+    assert_eq!(fopen_bytes(&mut mmix, 3, &[0xFF], BINARY_WRITE), -1);
+
+    assert_eq!(fputs(&mut mmix, 3, b"still open?"), -1);
+    assert_eq!(fclose(&mut mmix, 3), -1);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_of_a_name_longer_than_256_bytes_opens() {
+    // A name well over 256 bytes total, spelled as three path components
+    // each under the filesystem's own per-component limit, so Fopen's own
+    // bound is the only one in play.
+    let mut mmix = MMix::new();
+    let base = unique_tmp_path("fopen_long_name_dir");
+    let long_dir_name = "d".repeat(120);
+    let long_file_name = "f".repeat(40);
+    let dir = base.join(&long_dir_name).join(&long_dir_name);
+    fs::create_dir_all(&dir).unwrap();
+    let guard = TempDirGuard(base.clone());
+    let path = dir.join(&long_file_name);
+    fs::write(&path, "content").unwrap();
+
+    let name = path.to_string_lossy().into_owned().into_bytes();
+    assert!(name.len() > 256, "name should exceed 256 bytes");
+
+    assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_READ), 0);
+
+    drop(guard);
+}
+
+#[test]
+fn fopen_of_a_name_with_no_zero_within_the_cap_leaves_a_previously_open_handle_closed() {
+    // A name with no zero within Fopen's 1,048,576-byte bound must fail
+    // -1 and, like every Fopen failure on a non-standard handle, leave it
+    // closed -- even one a previous call left open.
+    let mut mmix = MMix::new();
+    let path = unique_tmp_path("fopen_reopen_then_overlong.txt");
+    let guard = TempFileGuard(path.clone());
+
+    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
+
+    let name = vec![b'a'; 1_048_577]; // one byte past the bound, no zero
+    assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_WRITE), -1);
+
+    assert_eq!(fputs(&mut mmix, 3, b"still open?"), -1);
+    assert_eq!(fclose(&mut mmix, 3), -1);
+
+    drop(guard);
 }
 
 #[test]

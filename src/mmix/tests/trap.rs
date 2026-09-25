@@ -190,21 +190,6 @@ fn test_injected_clock_drives_handle_time() {
 }
 
 #[test]
-fn test_trap_read_cstring() {
-    let mut mmix = MMix::new();
-    // Test the helper function read_cstring
-    let test_string = b"Test String\0";
-    let addr = 1000u64;
-
-    for (i, &byte) in test_string.iter().enumerate() {
-        mmix.write_byte(addr + i as u64, byte);
-    }
-
-    let result = mmix.read_cstring(addr, 256);
-    assert_eq!(result, "Test String");
-}
-
-#[test]
 fn test_trap_fclose_error() {
     let mut mmix = MMix::new();
     // Try to close a handle that was never opened.

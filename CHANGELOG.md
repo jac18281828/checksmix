@@ -6,6 +6,7 @@
 * **Breaking: `Stop::Breakpoint` is gone.** `MMix::run_bounded` never returned it; delete any arm that names it
 * **Breaking: `Debugger::machine` and `Debugger::machine_mut` are gone.** To capture a debugged program's output, pass `Debugger::load_with_host` a host that shares its buffer, as the README's `Capture` example does; an embedder that needs the machine drives `MMix` directly, loading it with `write_image`, `entry_point` and `start_program`
 * `checksmix --max-steps N` and `checksmix run --max-steps N` stop an MMIX program, `.mms` or `.mmo`, that has not halted after N instructions, print `program did not halt within N instructions; @ = #…` on stderr and exit 124; without the flag a program runs until it halts, as before
+* **Breaking: `Fopen`'s name is the guest's bytes, passed to the host unchanged.** `BYTE "é.txt",0` no longer opens `é.txt`; name it by its UTF-8 bytes instead, `BYTE #C3,#A9,".txt",0`. A name is never truncated, so one longer than 256 bytes now opens. The trade: a file whose name is not valid UTF-8, such as a Latin-1 name on a Linux filesystem, cannot be opened
 
 0.3.13 (2026-09-22)
 

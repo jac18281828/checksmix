@@ -5,6 +5,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tracing::debug;
 
+/// The per-call byte bound shared by `Fopen`'s name and (below) `Fputs`.
+/// A fixed constant, read from no register.
+pub(super) const MAX_TRAP_BYTES: usize = 1_048_576;
+
 /// TRAP code identifiers for MMIX, numbered per the MMIXAL reference: every
 /// call is `TRAP 0,Code,Handle`, `Z` names the handle (0-255), and `$255`
 /// carries any further argument (an address, for a call that takes two).
@@ -177,10 +181,53 @@ impl MMix {
         }
     }
 
+    /// Fails `Fopen` on a non-standard handle: closes it (a failed open
+    /// leaves it closed, whether or not it was open before), sets `$255`
+    /// to -1, advances the PC, and reports the call handled. Every
+    /// `Fopen` failure past the standard-handle check goes through here,
+    /// so none can leave a stale handle open. Handles 0-2 never reach
+    /// this: `Fopen`/`Fclose` leave them exactly as they were.
+    fn fail_fopen(&mut self, handle: u8) -> bool {
+        self.file_handles.remove(&handle);
+        self.set_register(255, (-1i64) as u64);
+        self.advance_pc();
+        true
+    }
+
+    /// Reads `Fopen`'s name argument: the guest's bytes at `name_addr` up to
+    /// their terminating zero, passed through unchanged, capped at
+    /// `MAX_TRAP_BYTES`. Returns `None`, having already logged the reason
+    /// through `debug!`, when no zero falls within the bound or the bytes
+    /// are not valid UTF-8.
+    fn read_fopen_name(&self, handle: u8, name_addr: u64) -> Option<String> {
+        let (name_bytes, truncated) = self.read_bounded_bytes(name_addr, MAX_TRAP_BYTES);
+        if truncated {
+            debug!(handle, "TRAP: Fopen name has no zero within the byte bound");
+            return None;
+        }
+        match String::from_utf8(name_bytes) {
+            Ok(filename) => Some(filename),
+            Err(_) => {
+                debug!(handle, "TRAP: Fopen name is not valid UTF-8");
+                None
+            }
+        }
+    }
+
     /// TRAP 1: Fopen. `Z` is the handle the caller chooses, 0-255; `$255`
     /// addresses a two-octa block holding the name address and the mode.
-    /// Handles 0-2 belong to the host and always fail. Opening a handle
-    /// already open closes it first; on failure the handle is left closed.
+    /// Handles 0-2 belong to the host and always fail, leaving the stream
+    /// as it was. Opening a handle already open closes it first; on
+    /// failure the handle is left closed.
+    ///
+    /// The name is the guest's bytes up to its terminating zero, passed to
+    /// the host unchanged, capped at `MAX_TRAP_BYTES`. A name with no zero
+    /// within the bound, or one that is not valid UTF-8, fails with -1 and
+    /// touches no file; every such failure logs through
+    /// `debug!` only, like any other `Fopen` failure. **Departure from the
+    /// reference:** a name that is valid bytes on the host's filesystem but
+    /// not UTF-8, such as a Latin-1 name on a Linux filesystem, cannot be
+    /// opened.
     fn handle_fopen(&mut self, handle: u8) -> bool {
         if handle <= 2 {
             debug!(handle, "TRAP: Fopen rejects a standard handle");
@@ -192,16 +239,16 @@ impl MMix {
         let param_addr = self.get_register(255);
         let name_addr = self.read_octa(param_addr);
         let mode_octa = self.read_octa(param_addr.wrapping_add(8));
-        let filename = self.read_cstring(name_addr, 256);
+
+        let Some(filename) = self.read_fopen_name(handle, name_addr) else {
+            return self.fail_fopen(handle);
+        };
 
         debug!(handle, filename = %filename, mode = mode_octa, "TRAP: Fopen");
 
         if mode_octa > 4 {
             debug!(mode = mode_octa, "Invalid file open mode");
-            self.file_handles.remove(&handle);
-            self.set_register(255, (-1i64) as u64);
-            self.advance_pc();
-            return true;
+            return self.fail_fopen(handle);
         }
         let mode = mode_octa as u8;
 
@@ -248,14 +295,14 @@ impl MMix {
                 );
                 self.set_register(255, 0);
                 debug!(handle, "File opened successfully");
+                self.advance_pc();
+                true
             }
             Err(_) => {
-                self.set_register(255, (-1i64) as u64);
                 debug!(handle, "File open failed");
+                self.fail_fopen(handle)
             }
         }
-        self.advance_pc();
-        true
     }
 
     /// TRAP 2: Fclose. `Z` is the handle. Handles 0-2 belong to the host and
@@ -490,26 +537,26 @@ impl MMix {
     }
 
     /// Read a NUL-terminated byte string from memory starting at `addr`.
-    /// Bytes are returned verbatim (no UTF-8 widening). Truncated at `max_len`
-    /// bytes if no NUL is found, with a warning. Walks memory using wrapping
-    /// arithmetic so str_addr near u64::MAX cannot panic.
-    fn read_byte_string(&mut self, str_addr: u64, max_len: usize, label: &str) -> Vec<u8> {
+    /// Bytes are returned verbatim (no UTF-8 widening). The second element
+    /// is true when `max_len` bytes were read without finding a zero: a
+    /// string of exactly `max_len` bytes, followed by its zero, is not too
+    /// long, and the second element is false whenever the zero is found,
+    /// whatever the string's length. Walks memory using wrapping
+    /// arithmetic so `addr` near `u64::MAX` cannot panic.
+    fn read_bounded_bytes(&self, addr: u64, max_len: usize) -> (Vec<u8>, bool) {
         let mut bytes = Vec::new();
-        let mut addr = str_addr;
+        let mut cur = addr;
         loop {
-            let byte = self.read_byte(addr);
+            let byte = self.read_byte(cur);
             if byte == 0 {
-                break;
+                return (bytes, false);
+            }
+            if bytes.len() == max_len {
+                return (bytes, true);
             }
             bytes.push(byte);
-            if bytes.len() >= max_len {
-                self.host
-                    .diagnostic(&format!("Warning: {} string too long, truncating", label));
-                break;
-            }
-            addr = addr.wrapping_add(1);
+            cur = cur.wrapping_add(1);
         }
-        bytes
     }
 
     /// The open `File` behind `handle`, for a read/write/seek call past its
@@ -544,7 +591,11 @@ impl MMix {
     /// byte value translated. Returns the byte count written, or -1.
     fn handle_fputs(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
-        let bytes = self.read_byte_string(str_addr, 10000, "Fputs");
+        let (bytes, truncated) = self.read_bounded_bytes(str_addr, 10000);
+        if truncated {
+            self.host
+                .diagnostic("Warning: Fputs string too long, truncating");
+        }
         debug!(
             handle,
             str_addr = format!("0x{:X}", str_addr),
@@ -735,18 +786,5 @@ impl MMix {
         self.set_register(255, time_value);
         self.advance_pc();
         true
-    }
-
-    /// Helper function to read a null-terminated C string from memory
-    pub(super) fn read_cstring(&self, addr: u64, max_len: usize) -> String {
-        let mut result = String::new();
-        for i in 0..max_len {
-            let byte = self.read_byte(addr.wrapping_add(i as u64));
-            if byte == 0 {
-                break;
-            }
-            result.push(byte as char);
-        }
-        result
     }
 }
