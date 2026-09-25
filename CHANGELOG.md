@@ -24,6 +24,7 @@
 * **Breaking: an address past `#FFFFFFFFFFFFFFFF` is an assembly error.** An item may still fill the address space's last bytes exactly, but a statement that then needs an address — an instruction, a data item, a bound label, or `@` — now errors instead of wrapping; a release build used to wrap such input silently. The `.mmo` writer and reader, and a `lop_spec` length check, follow the same bound
 * **Breaking: two-operand `LDA $X,addr` resolves `addr` against a preceding `GREG` base, one tetra always**, the memory forms' own error when none is close enough; `LDA $X,$Y` is `LDA $X,$Y,0`. It used to select register form `#22` at or below `#FF` — with the address landing in the Z *register* field rather than as a literal — expand to a four-tetra `SETH`/`INCMH`/`INCML`/`INCL` sequence above it, and its pass-1 size tracked that same threshold, moving every label after a forward-referenced operand whenever pass 2 resolved a different size. Supersedes 0.3.13's "`LDA` does not take this path; its own two-operand form and sizing are unchanged"
 * **Breaking: the 224th `GREG` is an error.** The reference's own threshold applies: `GREG` allocates `$254` down to `$32`, 223 registers, and refuses a 224th; it used to allocate `$31` and below, 254 in all
+* `MMixAssembler::generate_object_code` carries the assembler's `GREG` values and rG into the `.mmo` it builds; `checksmix build` and `mmixasm` now build their object file through it instead of assembling a `MmoGenerator` by hand
 
 0.3.13 (2026-09-22)
 

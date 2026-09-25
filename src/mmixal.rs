@@ -5732,10 +5732,13 @@ impl MMixAssembler {
         crate::encode::encode_instruction_bytes(instruction)
     }
 
-    /// Generate object code in MMO format
+    /// The `.mmo` this program assembles to: every binary that writes an
+    /// object file builds it through this method, so its `GREG` values and
+    /// debug strings always reach the file.
     pub fn generate_object_code(&self) -> Vec<u8> {
         crate::mmo::MmoGenerator::new(self.instructions.clone(), self.labels.clone())
             .with_debug_strings(self.debug_strings.clone())
+            .with_greg_inits(self.greg_inits.clone())
             .generate()
     }
 
@@ -5952,6 +5955,8 @@ impl MMixAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mmix::{MMix, SpecialReg};
+    use crate::mmo::MmoDecoder;
 
     // ---- Mnemonic word-boundary guard (adversarial) ------------------
     // Every `mnemonic_*` and `directive_*` rule closes with the shared
@@ -11350,6 +11355,23 @@ Main    SETI    $1,7
             "<test>:224:6: GREG has no global register left: \
              $32 through $254 are all allocated"
         );
+    }
+
+    #[test]
+    fn test_generate_object_code_carries_greg_values_through_the_loader() {
+        let mut asm = MMixAssembler::new("Base GREG #1234\nMain HALT\n", "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+        let object_code = asm.generate_object_code();
+
+        let decoder = MmoDecoder::new(object_code);
+        let mut mmix = MMix::new();
+        decoder
+            .load(&mut mmix)
+            .expect("generate_object_code's output must load");
+
+        assert_eq!(mmix.get_special(SpecialReg::RG), 254);
+        assert_eq!(mmix.get_register(254), 0x1234);
     }
 
     // ---- Operand counts and kinds ----------------------------------------
