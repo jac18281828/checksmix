@@ -50,6 +50,27 @@ Assemble one or more
 source files into a single
 .B .mmo
 object file. Multiple inputs are assembled into one shared symbol space.
+.SH OPTIONS
+.TP
+.BI \-\-max\-steps " " N
+Stop
+.B run
+after
+.I N
+instructions if the program has not halted, the halting instruction counted
+among the
+.IR N .
+Prints
+\fBprogram did not halt within \fIN\fB instructions; @\~=\~#\fIHEX\fR
+on stderr, naming
+.I N
+and
+.BR @ ,
+the address of the next instruction, and exits 124.
+.I N
+is a positive integer; without
+.B \-\-max\-steps
+a program runs until it halts.
 .SH EXIT STATUS
 .B run
 exits with
@@ -57,7 +78,12 @@ exits with
 mod 256 when the program executes
 .BR "TRAP 0,Halt,0" ,
 and with 1 when assembly or loading fails or the machine halts any other
-way.
+way. With
+.BR \-\-max\-steps ,
+.B run
+exits 124 when the budget runs out; since a program halting with
+.B $255
+mod 256 = 124 exits 124 too, the stderr line tells the two apart.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG

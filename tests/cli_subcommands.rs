@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 fn checksmix() -> Command {
     Command::new(env!("CARGO_BIN_EXE_checksmix"))
@@ -26,6 +27,39 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Every `--max-steps` check runs with stdin null and `RUST_LOG` unset, so a
+/// run's own tracing spans never leak into the assertions.
+fn hermetic_output(cmd: &mut Command) -> Output {
+    cmd.stdin(Stdio::null())
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap()
+}
+
+/// Runs a child expected to be stopped by its own `--max-steps` budget, but
+/// bounds its wall clock too: a budget that misses its path fails the test
+/// instead of hanging the test binary on a looping child.
+fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
+    cmd.stdin(Stdio::null())
+        .env_remove("RUST_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    let deadline = Instant::now() + limit;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child exceeded {limit:?} wall clock; --max-steps failed to bound it");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.wait_with_output().unwrap()
+}
+
 fn assert_exit_1_names_input(out: &Output, input: &str) {
     assert_eq!(
         out.status.code(),
@@ -42,6 +76,12 @@ fn assert_exit_1_names_input(out: &Output, input: &str) {
         stderr.contains("contributed no source"),
         "stderr should say 'contributed no source'; stderr: {stderr}"
     );
+}
+
+fn assert_exit_124_names_budget(out: &Output, line: &str) {
+    assert_eq!(out.status.code(), Some(124));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.lines().any(|l| l == line), "stderr: {stderr}");
 }
 
 // ── check: clean two-file program ────────────────────────────────────────────
@@ -520,4 +560,145 @@ fn build_defs_only_file_fails_on_instruction_count_not_the_source_guard() {
         !stderr.contains("contributed no source"),
         "defs_only.mms resolves to a unit; the new guard must not fire; stderr: {stderr}"
     );
+}
+
+// ── run --max-steps: stop a program that has not halted ─────────────────────
+
+#[test]
+fn run_max_steps_stops_a_looping_mms_program() {
+    let mut cmd = checksmix();
+    cmd.args(["run", "--max-steps", "1000"])
+        .arg(fixture("loop_forever.mms"));
+    let out = hermetic_output_within(&mut cmd, Duration::from_secs(10));
+
+    assert_exit_124_names_budget(
+        &out,
+        "program did not halt within 1000 instructions; @ = #100",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Executed 1000 instructions"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Execution completed."),
+        "an exhausted budget must not print the completion line; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn max_steps_without_a_subcommand_stops_the_default_run() {
+    let mut cmd = checksmix();
+    cmd.args(["--max-steps", "1000"])
+        .arg(fixture("loop_forever.mms"));
+    let out = hermetic_output_within(&mut cmd, Duration::from_secs(10));
+
+    assert_exit_124_names_budget(
+        &out,
+        "program did not halt within 1000 instructions; @ = #100",
+    );
+}
+
+#[test]
+fn run_max_steps_stops_a_looping_mmo_program() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_loop_forever.mmo");
+    let build_status = checksmix()
+        .args(["build", "-o"])
+        .arg(&tmp_mmo)
+        .arg(fixture("loop_forever.mms"))
+        .status()
+        .unwrap();
+    assert!(build_status.success());
+
+    let mut cmd = checksmix();
+    cmd.args(["run", "--max-steps", "1000"]).arg(&tmp_mmo);
+    let out = hermetic_output_within(&mut cmd, Duration::from_secs(10));
+
+    let _ = std::fs::remove_file(&tmp_mmo);
+
+    assert_exit_124_names_budget(
+        &out,
+        "program did not halt within 1000 instructions; @ = #100",
+    );
+}
+
+#[test]
+fn run_max_steps_one_stops_after_the_first_instruction_across_files() {
+    let mut cmd = checksmix();
+    cmd.args(["run", "--max-steps", "1"])
+        .arg(fixture("multi_main.mms"))
+        .arg(fixture("multi_lib.mms"));
+    let out = hermetic_output(&mut cmd);
+
+    assert_exit_124_names_budget(&out, "program did not halt within 1 instruction; @ = #200");
+}
+
+#[test]
+fn run_halt_with_255_is_unchanged_by_a_budget_it_does_not_need() {
+    let unflagged = hermetic_output(checksmix().args(["run"]).arg(fixture("halt_with_255.mms")));
+    assert_eq!(unflagged.status.code(), Some(255));
+    let stderr = String::from_utf8_lossy(&unflagged.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "HALT trap at PC=0x0000000000000104, exit code=255",
+            "Execution stopped at PC=0x0000000000000108 after 1 instructions",
+        ]
+    );
+    let stdout = String::from_utf8_lossy(&unflagged.stdout);
+    assert!(
+        stdout.trim_end().ends_with("Execution completed."),
+        "stdout: {stdout}"
+    );
+
+    let flagged = hermetic_output(
+        checksmix()
+            .args(["run", "--max-steps", "2"])
+            .arg(fixture("halt_with_255.mms")),
+    );
+    assert_eq!(
+        flagged.stdout, unflagged.stdout,
+        "stdout must match exactly"
+    );
+    assert_eq!(
+        flagged.stderr, unflagged.stderr,
+        "stderr must match exactly"
+    );
+    assert_eq!(flagged.status.code(), unflagged.status.code());
+}
+
+#[test]
+fn run_max_steps_one_stops_before_the_halt_trap_executes() {
+    let out = hermetic_output(
+        checksmix()
+            .args(["run", "--max-steps", "1"])
+            .arg(fixture("halt_with_255.mms")),
+    );
+
+    assert_exit_124_names_budget(&out, "program did not halt within 1 instruction; @ = #104");
+}
+
+#[test]
+fn run_max_steps_rejects_zero_and_non_numeric_values() {
+    for bad in ["0", "ten"] {
+        let out = hermetic_output(
+            checksmix()
+                .args(["run", "--max-steps", bad])
+                .arg(fixture("hello.mms")),
+        );
+
+        assert_eq!(out.status.code(), Some(2), "bad value: {bad}");
+        assert!(out.stdout.is_empty(), "bad value: {bad}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(&format!("invalid value '{bad}'")) && stderr.contains("--max-steps"),
+            "stderr should name the rejected value and --max-steps; bad value: {bad}; \
+             stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "bad value: {bad}; stderr: {stderr}"
+        );
+    }
 }

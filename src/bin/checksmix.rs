@@ -1,9 +1,10 @@
 use checksmix::{
-    MMix, MMixAssembler, MmoDecoder, MmoGenerator, ValueFormat, entry_point, start_program,
+    MMix, MMixAssembler, MmoDecoder, MmoGenerator, Stop, ValueFormat, entry_point, start_program,
     write_image,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -25,6 +26,10 @@ struct Cli {
     #[arg(long)]
     unsigned: bool,
 
+    /// Stop after N instructions if the program has not halted, and exit 124 (run mode)
+    #[arg(long, value_name = "N")]
+    max_steps: Option<NonZeroUsize>,
+
     /// Program file(s) to execute. A single file dispatches by extension
     /// (.mms/.mmo); multiple files must all be .mms and are assembled into
     /// one shared symbol space before execution.
@@ -39,6 +44,9 @@ enum Command {
         /// Display register values as unsigned decimals
         #[arg(long)]
         unsigned: bool,
+        /// Stop after N instructions if the program has not halted, and exit 124
+        #[arg(long, value_name = "N")]
+        max_steps: Option<NonZeroUsize>,
         /// Program file(s) to execute
         #[arg(required = true, num_args = 1..)]
         program_files: Vec<String>,
@@ -67,6 +75,7 @@ fn main() {
     match cli.command {
         Some(Command::Run {
             unsigned,
+            max_steps,
             program_files,
         }) => {
             let vfmt = if unsigned {
@@ -74,7 +83,7 @@ fn main() {
             } else {
                 ValueFormat::Signed
             };
-            dispatch_run(&program_files, vfmt);
+            dispatch_run(&program_files, vfmt, max_steps);
         }
         Some(Command::Check { files }) => cmd_check(&files),
         Some(Command::Build { output, files }) => cmd_build(&files, output.as_deref()),
@@ -84,20 +93,24 @@ fn main() {
             } else {
                 ValueFormat::Signed
             };
-            dispatch_run(&cli.program_files, vfmt);
+            dispatch_run(&cli.program_files, vfmt, cli.max_steps);
         }
     }
 }
 
-fn dispatch_run(program_files: &[String], value_format: ValueFormat) {
+fn dispatch_run(
+    program_files: &[String],
+    value_format: ValueFormat,
+    max_steps: Option<NonZeroUsize>,
+) {
     if program_files.len() == 1 {
         let program_file = &program_files[0];
         let path = Path::new(program_file);
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
         match extension {
-            "mms" => run_mms(program_files, value_format),
-            "mmo" => run_mmo(program_file, value_format),
+            "mms" => run_mms(program_files, value_format, max_steps),
+            "mmo" => run_mmo(program_file, value_format, max_steps),
             _ => {
                 eprintln!(
                     "Unknown file extension: .{}",
@@ -125,7 +138,7 @@ fn dispatch_run(program_files: &[String], value_format: ValueFormat) {
                 process::exit(1);
             }
         }
-        run_mms(program_files, value_format);
+        run_mms(program_files, value_format, max_steps);
     }
 }
 
@@ -184,7 +197,48 @@ fn cmd_build(files: &[PathBuf], output: Option<&Path>) {
     println!("{}", out_path.display());
 }
 
-fn run_mms(filenames: &[String], value_format: ValueFormat) {
+/// Run to completion, or to an instruction budget, and exit. A halted
+/// program exits with its own status; a budget that runs out first prints
+/// the final state without "Execution completed." and exits 124.
+fn finish_run(mmix: &mut MMix, value_format: ValueFormat, max_steps: Option<NonZeroUsize>) -> ! {
+    let (count, stop) = match max_steps {
+        Some(budget) => mmix.run_bounded(budget.get()),
+        // Calling `run` here, rather than `run_bounded(usize::MAX)`, keeps
+        // its own tracing span distinct from a budgeted run's.
+        None => (mmix.run(), Stop::Halted),
+    };
+    println!();
+    println!("Executed {} instructions", count);
+    println!();
+
+    println!("=== Final Machine State ===");
+    println!("{}", mmix.display_with(value_format));
+    println!();
+
+    match stop {
+        Stop::Halted => {
+            println!("Execution completed.");
+            process::exit(mmix.get_exit_code() as i32);
+        }
+        Stop::BudgetExhausted => {
+            let noun = if count == 1 {
+                "instruction"
+            } else {
+                "instructions"
+            };
+            eprintln!(
+                "program did not halt within {} {}; @ = #{:x}",
+                count,
+                noun,
+                mmix.get_pc()
+            );
+            process::exit(124);
+        }
+        _ => unreachable!("run_bounded stops only by halting or exhausting its budget"),
+    }
+}
+
+fn run_mms(filenames: &[String], value_format: ValueFormat, max_steps: Option<NonZeroUsize>) {
     println!("=== MMIX Assembler ===");
     if filenames.len() == 1 {
         println!("=== Parsing assembly from: {} ===", filenames[0]);
@@ -215,22 +269,10 @@ fn run_mms(filenames: &[String], value_format: ValueFormat) {
     println!();
 
     println!("=== Executing Program ===");
-    let count = mmix.run();
-    println!();
-    println!("Executed {} instructions", count);
-    println!();
-
-    println!("=== Final Machine State ===");
-    println!("{}", mmix.display_with(value_format));
-    println!();
-
-    println!("Execution completed.");
-
-    let exit_code = mmix.get_exit_code();
-    process::exit(exit_code as i32);
+    finish_run(&mut mmix, value_format, max_steps);
 }
 
-fn run_mmo(filename: &str, value_format: ValueFormat) {
+fn run_mmo(filename: &str, value_format: ValueFormat, max_steps: Option<NonZeroUsize>) {
     let data = fs::read(filename).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", filename, err);
         process::exit(1);
@@ -258,19 +300,7 @@ fn run_mmo(filename: &str, value_format: ValueFormat) {
     println!();
 
     println!("=== Executing Program ===");
-    let count = mmix.run();
-    println!();
-    println!("Executed {} instructions", count);
-    println!();
-
-    println!("=== Final Machine State ===");
-    println!("{}", mmix.display_with(value_format));
-    println!();
-
-    println!("Execution completed.");
-
-    let exit_code = mmix.get_exit_code();
-    process::exit(exit_code as i32);
+    finish_run(&mut mmix, value_format, max_steps);
 }
 
 #[cfg(test)]
@@ -301,6 +331,7 @@ mod tests {
             Some(Command::Run {
                 unsigned,
                 program_files,
+                ..
             }) => {
                 assert!(!unsigned);
                 assert_eq!(program_files, vec!["file.mms"]);
