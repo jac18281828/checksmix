@@ -640,3 +640,122 @@ fn test_goi_at_top_of_memory_wraps_return_address() {
     assert_eq!(mmix.get_register(1), 0); // @+4 wraps to 0
     assert_eq!(mmix.get_pc(), 5200); // Jump to 5000 + 200
 }
+
+// The Instruction Reference's GO page rounds the jump target down to a
+// tetra for the fetch, but keeps the target's own low two bits in the
+// location: they show up in a following GETA, in rJ after a PUSHGO, and
+// in the return address itself when the jump instruction sits off a
+// tetra boundary (mmix.cs.hm.edu/doc/instructions/go.html).
+
+/// A jump target off a tetra boundary leaves those low bits in the PC;
+/// `GETA` reads the aligned instruction but adds its offset to the
+/// unrounded PC.
+#[test]
+fn test_go_off_tetra_target_keeps_low_bits_in_pc() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x100);
+    mmix.set_register(2, 0x200);
+    mmix.set_register(3, 1);
+    mmix.write_tetra(0x100, 0x9E010203); // GO $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x201);
+    assert_eq!(mmix.get_register(1), 0x104);
+
+    mmix.write_tetra(0x200, 0xF4050002); // GETA $5,@+8
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(5), 0x209);
+    assert_eq!(mmix.get_pc(), 0x205);
+}
+
+#[test]
+fn test_goi_off_tetra_target_keeps_low_bits_in_pc() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x100);
+    mmix.set_register(2, 0x200);
+    mmix.write_tetra(0x100, 0x9F010201); // GOI $1,$2,1
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x201);
+    assert_eq!(mmix.get_register(1), 0x104);
+
+    mmix.write_tetra(0x200, 0xF4050002); // GETA $5,@+8
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(5), 0x209);
+    assert_eq!(mmix.get_pc(), 0x205);
+}
+
+/// A `GO` fetched off a tetra boundary still returns from its own
+/// address: `$X` carries the fetch address's low bits, not the aligned
+/// one.
+#[test]
+fn test_go_from_off_tetra_pc_return_address_carries_low_bits() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x102);
+    mmix.set_register(2, 0x200);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0x100, 0x9E010203); // GO $1,$2,$3, fetched at 0x100
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x200);
+    assert_eq!(mmix.get_register(1), 0x106);
+}
+
+#[test]
+fn test_goi_from_off_tetra_pc_return_address_carries_low_bits() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x103);
+    mmix.set_register(2, 0x200);
+    mmix.write_tetra(0x100, 0x9F010200); // GOI $1,$2,0, fetched at 0x100
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x200);
+    assert_eq!(mmix.get_register(1), 0x107);
+}
+
+/// The wrap rule and the low-bit rule compose: the return address wraps
+/// mod 2^64 from the fetch address's own low bits.
+#[test]
+fn test_go_at_top_of_memory_off_tetra_wraps_return_address() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0xFFFFFFFFFFFFFFFD);
+    mmix.set_register(2, 0x200);
+    mmix.set_register(3, 0);
+    mmix.write_tetra(0xFFFFFFFFFFFFFFFC, 0x9E010203); // GO $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x200);
+    assert_eq!(mmix.get_register(1), 1);
+}
+
+/// End-to-end proof for the program from A9's introduction: a `GO` to an
+/// address off a tetra boundary runs the instruction at the aligned base
+/// while the PC keeps the address whole.
+#[test]
+fn test_go_off_tetra_target_halts_at_the_computed_pc() {
+    use crate::debugger::{entry_point, write_image};
+    use crate::mmixal::MMixAssembler;
+
+    const SOURCE: &str = "\
+\tLOC\t#100
+Main\tGETA\t$1,T
+\tADDU\t$1,$1,1
+\tGO\t$0,$1,0
+T\tSET\t$2,5
+\tSET\t$255,0
+\tTRAP\t0,Halt,0
+";
+    let mut asm = MMixAssembler::new(SOURCE, "<test>");
+    asm.parse().expect("program must assemble");
+
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    write_image(&mut mmix, &asm);
+    mmix.set_pc(entry_point(&asm));
+
+    mmix.run();
+
+    let diagnostics = handle.diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.contains("HALT trap at PC=0x0000000000000115, exit code=0")),
+        "got {diagnostics:?}"
+    );
+    assert_eq!(mmix.get_register(1), 0x10D);
+}

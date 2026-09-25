@@ -263,6 +263,72 @@ fn test_pushgo_pop_basic() {
     assert_eq!(mmix.call_depth(), 0);
 }
 
+// The Instruction Reference's GO page gives PUSHGO the same absolute
+// target as GO: a target off a tetra boundary leaves its low two bits in
+// the PC, and rJ takes the jump's own address + 4
+// (mmix.cs.hm.edu/doc/instructions/go.html).
+
+/// A `PUSHGO` target off a tetra boundary leaves those low bits in the
+/// PC; `GETA` reads the aligned instruction but adds its offset to the
+/// unrounded PC.
+#[test]
+fn test_pushgo_off_tetra_target_keeps_low_bits_in_pc() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x100);
+    mmix.set_register(3, 0x200);
+    mmix.set_register(4, 3);
+    mmix.write_tetra(0x100, 0xBE020304); // PUSHGO $2,$3,$4
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x203);
+    assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
+
+    mmix.write_tetra(0x200, 0xF4050002); // GETA $5,@+8
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(5), 0x20B);
+    assert_eq!(mmix.get_pc(), 0x207);
+}
+
+#[test]
+fn test_pushgoi_off_tetra_target_keeps_low_bits_in_pc() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x100);
+    mmix.set_register(3, 0x200);
+    mmix.write_tetra(0x100, 0xBF020303); // PUSHGOI $2,$3,3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x203);
+    assert_eq!(mmix.get_special(SpecialReg::RJ), 0x104);
+
+    mmix.write_tetra(0x200, 0xF4050002); // GETA $5,@+8
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(5), 0x20B);
+    assert_eq!(mmix.get_pc(), 0x207);
+}
+
+/// A `PUSHGO` fetched off a tetra boundary still sets `rJ` from its own
+/// address, not the aligned one.
+#[test]
+fn test_pushgo_from_off_tetra_pc_return_address_carries_low_bits() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x101);
+    mmix.set_register(3, 0x200);
+    mmix.set_register(4, 0);
+    mmix.write_tetra(0x100, 0xBE020304); // PUSHGO $2,$3,$4, fetched at 0x100
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x200);
+    assert_eq!(mmix.get_special(SpecialReg::RJ), 0x105);
+}
+
+#[test]
+fn test_pushgoi_from_off_tetra_pc_return_address_carries_low_bits() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0x102);
+    mmix.set_register(3, 0x200);
+    mmix.write_tetra(0x100, 0xBF020300); // PUSHGOI $2,$3,0, fetched at 0x100
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x200);
+    assert_eq!(mmix.get_special(SpecialReg::RJ), 0x106);
+}
+
 #[test]
 fn test_pop_basic() {
     // PUSHJ $3 + POP 0: caller's $0..$2 fully restored, rL back to 3.
