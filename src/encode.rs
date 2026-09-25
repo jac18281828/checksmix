@@ -655,10 +655,12 @@ pub fn encode_instruction_bytes(instruction: &MMixInstruction) -> Vec<u8> {
             bytes.extend_from_slice(&[0xFF, *x, *y, *z]);
         }
         MMixInstruction::RESUME(xyz) => {
-            bytes.extend_from_slice(&[0xF9, 0, 0, *xyz]);
+            let [_, x, y, z] = xyz.to_be_bytes();
+            bytes.extend_from_slice(&[0xF9, x, y, z]);
         }
         MMixInstruction::SYNC(xyz) => {
-            bytes.extend_from_slice(&[0xFC, 0, 0, *xyz]);
+            let [_, x, y, z] = xyz.to_be_bytes();
+            bytes.extend_from_slice(&[0xFC, x, y, z]);
         }
         MMixInstruction::SWYM(x, y, z) => {
             bytes.extend_from_slice(&[0xFD, *x, *y, *z]);

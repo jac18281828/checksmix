@@ -110,7 +110,9 @@ the first blank.
 | `INCLUDE` | `INCLUDE file` | Assemble the named file as if inserted here, resolved relative to the including file; recursive, cycles are an error |
 
 A string operand assembles one unit per character. The directive aligns
-once, before the first unit; a list does not realign between items.
+once, before the first unit; a list does not realign between items. A bare
+`""`, the whole item, assembles as one zero unit and warns; the same empty
+string beside an operator or inside parentheses is an error.
 
 A string also stands inside a data-list item's own expression, abbreviating
 its characters as comma-separated character constants: an operator before
@@ -153,9 +155,9 @@ MMIXAL expression: constants, symbols, `@`, unary operators, and two
 left-associative precedence levels of binary operators. A decimal or
 hexadecimal constant always has a value, however many digits it spells: one
 of 2⁶⁴ or more reduces mod 2⁶⁴, so `OCTA #112233445566778899` assembles
-`#2233445566778899` and `OCTA 18446744073709551621` assembles `5`. A data
-item's value is not range-checked: `BYTE 300` keeps its low byte, `WYDE
-70000` its low wyde.
+`#2233445566778899` and `OCTA 18446744073709551621` assembles `5`. Every
+field an operand fills has a range; see
+[Operand ranges](#operand-ranges).
 
 | Level | Operators |
 | --- | --- |
@@ -174,7 +176,7 @@ it is one unbroken run of characters ending at the first space, tab, comma,
 `;`, comment character or newline. What follows a bare expression is subject
 to the remark rules in "Line structure" above. Write a negative
 literal closed up:
-`SET $1,-5`, never `SET $1,- 5`. A parenthesized group is the one place an
+`SETI $1,-5`, never `SETI $1,- 5`. A parenthesized group is the one place an
 expression may hold whitespace, a checksmix extension over MMIXAL's own
 closed-up syntax and a pure superset of it: `SET $1,(2 + 3)` assembles.
 
@@ -198,7 +200,7 @@ register−pure give a register; register−register gives a pure value; any
 other binary operator with a register operand is an error, as is every unary
 operator but `+`. With `x IS $1` and `y IS $10`, `x+3` and `3+x` are `$4`,
 and `y-x` is the pure value `9`. A register value may run past 255 inside an
-expression, but the final value a register site consumes must fit `0..=255`,
+expression, but the final value a register site consumes must fit `0..255`,
 same as a bare `$256` today.
 
 A program may redefine a predefined symbol with a label, `IS` or `GREG`
@@ -581,7 +583,7 @@ overwritten — `SAVE` opens no call frame.
 `UNSAVE 0, $Z`, or its one-operand spelling `UNSAVE $Z`, restores a context
 whose topmost (packed) octa `$Z` addresses, validating it whole before
 changing anything: a packed `rG` outside
-`32..=255`, a packed `rA` above the widest legal value, or a saved local
+`32..255`, a packed `rA` above the widest legal value, or a saved local
 count greater than the packed `rG` all halt with a diagnostic and the
 machine unchanged. Otherwise every saved register restores, `rL` becomes the
 saved local count, and `rO = rS` land at the address of the first restored
@@ -666,11 +668,40 @@ The longest matching form wins, so `TRAP 0,1,2` fills every field rather
 than leaving `,2` behind. A partial list — `TRAP 0,`, `POP 1,` — is still an
 error.
 
+## Operand ranges
+
+Every value that fills an instruction field must fit that field's range or
+assembly fails at the operand:
+
+| Field | Range | Sites |
+| --- | --- | --- |
+| Special register | `0..31` | `GET`'s `Z`; `PUT`'s and `PUTI`'s `X` |
+| Byte | `0..255` | `Z` of every explicit `*I` three-operand spelling, `STCO`'s `X` included; `Y` of `NEG`/`NEGU` and of the float rounding-mode forms; `PUTI`'s `Z`; `SAVE`'s `Z`; `UNSAVE`'s `X`; `POP p,yz`'s `X` |
+| Wyde | `0..65535` | the sixteen wyde immediates `SETL`, `SETH`, `SETMH`, `SETML`, `INCL`, `INCH`, `INCMH`, `INCML`, `ORH`, `ORMH`, `ORML`, `ORL`, `ANDNH`, `ANDNMH`, `ANDNML`, `ANDNL`; `yz` of `TRAP`/`TRIP`/`SWYM` and `POP` |
+| Three bytes | `0..16777215` | `xyz` of `TRAP`/`TRIP`/`SWYM` and `POP`; `RESUME`; `SYNC` |
+
+A negative value is its 64-bit two's complement and fails every field
+narrower than 64 bits: `ADDI $1,$2,-1` is an error, as is `SET $1,-1`
+(naming `SETI` and `NEG`). `RESUME` and `SYNC` take the MMIXAL definition's
+24-bit `XYZ`, all three bytes reaching the encoding; the machine halts on a
+`SYNC` code above 7 regardless.
+
+This departs from the MMIXAL reference, which warns on an out-of-range
+instruction field and keeps its low bits rather than rejecting it; a
+truncated field would otherwise assemble a different instruction.
+
+A data directive's value follows the reference instead: `BYTE`, `WYDE` and
+`TETRA` warn and keep the value's low byte, wyde or tetra when it overflows
+that width; `OCTA` never overflows. A string's characters are data values
+like any other. A bare `""` — the whole item — assembles as one zero unit
+of the directive's width and warns; the same empty string beside an
+operator or inside parentheses stays an error.
+
 ## Instruction table
 
 | Mnemonic | Operands | Description |
 | --- | --- | --- |
-| `SET` | `SET $X, $Y` / `SET $X, imm` | MMIXAL alias — emits `ORI $X, $Y, 0` for a register, `SETL $X, imm` for a wyde-wide immediate |
+| `SET` | `SET $X, $Y` / `SET $X, imm` | MMIXAL alias — emits `ORI $X, $Y, 0` for a register, `SETL $X, imm` for a wyde-wide immediate; an immediate outside `0..#FFFF` is an error (see [Operand ranges](#operand-ranges)) |
 | `SETI` | `SETI $X, imm` | checksmix extension — sets a full 64-bit constant in four tetras, clearing the register |
 | `SETL` | `SETL $X, YZ` | Set low wyde; the other 48 bits become zero |
 | `SETH` | `SETH $X, YZ` | Set high wyde; the other 48 bits become zero |

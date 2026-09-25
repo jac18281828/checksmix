@@ -307,8 +307,8 @@ pub enum MMixInstruction {
     PUTI(u8, u8),        // PUTI X, Z - put immediate into special register
     SAVE(u8, u8),        // SAVE $X, 0 - save context
     UNSAVE(u8, u8),      // UNSAVE 0, $Z - unsave/restore context
-    RESUME(u8),          // RESUME XYZ - resume after interrupt
-    SYNC(u8),            // SYNC XYZ - synchronize
+    RESUME(u32),         // RESUME XYZ - resume after interrupt, 24-bit XYZ
+    SYNC(u32),           // SYNC XYZ - synchronize, 24-bit XYZ
     SWYM(u8, u8, u8),    // SWYM X, Y, Z - sympathize with your machinery (nop)
     PRELD(u8, u8, u8),   // PRELD X, $Y, $Z - preload data
     PRELDI(u8, u8, u8),  // PRELDI X, $Y, Z - preload data (immediate)
@@ -2978,8 +2978,10 @@ impl MMixAssembler {
     }
 
     /// Resolve `SET`'s source operand into the instruction it selects: a
-    /// register value copies, a pure value sets the low wyde. `SET`
-    /// is one tetra, so the immediate form carries 16 bits.
+    /// register value copies, a pure value at most `#FFFF` is `SETL`.
+    /// `SET` is one tetra, so the immediate form carries 16 bits; anything
+    /// wider is an error naming `SETI` for a wider constant or `SETI`/`NEG`
+    /// for a negative one.
     fn lower_set_source(
         &self,
         dest: u8,
@@ -2987,27 +2989,24 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
 
-        // The negative-literal wrap predates general expressions: unary `-`
-        // on a single hex/octal/decimal literal still wraps into the low
-        // wyde rather than taking the 0..=#FFFF check below.
-        if Self::is_negated_literal(&pair) {
-            let value = self.parse_number(pair)?;
-            return Ok(MMixInstruction::SETL(dest, value as u16));
-        }
-
         match self.eval_expr(pair)? {
             ExprValue::Register(r) => {
                 let reg = self.require_register_in_range(r, line, col)?;
                 Ok(MMixInstruction::SETRR(dest, reg))
             }
             ExprValue::Pure(value) => {
-                if value > 0xFFFF {
-                    return Err(format!(
-                        "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; use SETI for a wider constant",
-                        self.current_filename, line, col, value
-                    ));
+                if value <= 0xFFFF {
+                    return Ok(MMixInstruction::SETL(dest, value as u16));
                 }
-                Ok(MMixInstruction::SETL(dest, value as u16))
+                let hint = if value >= 0x8000_0000_0000_0000 {
+                    "use SETI or NEG for a negative constant"
+                } else {
+                    "use SETI for a wider constant"
+                };
+                Err(format!(
+                    "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; {}",
+                    self.current_filename, line, col, value as i64, hint
+                ))
             }
         }
     }
@@ -3035,7 +3034,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "SETL")?;
         Ok(MMixInstruction::SETL(reg, val))
     }
 
@@ -3048,7 +3047,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "SETH")?;
         Ok(MMixInstruction::SETH(reg, val))
     }
 
@@ -3061,7 +3060,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "SETMH")?;
         Ok(MMixInstruction::SETMH(reg, val))
     }
 
@@ -3074,7 +3073,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "SETML")?;
         Ok(MMixInstruction::SETML(reg, val))
     }
 
@@ -3087,7 +3086,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "INCL")?;
         Ok(MMixInstruction::INCL(reg, val))
     }
 
@@ -3100,7 +3099,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "INCH")?;
         Ok(MMixInstruction::INCH(reg, val))
     }
 
@@ -3113,7 +3112,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "INCMH")?;
         Ok(MMixInstruction::INCMH(reg, val))
     }
 
@@ -3126,7 +3125,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "INCML")?;
         Ok(MMixInstruction::INCML(reg, val))
     }
 
@@ -3136,7 +3135,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ORH")?;
         Ok(MMixInstruction::ORH(reg, val))
     }
 
@@ -3149,7 +3148,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ORMH")?;
         Ok(MMixInstruction::ORMH(reg, val))
     }
 
@@ -3162,7 +3161,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ORML")?;
         Ok(MMixInstruction::ORML(reg, val))
     }
 
@@ -3172,7 +3171,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ORL")?;
         Ok(MMixInstruction::ORL(reg, val))
     }
 
@@ -3185,7 +3184,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ANDNH")?;
         Ok(MMixInstruction::ANDNH(reg, val))
     }
 
@@ -3198,7 +3197,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ANDNMH")?;
         Ok(MMixInstruction::ANDNMH(reg, val))
     }
 
@@ -3211,7 +3210,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ANDNML")?;
         Ok(MMixInstruction::ANDNML(reg, val))
     }
 
@@ -3224,7 +3223,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())? as u16;
+        let val = self.imm_wyde(ops.next().unwrap(), "ANDNL")?;
         Ok(MMixInstruction::ANDNL(reg, val))
     }
 
@@ -3319,7 +3318,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "LDBI" => Ok(MMixInstruction::LDBI(x, y, z)),
@@ -3365,7 +3364,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::LDAI)
+        self.parse_rri(pair, "LDAI", MMixInstruction::LDAI)
     }
 
     fn parse_inst_lda_ri(
@@ -3460,7 +3459,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ADDI" => Ok(MMixInstruction::ADDI(x, y, z)),
@@ -3492,7 +3491,7 @@ impl MMixAssembler {
             Rule::operand_list_three => {
                 let mut ops = operands.into_inner();
                 let x = self.parse_register(ops.next().unwrap())?;
-                let y = self.parse_number(ops.next().unwrap())? as u8;
+                let y = self.imm_byte(ops.next().unwrap(), &mnem)?;
                 let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
                 (x, y, z)
             }
@@ -3524,10 +3523,8 @@ impl MMixAssembler {
         let name = mnem.as_str().to_uppercase();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
-        let z_operand = ops.next().unwrap();
-        let (line, col) = z_operand.line_col();
-        let z = self.imm_byte(self.parse_number(z_operand)?, &name, line, col)?;
+        let y = self.imm_byte(ops.next().unwrap(), &name)?;
+        let z = self.imm_byte(ops.next().unwrap(), &name)?;
 
         match name.as_str() {
             "NEGI" => Ok(MMixInstruction::NEGI(x, y, z)),
@@ -3569,8 +3566,8 @@ impl MMixAssembler {
 
     /// `FIX`/`FIXU`/`FSQRT`/`FINT`, 3-operand form: `Y` is a rounding-mode
     /// value (`0..=4`, `ROUND_CURRENT`/`ROUND_OFF`/`ROUND_UP`/`ROUND_DOWN`/
-    /// `ROUND_NEAR`), range-checked at runtime (`Y > 4` halts), not here —
-    /// mirrors how `NEG`'s own value-typed `Y` is parsed.
+    /// `ROUND_NEAR`). Only its byte field is checked here, the same as
+    /// `NEG`'s own value-typed `Y`; `Y > 4` halts at run time.
     fn parse_inst_float_round_rrz(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -3579,7 +3576,7 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let y = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
         let z = self.parse_register(ops.next().unwrap())?;
 
         match mnem.as_str().to_uppercase().as_str() {
@@ -3629,7 +3626,7 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap().as_str().to_uppercase();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
+        let y = self.imm_byte(ops.next().unwrap(), &mnem)?;
         let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
 
         match (mnem.as_str(), z) {
@@ -3680,8 +3677,8 @@ impl MMixAssembler {
         let mnem = parts.next().unwrap();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_number(ops.next().unwrap())? as u8;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let y = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
@@ -3705,7 +3702,7 @@ impl MMixAssembler {
         let operands = parts.next().unwrap();
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FLOTI" => Ok(MMixInstruction::FLOTI(x, 0, z)),
@@ -3766,7 +3763,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ANDI" => Ok(MMixInstruction::ANDI(x, y, z)),
@@ -3825,7 +3822,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "BDIFI" => Ok(MMixInstruction::BDIFI(x, y, z)),
@@ -3879,7 +3876,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "SLI" => Ok(MMixInstruction::SLI(x, y, z)),
@@ -3935,7 +3932,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "CSNI" => Ok(MMixInstruction::CSNI(x, y, z)),
@@ -3998,7 +3995,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "ZSNI" => Ok(MMixInstruction::ZSNI(x, y, z)),
@@ -4286,13 +4283,13 @@ impl MMixAssembler {
             Rule::operand_list_two => {
                 let mut ops = operands.into_inner();
                 let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
-                let yz = self.parse_number(ops.next().unwrap())? as u16;
+                let yz = self.imm_wyde(ops.next().unwrap(), mnem)?;
                 let (y, z) = Self::split_hi_lo_byte(yz);
                 Ok((x, y, z))
             }
             Rule::operand_list_one => {
                 let mut ops = operands.into_inner();
-                let xyz = self.parse_number(ops.next().unwrap())? as u32;
+                let xyz = self.imm_three_bytes(ops.next().unwrap(), mnem)?;
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok((x, y, z))
             }
@@ -4312,6 +4309,7 @@ impl MMixAssembler {
     fn parse_rri<F>(
         &self,
         pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
         f: F,
     ) -> Result<MMixInstruction, String>
     where
@@ -4323,7 +4321,7 @@ impl MMixAssembler {
         let mut ops = operands.into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), mnem)?;
         Ok(f(x, y, z))
     }
 
@@ -4406,7 +4404,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::PUSHGOI)
+        self.parse_rri(pair, "PUSHGOI", MMixInstruction::PUSHGOI)
     }
 
     /// `POP p,yz`: X=p, YZ=yz. `POP xyz`: XYZ=xyz, so `POP 1` is
@@ -4420,14 +4418,14 @@ impl MMixAssembler {
         match operands.as_rule() {
             Rule::operand_list_two => {
                 let mut ops = operands.into_inner();
-                let x = self.parse_number(ops.next().unwrap())? as u8;
-                let yz = self.parse_number(ops.next().unwrap())? as u16;
+                let x = self.imm_byte(ops.next().unwrap(), "POP")?;
+                let yz = self.imm_wyde(ops.next().unwrap(), "POP")?;
                 let (y, z) = Self::split_hi_lo_byte(yz);
                 Ok(MMixInstruction::POP(x, y, z))
             }
             Rule::operand_list_one => {
                 let mut ops = operands.into_inner();
-                let xyz = self.parse_number(ops.next().unwrap())? as u32;
+                let xyz = self.imm_three_bytes(ops.next().unwrap(), "POP")?;
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok(MMixInstruction::POP(x, y, z))
             }
@@ -4439,7 +4437,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::GOI)
+        self.parse_rri(pair, "GOI", MMixInstruction::GOI)
     }
 
     fn parse_inst_get(&self, pair: pest::iterators::Pair<Rule>) -> Result<MMixInstruction, String> {
@@ -4447,7 +4445,7 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.special_register(ops.next().unwrap(), "GET")?;
         Ok(MMixInstruction::GET(x, z))
     }
 
@@ -4458,7 +4456,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_number(ops.next().unwrap())? as u8;
+        let x = self.special_register(ops.next().unwrap(), "PUT")?;
         match self.lower_z_operand(ops.next().unwrap(), "PUT")? {
             ZForm::Reg(z) => Ok(MMixInstruction::PUT(x, z)),
             ZForm::Imm(z) => Ok(MMixInstruction::PUTI(x, z)),
@@ -4472,8 +4470,8 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_number(ops.next().unwrap())? as u8;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let x = self.special_register(ops.next().unwrap(), "PUTI")?;
+        let z = self.imm_byte(ops.next().unwrap(), "PUTI")?;
         Ok(MMixInstruction::PUTI(x, z))
     }
 
@@ -4485,7 +4483,7 @@ impl MMixAssembler {
         let _mnem = parts.next();
         let mut ops = parts.next().unwrap().into_inner();
         let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), "SAVE")?;
         Ok(MMixInstruction::SAVE(x, z))
     }
 
@@ -4501,7 +4499,7 @@ impl MMixAssembler {
         match operands.as_rule() {
             Rule::operand_list_two => {
                 let mut ops = operands.into_inner();
-                let x = self.parse_number(ops.next().unwrap())? as u8;
+                let x = self.imm_byte(ops.next().unwrap(), "UNSAVE")?;
                 let z = self.parse_register(ops.next().unwrap())?;
                 Ok(MMixInstruction::UNSAVE(x, z))
             }
@@ -4518,56 +4516,56 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::LDUNCI)
+        self.parse_rri(pair, "LDUNCI", MMixInstruction::LDUNCI)
     }
 
     fn parse_inst_stunc_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::STUNCI)
+        self.parse_rri(pair, "STUNCI", MMixInstruction::STUNCI)
     }
 
     fn parse_inst_ldht_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::LDHTI)
+        self.parse_rri(pair, "LDHTI", MMixInstruction::LDHTI)
     }
 
     fn parse_inst_stht_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::STHTI)
+        self.parse_rri(pair, "STHTI", MMixInstruction::STHTI)
     }
 
     fn parse_inst_ldsf_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::LDSFI)
+        self.parse_rri(pair, "LDSFI", MMixInstruction::LDSFI)
     }
 
     fn parse_inst_stsf_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::STSFI)
+        self.parse_rri(pair, "STSFI", MMixInstruction::STSFI)
     }
 
     fn parse_inst_ldvts_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::LDVTSI)
+        self.parse_rri(pair, "LDVTSI", MMixInstruction::LDVTSI)
     }
 
     fn parse_inst_cswap_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::CSWAPI)
+        self.parse_rri(pair, "CSWAPI", MMixInstruction::CSWAPI)
     }
 
     /// STCO's X is a pure byte or a register, the same bytes; only Z
@@ -4603,9 +4601,9 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_number(ops.next().unwrap())? as u8;
+        let x = self.imm_byte(ops.next().unwrap(), "STCOI")?;
         let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_number(ops.next().unwrap())? as u8;
+        let z = self.imm_byte(ops.next().unwrap(), "STCOI")?;
         Ok(MMixInstruction::STCOI(x, y, z))
     }
 
@@ -4649,38 +4647,39 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::PRELDI)
+        self.parse_rri(pair, "PRELDI", MMixInstruction::PRELDI)
     }
 
     fn parse_inst_prego_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::PREGOI)
+        self.parse_rri(pair, "PREGOI", MMixInstruction::PREGOI)
     }
 
     fn parse_inst_prest_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::PRESTI)
+        self.parse_rri(pair, "PRESTI", MMixInstruction::PRESTI)
     }
 
     fn parse_inst_syncd_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::SYNCDI)
+        self.parse_rri(pair, "SYNCDI", MMixInstruction::SYNCDI)
     }
 
     fn parse_inst_syncid_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, MMixInstruction::SYNCIDI)
+        self.parse_rri(pair, "SYNCIDI", MMixInstruction::SYNCIDI)
     }
 
-    /// Bare `RESUME`: XYZ=0. The one-operand form is unchanged.
+    /// Bare `RESUME`: XYZ=0. `RESUME` takes a 24-bit `XYZ`, the MMIXAL
+    /// definition's spelling; all three bytes reach the encoding.
     fn parse_inst_resume(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -4688,7 +4687,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let xyz = match parts.next() {
-            Some(op) => self.parse_number(op.into_inner().next().unwrap())? as u8,
+            Some(op) => self.imm_three_bytes(op.into_inner().next().unwrap(), "RESUME")?,
             None => 0,
         };
         Ok(MMixInstruction::RESUME(xyz))
@@ -4710,7 +4709,9 @@ impl MMixAssembler {
         Ok(MMixInstruction::SWYM(x, y, z))
     }
 
-    /// Bare `SYNC`: XYZ=0. The one-operand form is unchanged.
+    /// Bare `SYNC`: XYZ=0. `SYNC` takes a 24-bit `XYZ`, the MMIXAL
+    /// definition's spelling; all three bytes reach the encoding, though
+    /// the machine halts on any code above 7.
     fn parse_inst_sync(
         &self,
         pair: pest::iterators::Pair<Rule>,
@@ -4718,7 +4719,7 @@ impl MMixAssembler {
         let mut parts = pair.into_inner();
         let _mnem = parts.next();
         let xyz = match parts.next() {
-            Some(op) => self.parse_number(op.into_inner().next().unwrap())? as u8,
+            Some(op) => self.imm_three_bytes(op.into_inner().next().unwrap(), "SYNC")?,
             None => 0,
         };
         Ok(MMixInstruction::SYNC(xyz))
@@ -4736,8 +4737,6 @@ impl MMixAssembler {
         }
     }
 
-    /// Parse a data directive and expand its value list to one instruction
-    /// per unit (e.g. `BYTE "Hello"` becomes five `BYTE` instructions).
     fn parse_data_directive(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
@@ -4829,21 +4828,77 @@ impl MMixAssembler {
         }
     }
 
-    /// Range-check a resolved value as an 8-bit immediate operand (0..=255).
-    fn imm_byte(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<u8, String> {
-        if v <= 0xFF {
-            Ok(v as u8)
+    /// Range-check a resolved operand value against an instruction field's
+    /// width, the one place every site in the range table calls: the value
+    /// must fit `0..=max` or assembly fails naming the field's own maximum
+    /// and the mnemonic as written. `v` prints as a signed 64-bit integer
+    /// when it is `2^63` or more, so a negative literal reports negative.
+    fn field_value(
+        &self,
+        v: u64,
+        max: u64,
+        mnem: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<u64, String> {
+        if v <= max {
+            Ok(v)
         } else {
             Err(format!(
-                "{}:{}:{}: immediate operand {} out of range 0..255 for {}",
-                self.current_filename, line, col, v, mnem
+                "{}:{}:{}: immediate operand {} out of range 0..{} for {}",
+                self.current_filename, line, col, v as i64, max, mnem
             ))
         }
     }
 
-    /// Range-check a resolved Z value as an 8-bit immediate (0..=255).
+    /// Evaluate `pair` and range-check it as an 8-bit instruction field
+    /// (0..=255): every explicit `*I` spelling's own byte-sized operand.
+    fn imm_byte(&self, pair: pest::iterators::Pair<Rule>, mnem: &str) -> Result<u8, String> {
+        let (line, col) = pair.line_col();
+        self.field_value(self.parse_number(pair)?, 0xFF, mnem, line, col)
+            .map(|v| v as u8)
+    }
+
+    /// Evaluate `pair` and range-check it as a 16-bit instruction field
+    /// (0..=65535): the wyde immediates and `TRAP`/`TRIP`/`SWYM`/`POP`'s
+    /// `yz`.
+    fn imm_wyde(&self, pair: pest::iterators::Pair<Rule>, mnem: &str) -> Result<u16, String> {
+        let (line, col) = pair.line_col();
+        self.field_value(self.parse_number(pair)?, 0xFFFF, mnem, line, col)
+            .map(|v| v as u16)
+    }
+
+    /// Evaluate `pair` and range-check it as a 24-bit instruction field
+    /// (0..=16777215): `TRAP`/`TRIP`/`SWYM`/`POP`'s `xyz`, `RESUME` and
+    /// `SYNC`.
+    fn imm_three_bytes(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+    ) -> Result<u32, String> {
+        let (line, col) = pair.line_col();
+        self.field_value(self.parse_number(pair)?, 0xFF_FFFF, mnem, line, col)
+            .map(|v| v as u32)
+    }
+
+    /// Evaluate `pair` and range-check it as a special register number
+    /// (0..=31): `GET`'s `Z`, `PUT`'s and `PUTI`'s `X`.
+    fn special_register(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+    ) -> Result<u8, String> {
+        let (line, col) = pair.line_col();
+        self.field_value(self.parse_number(pair)?, 31, mnem, line, col)
+            .map(|v| v as u8)
+    }
+
+    /// Range-check an already-resolved Z value as an 8-bit immediate
+    /// (0..=255), for [`Self::lower_z_operand`], which has already told
+    /// register and pure values apart.
     fn imm_in_range(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<ZForm, String> {
-        self.imm_byte(v, mnem, line, col).map(ZForm::Imm)
+        self.field_value(v, 0xFF, mnem, line, col)
+            .map(|v| ZForm::Imm(v as u8))
     }
 
     /// Evaluate `pair` and accept either a register or a pure value as an
@@ -4860,7 +4915,7 @@ impl MMixAssembler {
         let (line, col) = pair.line_col();
         match self.eval_expr(pair)? {
             ExprValue::Register(r) => self.require_register_in_range(r, line, col),
-            ExprValue::Pure(v) => self.imm_byte(v, mnem, line, col),
+            ExprValue::Pure(v) => self.field_value(v, 0xFF, mnem, line, col).map(|v| v as u8),
         }
     }
 
@@ -5430,47 +5485,6 @@ impl MMixAssembler {
         Ok(ExprValue::Pure(value))
     }
 
-    /// True when `pair` (an `expr`) is exactly a unary `-` applied to one
-    /// hexadecimal, octal or decimal literal -- the shape
-    /// `signed_number_literal` matched before the grammar gained general
-    /// expressions. `SET`'s low-wyde wrap survives for this shape alone.
-    fn is_negated_literal(pair: &pest::iterators::Pair<Rule>) -> bool {
-        let mut terms = pair.clone().into_inner();
-        let Some(term) = terms.next() else {
-            return false;
-        };
-        if terms.next().is_some() {
-            return false; // a weak operator followed
-        }
-        let mut primaries = term.into_inner();
-        let Some(primary) = primaries.next() else {
-            return false;
-        };
-        if primaries.next().is_some() {
-            return false; // a strong operator followed
-        }
-        let mut children = primary.into_inner();
-        let Some(first) = children.next() else {
-            return false;
-        };
-        if first.as_rule() != Rule::unary_op || first.as_str() != "-" {
-            return false;
-        }
-        let Some(operand) = children.next() else {
-            return false;
-        };
-        let Some(operand_first) = operand.into_inner().next() else {
-            return false;
-        };
-        if operand_first.as_rule() != Rule::constant {
-            return false;
-        }
-        matches!(
-            operand_first.into_inner().next().map(|p| p.as_rule()),
-            Some(Rule::hex_literal | Rule::dec_literal)
-        )
-    }
-
     /// Range-check a register value carried inside an expression (up to
     /// 64 bits, per unary `$`) down to the 0..=255 a register field holds.
     fn require_register_in_range(&self, r: u64, line: usize, col: usize) -> Result<u8, String> {
@@ -5938,10 +5952,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_negative_literal_8bit_wrap() {
-        let mut asm = MMixAssembler::new("ADDI $1, $2, -1", "<test>");
-        asm.parse().unwrap();
-        assert_eq!(asm.instructions[0].1, MMixInstruction::ADDI(1, 2, 0xFF));
+    fn test_parse_negative_literal_8bit_is_an_error() {
+        assert_eq!(
+            assemble_err("ADDI $1, $2, -1"),
+            "<test>:1:14: immediate operand -1 out of range 0..255 for ADDI"
+        );
     }
 
     #[test]
@@ -6918,10 +6933,11 @@ mod tests {
     }
 
     #[test]
-    fn test_set_negative_literal_wraps_to_its_wyde() {
-        let mut asm = MMixAssembler::new("SET $1,-1", "<test>");
-        asm.parse().unwrap();
-        assert_eq!(asm.instructions[0].1, MMixInstruction::SETL(1, 0xFFFF));
+    fn test_set_negative_literal_is_an_error() {
+        assert_eq!(
+            assemble_err("SET $1,-1"),
+            "<test>:1:8: immediate operand -1 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        );
     }
 
     #[test]
@@ -8359,19 +8375,26 @@ ZSP  $3,$4,2
         }
     }
 
-    // ---- Sanity: these *I spellings stay unchanged for negatives -----
-    // Lock in that `test_parse_negative_literal_8bit_wrap`'s policy
-    // (silent wrap of -1 to 0xFF) is preserved for the spellings named
-    // below while the auto path rejects the same input. `NEGI`/`NEGUI`
-    // range-check their Z and are the exception, pinned in
-    // `test_neg_immediate_spelling_range_checks_its_z`.
+    /// The explicit `*I` spellings reject a negative `Z` exactly as the
+    /// auto (`ADD`) path does.
     #[test]
-    fn test_explicit_i_negative_still_wraps() {
-        assert_first_instruction("ADDI $1,$2,-1", MMixInstruction::ADDI(1, 2, 0xFF));
-        assert_first_instruction("ANDI $1,$2,-1", MMixInstruction::ANDI(1, 2, 0xFF));
-        assert_first_instruction("SLUI $1,$2,-1", MMixInstruction::SLUI(1, 2, 0xFF));
-        // Auto path rejects:
-        assert!(assemble_err("ADD $1,$2,-1").contains("out of range 0..255"));
+    fn test_explicit_i_negative_is_an_error() {
+        assert_eq!(
+            assemble_err("ADDI $1,$2,-1"),
+            "<test>:1:12: immediate operand -1 out of range 0..255 for ADDI"
+        );
+        assert_eq!(
+            assemble_err("ANDI $1,$2,-1"),
+            "<test>:1:12: immediate operand -1 out of range 0..255 for ANDI"
+        );
+        assert_eq!(
+            assemble_err("SLUI $1,$2,-1"),
+            "<test>:1:12: immediate operand -1 out of range 0..255 for SLUI"
+        );
+        assert_eq!(
+            assemble_err("ADD $1,$2,-1"),
+            "<test>:1:11: immediate operand -1 out of range 0..255 for ADD"
+        );
     }
 
     // ---- Source-level debug info (SourceLoc / source_loc / addr_for_line /
@@ -9044,11 +9067,22 @@ Main    SETI    $1,7
         assert!(assemble_err("SETL $1,(1\n2)").contains("unterminated group"));
     }
 
+    /// A negative `SET` source is an error whether the literal is decimal
+    /// or hex.
     #[test]
-    fn test_set_negative_literal_wrap_covers_decimal_and_hex() {
-        assert_first_instruction("SET $1,-1", MMixInstruction::SETL(1, 0xFFFF));
-        assert_first_instruction("SET $1,-5", MMixInstruction::SETL(1, 0xFFFB));
-        assert_first_instruction("SET $1,-#10", MMixInstruction::SETL(1, 0xFFF0));
+    fn test_set_negative_literal_is_an_error_for_decimal_and_hex() {
+        assert_eq!(
+            assemble_err("SET $1,-1"),
+            "<test>:1:8: immediate operand -1 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        );
+        assert_eq!(
+            assemble_err("SET $1,-5"),
+            "<test>:1:8: immediate operand -5 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        );
+        assert_eq!(
+            assemble_err("SET $1,-#10"),
+            "<test>:1:8: immediate operand -16 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        );
     }
 
     #[test]
@@ -9350,9 +9384,14 @@ Main    SETI    $1,7
         assert_first_instruction("SETL $1,0100", MMixInstruction::SETL(1, 100));
     }
 
+    /// The error keeps the decimal reading of a leading-zero literal
+    /// (`-010` reads `-10`); a leading zero is never octal.
     #[test]
-    fn test_negative_leading_zero_literal_wraps_as_decimal() {
-        assert_first_instruction("SET $1,-010", MMixInstruction::SETL(1, 0xFFF6));
+    fn test_negative_leading_zero_literal_is_an_error_reading_decimal() {
+        assert_eq!(
+            assemble_err("SET $1,-010"),
+            "<test>:1:8: immediate operand -10 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        );
     }
 
     #[test]
@@ -11525,5 +11564,287 @@ Main    SETI    $1,7
             assemble_err("Main\tBYTE\t,1\n\tTRAP\t0,Halt,0"),
             "<test>:1:11: syntax error: expected data_value"
         );
+    }
+
+    // ---- Every instruction field's edge, one field past it -------------
+
+    #[test]
+    fn test_instruction_field_edges_by_range_table() {
+        // Each of the sixteen wyde immediates is its own function.
+        assert_first_instruction("SETL $1,#FFFF", MMixInstruction::SETL(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("SETL $1,#10000"),
+            "<test>:1:9: immediate operand 65536 out of range 0..65535 for SETL"
+        );
+        assert_first_instruction("SETH $1,#FFFF", MMixInstruction::SETH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("SETH $1,#10000"),
+            "<test>:1:9: immediate operand 65536 out of range 0..65535 for SETH"
+        );
+        assert_first_instruction("SETMH $1,#FFFF", MMixInstruction::SETMH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("SETMH $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for SETMH"
+        );
+        assert_first_instruction("SETML $1,#FFFF", MMixInstruction::SETML(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("SETML $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for SETML"
+        );
+        assert_first_instruction("INCL $1,#FFFF", MMixInstruction::INCL(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("INCL $1,#10000"),
+            "<test>:1:9: immediate operand 65536 out of range 0..65535 for INCL"
+        );
+        assert_first_instruction("INCH $1,#FFFF", MMixInstruction::INCH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("INCH $1,#1FFFF"),
+            "<test>:1:9: immediate operand 131071 out of range 0..65535 for INCH"
+        );
+        assert_first_instruction("INCMH $1,#FFFF", MMixInstruction::INCMH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("INCMH $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for INCMH"
+        );
+        assert_first_instruction("INCML $1,#FFFF", MMixInstruction::INCML(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("INCML $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for INCML"
+        );
+        assert_first_instruction("ORH $1,#FFFF", MMixInstruction::ORH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ORH $1,#10000"),
+            "<test>:1:8: immediate operand 65536 out of range 0..65535 for ORH"
+        );
+        assert_first_instruction("ORMH $1,#FFFF", MMixInstruction::ORMH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ORMH $1,#10000"),
+            "<test>:1:9: immediate operand 65536 out of range 0..65535 for ORMH"
+        );
+        assert_first_instruction("ORML $1,#FFFF", MMixInstruction::ORML(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ORML $1,#10000"),
+            "<test>:1:9: immediate operand 65536 out of range 0..65535 for ORML"
+        );
+        assert_first_instruction("ORL $1,#FFFF", MMixInstruction::ORL(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ORL $1,#10000"),
+            "<test>:1:8: immediate operand 65536 out of range 0..65535 for ORL"
+        );
+        assert_first_instruction("ANDNH $1,#FFFF", MMixInstruction::ANDNH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ANDNH $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for ANDNH"
+        );
+        assert_first_instruction("ANDNMH $1,#FFFF", MMixInstruction::ANDNMH(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ANDNMH $1,#10000"),
+            "<test>:1:11: immediate operand 65536 out of range 0..65535 for ANDNMH"
+        );
+        assert_first_instruction("ANDNML $1,#FFFF", MMixInstruction::ANDNML(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ANDNML $1,#10000"),
+            "<test>:1:11: immediate operand 65536 out of range 0..65535 for ANDNML"
+        );
+        assert_first_instruction("ANDNL $1,#FFFF", MMixInstruction::ANDNL(1, 0xFFFF));
+        assert_eq!(
+            assemble_err("ANDNL $1,#10000"),
+            "<test>:1:10: immediate operand 65536 out of range 0..65535 for ANDNL"
+        );
+
+        // `parse_inst_arith_rri` (ADDI and its auto-immediate kin) and
+        // `parse_inst_load_store_rri` (LDBI and its kin): each a distinct
+        // function, its own byte-field check.
+        assert_first_instruction("ADDI $1,$2,255", MMixInstruction::ADDI(1, 2, 255));
+        assert_eq!(
+            assemble_err("ADDI $1,$2,256"),
+            "<test>:1:12: immediate operand 256 out of range 0..255 for ADDI"
+        );
+        assert_first_instruction("LDBI $1,$2,255", MMixInstruction::LDBI(1, 2, 255));
+        assert_eq!(
+            assemble_err("LDBI $1,$2,999"),
+            "<test>:1:12: immediate operand 999 out of range 0..255 for LDBI"
+        );
+
+        // `parse_rri`, the helper `LDUNCI` and fifteen other explicit `*I`
+        // three-operand spellings share.
+        assert_first_instruction("LDUNCI $1,$2,255", MMixInstruction::LDUNCI(1, 2, 255));
+        assert_eq!(
+            assemble_err("LDUNCI $1,$2,256"),
+            "<test>:1:14: immediate operand 256 out of range 0..255 for LDUNCI"
+        );
+
+        // `parse_inst_bitfiddle_rri`, `parse_inst_conditional_set_rri` and
+        // `parse_inst_zero_or_set_rri`: each its own Z check.
+        assert_first_instruction("BDIFI $1,$2,255", MMixInstruction::BDIFI(1, 2, 255));
+        assert_eq!(
+            assemble_err("BDIFI $1,$2,256"),
+            "<test>:1:13: immediate operand 256 out of range 0..255 for BDIFI"
+        );
+        assert_first_instruction("CSNI $1,$2,255", MMixInstruction::CSNI(1, 2, 255));
+        assert_eq!(
+            assemble_err("CSNI $1,$2,256"),
+            "<test>:1:12: immediate operand 256 out of range 0..255 for CSNI"
+        );
+        assert_first_instruction("ZSNI $1,$2,255", MMixInstruction::ZSNI(1, 2, 255));
+        assert_eq!(
+            assemble_err("ZSNI $1,$2,256"),
+            "<test>:1:12: immediate operand 256 out of range 0..255 for ZSNI"
+        );
+
+        // NEG/NEGU's Y (the auto-immediate path) and NEGI/NEGUI's own Y
+        // (the explicit-immediate path): two distinct functions.
+        assert_first_instruction("NEG $1,255,$2", MMixInstruction::NEG(1, 255, 2));
+        assert_eq!(
+            assemble_err("NEG $1,256,$2"),
+            "<test>:1:8: immediate operand 256 out of range 0..255 for NEG"
+        );
+        assert_first_instruction("NEGI $1,255,5", MMixInstruction::NEGI(1, 255, 5));
+        assert_eq!(
+            assemble_err("NEGI $1,256,$2"),
+            "<test>:1:9: immediate operand 256 out of range 0..255 for NEGI"
+        );
+
+        // The float rounding-mode forms: `FIX`'s explicit `Y`, `FLOT`'s
+        // forced `Y`, `FLOTI`'s three- and two-operand `Y`/`Z`.
+        assert_first_instruction("FIX $1,255,$2", MMixInstruction::FIX(1, 255, 2));
+        assert_eq!(
+            assemble_err("FIX $1,256,$2"),
+            "<test>:1:8: immediate operand 256 out of range 0..255 for FIX"
+        );
+        assert_first_instruction("FLOT $1,255,$2", MMixInstruction::FLOT(1, 255, 2));
+        assert_eq!(
+            assemble_err("FLOT $1,256,$2"),
+            "<test>:1:9: immediate operand 256 out of range 0..255 for FLOT"
+        );
+        assert_first_instruction("FLOTI $1,255,5", MMixInstruction::FLOTI(1, 255, 5));
+        assert_eq!(
+            assemble_err("FLOTI $1,256,5"),
+            "<test>:1:10: immediate operand 256 out of range 0..255 for FLOTI"
+        );
+        assert_first_instruction("FLOTI $1,1,255", MMixInstruction::FLOTI(1, 1, 255));
+        assert_eq!(
+            assemble_err("FLOTI $1,1,256"),
+            "<test>:1:12: immediate operand 256 out of range 0..255 for FLOTI"
+        );
+        assert_first_instruction("FLOTI $1,255", MMixInstruction::FLOTI(1, 0, 255));
+        assert_eq!(
+            assemble_err("FLOTI $1,256"),
+            "<test>:1:10: immediate operand 256 out of range 0..255 for FLOTI"
+        );
+
+        // GET's Z and PUT's X: a special register, 0..=31.
+        assert_first_instruction("GET $1,31", MMixInstruction::GET(1, 31));
+        assert_eq!(
+            assemble_err("GET $1,32"),
+            "<test>:1:8: immediate operand 32 out of range 0..31 for GET"
+        );
+        assert_first_instruction("PUT 31,$1", MMixInstruction::PUT(31, 1));
+        assert_eq!(
+            assemble_err("PUT 32,$1"),
+            "<test>:1:5: immediate operand 32 out of range 0..31 for PUT"
+        );
+
+        // PUTI's X (special register) and Z (byte) check independently.
+        assert_first_instruction("PUTI 31,255", MMixInstruction::PUTI(31, 255));
+        assert_eq!(
+            assemble_err("PUTI 32,1"),
+            "<test>:1:6: immediate operand 32 out of range 0..31 for PUTI"
+        );
+        assert_eq!(
+            assemble_err("PUTI 1,256"),
+            "<test>:1:8: immediate operand 256 out of range 0..255 for PUTI"
+        );
+
+        // SAVE's Z and UNSAVE's X.
+        assert_first_instruction("SAVE $1,255", MMixInstruction::SAVE(1, 255));
+        assert_eq!(
+            assemble_err("SAVE $255,256"),
+            "<test>:1:11: immediate operand 256 out of range 0..255 for SAVE"
+        );
+        assert_first_instruction("UNSAVE 255,$1", MMixInstruction::UNSAVE(255, 1));
+        assert_eq!(
+            assemble_err("UNSAVE 256,$1"),
+            "<test>:1:8: immediate operand 256 out of range 0..255 for UNSAVE"
+        );
+
+        // `STCOI`'s X and Z check independently.
+        assert_first_instruction("STCOI 255,$2,5", MMixInstruction::STCOI(255, 2, 5));
+        assert_eq!(
+            assemble_err("STCOI 256,$2,5"),
+            "<test>:1:7: immediate operand 256 out of range 0..255 for STCOI"
+        );
+        assert_first_instruction("STCOI 5,$2,255", MMixInstruction::STCOI(5, 2, 255));
+        assert_eq!(
+            assemble_err("STCOI 5,$2,256"),
+            "<test>:1:12: immediate operand 256 out of range 0..255 for STCOI"
+        );
+
+        // RESUME and SYNC take the full 24-bit XYZ.
+        assert_first_instruction("RESUME #FFFFFF", MMixInstruction::RESUME(0xFFFFFF));
+        assert_eq!(
+            assemble_err("RESUME #1000000"),
+            "<test>:1:8: immediate operand 16777216 out of range 0..16777215 for RESUME"
+        );
+        assert_first_instruction("SYNC #FFFFFF", MMixInstruction::SYNC(0xFFFFFF));
+        assert_eq!(
+            assemble_err("SYNC #1000000"),
+            "<test>:1:6: immediate operand 16777216 out of range 0..16777215 for SYNC"
+        );
+
+        // POP's X (byte), yz (wyde) and xyz (three bytes), both operand
+        // forms.
+        assert_first_instruction("POP 255,#FFFF", MMixInstruction::POP(255, 255, 255));
+        assert_eq!(
+            assemble_err("POP 256,0"),
+            "<test>:1:5: immediate operand 256 out of range 0..255 for POP"
+        );
+        assert_eq!(
+            assemble_err("POP 0,#10000"),
+            "<test>:1:7: immediate operand 65536 out of range 0..65535 for POP"
+        );
+        assert_first_instruction("POP #FFFFFF", MMixInstruction::POP(255, 255, 255));
+        assert_eq!(
+            assemble_err("POP #1000000"),
+            "<test>:1:5: immediate operand 16777216 out of range 0..16777215 for POP"
+        );
+
+        // TRAP's yz (wyde) and xyz (three bytes); both fit at their edge.
+        assert_eq!(
+            assemble_err("TRAP 0,#10000"),
+            "<test>:1:8: immediate operand 65536 out of range 0..65535 for TRAP"
+        );
+        assert_eq!(
+            assemble_err("TRAP #1000000"),
+            "<test>:1:6: immediate operand 16777216 out of range 0..16777215 for TRAP"
+        );
+        assert_first_instruction("TRAP 0,#FFFF", MMixInstruction::TRAP(0, 0xFF, 0xFF));
+        assert_first_instruction("TRAP #FFFFFF", MMixInstruction::TRAP(0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn test_resume_and_sync_encode_all_of_xyz() {
+        let asm = MMixAssembler::new("", "<test>");
+        assert_eq!(
+            asm.encode_instruction_bytes(&MMixInstruction::SYNC(300)),
+            vec![0xFC, 0x00, 0x01, 0x2C]
+        );
+        assert_eq!(
+            asm.encode_instruction_bytes(&MMixInstruction::RESUME(0x10203)),
+            vec![0xF9, 0x01, 0x02, 0x03]
+        );
+    }
+
+    // `SET $1,-1`/`-5`/`-#10` are covered by
+    // `test_set_negative_literal_is_an_error_for_decimal_and_hex`.
+    #[test]
+    fn test_set_wide_immediate_diagnostic_and_positive_forms() {
+        assert_eq!(
+            assemble_err("SET $1,#10000"),
+            "<test>:1:8: immediate operand 65536 out of range 0..65535 for SET; \
+             use SETI for a wider constant"
+        );
+        assert_first_instruction("SET $1,#FFFF", MMixInstruction::SETL(1, 0xFFFF));
+        assert_first_instruction("SETI $1,-1", MMixInstruction::SET(1, u64::MAX));
     }
 }

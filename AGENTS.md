@@ -54,8 +54,8 @@ Establish functionality from canonical reference prior to implementation
 - Prefer `SET $X,imm` over `SETI $X,imm`. For a non-negative operand below
   `#10000` the two leave the same register state, and `SET` does it in one tetra
   instead of four. Reach for `SETI` only for a wider constant; `SET` rejects one.
-  A negative literal is not interchangeable — `SET $X,-1` wraps into the low
-  wyde, `SETI $X,-1` builds the full 64-bit value.
+  A negative literal is not interchangeable — `SET $X,-1` is an error,
+  `SETI $X,-1` builds the full 64-bit value.
 - Leave existing `SETI` and `*I` spellings alone. They assemble unchanged, and
   rewriting them churns the regression corpus and shifts every later address.
 - Every mnemonic the assembler accepts belongs in
