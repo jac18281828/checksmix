@@ -1,5 +1,7 @@
 ;;; mmixdb.el --- gud mode for the mmixdb MMIX debugger -*- lexical-binding: t; -*-
 
+;;; Commentary:
+
 ;; Minimal GUD integration for `mmixdb'.  Provides `M-x mmixdb', which runs the
 ;; debugger under `gud-mode' with the standard GUD key bindings mapped onto
 ;; mmixdb's long command words.
@@ -30,6 +32,9 @@ regexp rather than a copy of it.")
   "Extract the current source line from mmixdb output.
 mmixdb's marker has gdb's `--fullname' shape, so this is gud's own gdb
 filter rather than a reimplementation of it.")
+
+(defvar mmixdb-mode-hook nil
+  "Hook run after `mmixdb' starts the debugger under `gud-mode'.")
 
 ;;;###autoload
 (defun mmixdb (command-line)
