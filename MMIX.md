@@ -102,7 +102,7 @@ the first blank.
 | Directive | Syntax | Effect |
 | --- | --- | --- |
 | `LOC` | `LOC expr` | Set the assembly location counter to *expr*; a label on the same line names the location *before* the move |
-| `GREG` | `[label] GREG expr` / `[label] GREG` | Allocate a global register initialized to *expr*, or to `0` with the operand omitted; optional label becomes a register alias; a nonzero value is a base address for the two-operand memory form |
+| `GREG` | `[label] GREG expr` / `[label] GREG` | Allocate a global register initialized to *expr*, or to `0` with the operand omitted; optional label becomes a register alias; a nonzero value is a base address for the two-operand memory form; at most 223 per program, `$254` down to `$32` |
 | `IS` | `Name IS expr` | Define a numeric or register alias constant |
 | `PREFIX` | `PREFIX str` | Qualify subsequent unqualified names as `str<name>`; names beginning with `:` opt out |
 | `BYTE` | `BYTE expr,...` | Emit one byte per operand |

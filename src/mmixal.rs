@@ -2425,11 +2425,17 @@ impl MMixAssembler {
                         Rule::greg_directive => {
                             // GREG allocates a global register; an attached
                             // label aliases the register, not an address.
-                            let allocated_reg = if self.next_greg == 0 {
-                                return Err(
-                                    "Too many GREG directives - ran out of global registers"
-                                        .to_string(),
-                                );
+                            // The reference starts the threshold at $255 and
+                            // refuses a GREG once it reaches $32, so $32
+                            // through $254 (223 registers) are the whole
+                            // supply.
+                            let allocated_reg = if self.next_greg < 32 {
+                                let (line, col) = directive_pair.line_col();
+                                return Err(format!(
+                                    "{}:{}:{}: GREG has no global register left: \
+                                     $32 through $254 are all allocated",
+                                    self.current_filename, line, col
+                                ));
                             } else {
                                 let reg = self.next_greg;
                                 self.next_greg -= 1;
@@ -11317,6 +11323,33 @@ Main    SETI    $1,7
             MMixInstruction::SETL(2, after_addr as u16)
         );
         assert_eq!(asm.instructions[1].1, MMixInstruction::LDAI(1, 254, 176));
+    }
+
+    #[test]
+    fn test_greg_limit_is_223_and_the_last_is_32() {
+        let mut source = String::new();
+        for i in 0..223 {
+            source.push_str(&format!("G{i}\tGREG\t0\n"));
+        }
+        source.push_str("Main\tHALT\n");
+        let mut asm = MMixAssembler::new(&source, "<test>");
+        asm.parse()
+            .unwrap_or_else(|e| panic!("223 GREGs must assemble: {e}"));
+        assert_eq!(asm.greg_inits.last().map(|&(reg, _)| reg), Some(32));
+    }
+
+    #[test]
+    fn test_the_224th_greg_reports_the_limit_at_its_line_and_column() {
+        let mut source = String::new();
+        for i in 0..224 {
+            source.push_str(&format!("G{i}\tGREG\t0\n"));
+        }
+        source.push_str("Main\tHALT\n");
+        assert_eq!(
+            assemble_err(&source),
+            "<test>:224:6: GREG has no global register left: \
+             $32 through $254 are all allocated"
+        );
     }
 
     // ---- Operand counts and kinds ----------------------------------------
