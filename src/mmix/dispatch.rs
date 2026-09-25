@@ -164,7 +164,6 @@ impl MMix {
         }
 
         match opcode {
-            // Floating Point instructions
             Opcode::TRAP => {
                 // TRAP X, YZ or TRAP X, Y, Z - Force trap interrupt
                 // X = 0 for immediate (YZ), X > 0 for register ($Y, $Z)
@@ -701,14 +700,6 @@ impl MMix {
                 self.advance_pc();
                 true
             }
-            Opcode::ADDU => {
-                // ADDU $X, $Y, $Z
-                binop_rr!(self, x, y, z, u64::wrapping_add)
-            }
-            Opcode::ADDUI => {
-                // ADDUI $X, $Y, Z
-                binop_ri!(self, x, y, z, u64::wrapping_add)
-            }
             // Opcodes 0xE0-0xE3. Each places YZ in its own wyde and zeroes the
             // other 48 bits; the INC/OR/ANDN families below preserve them.
             Opcode::SETH => {
@@ -919,8 +910,7 @@ impl MMix {
             }
             Opcode::LDVTS => {
                 // LDVTS $X, $Y, $Z - Load virtual translation status (simplified)
-                // In a full implementation, this would interact with virtual memory
-                // For now, return 0 (no translation)
+                // $X gets zero.
                 self.set_register(x, 0);
                 self.advance_pc();
                 true
@@ -1264,7 +1254,14 @@ impl MMix {
                 // ADDI $X, $Y, Z - Add signed immediate with overflow check
                 add_ri!(self, op_byte, x, y, z)
             }
-            // 0x22 and 0x23 are ADDU/ADDUI, already implemented above
+            Opcode::ADDU => {
+                // ADDU $X, $Y, $Z
+                binop_rr!(self, x, y, z, u64::wrapping_add)
+            }
+            Opcode::ADDUI => {
+                // ADDUI $X, $Y, Z
+                binop_ri!(self, x, y, z, u64::wrapping_add)
+            }
             Opcode::SUB => {
                 // SUB $X, $Y, $Z - Subtract signed with overflow check
                 sub_rr!(self, op_byte, x, y, z)
@@ -1313,7 +1310,7 @@ impl MMix {
                 // 16ADDUI $X, $Y, Z
                 muladd_ri!(self, x, y, z, 16)
             }
-            // CMP instructions - opcodes 0x30-0x33
+            // CMP and NEG instructions - opcodes 0x30-0x37
             Opcode::CMP => {
                 // CMP $X, $Y, $Z
                 cmp_rr!(self, x, y, z, |v| v as i64)
@@ -1883,7 +1880,7 @@ impl MMix {
                 true
             }
 
-            // Bitwise operations - opcodes 0xC0-0xCF, 0xD8-0xD9
+            // Bitwise operations - opcodes 0xC0-0xCF
             Opcode::OR => {
                 // OR $X, $Y, $Z
                 binop_rr!(self, x, y, z, |a, b| a | b)
