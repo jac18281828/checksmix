@@ -59,7 +59,8 @@ enum Command {
     },
     /// Assemble one or more .mms sources into a .mmo object file
     Build {
-        /// Output .mmo file (default: first input's basename with .mmo extension)
+        /// Output .mmo file (default: first input's path with .mmo
+        /// extension, beside the source)
         #[arg(short = 'o', long, value_name = "OUT.mmo")]
         output: Option<PathBuf>,
         /// MMIX assembly source file(s)

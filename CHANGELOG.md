@@ -32,6 +32,7 @@
 * The man pages no longer state a version
 * Each release attaches one archive per platform holding the three binaries, their man pages, the README and the licence, where it attached a bare `checksmix` before
 * Every example under `examples/` halts with 0 unless its header says otherwise; `fibonacci.mms` and `time.mms` print their results instead of returning them as the exit code
+* `mmixasm` no longer writes a listing of every label, symbol and instruction to standard error on a successful build; its errors and assembler warnings still do
 
 0.3.13 (2026-09-22)
 

@@ -19,7 +19,8 @@ struct Cli {
     #[arg(value_name = "INPUT.mms", required = true, num_args = 1..)]
     inputs: Vec<PathBuf>,
 
-    /// Output MMO file (defaults to first input's basename with .mmo)
+    /// Output MMO file (default: first input's path with .mmo extension,
+    /// beside the source)
     #[arg(short = 'o', long = "output", value_name = "OUTPUT.mmo")]
     output: Option<PathBuf>,
 }
@@ -83,26 +84,6 @@ fn main() {
     }
     for warning in assembler.warnings() {
         eprintln!("{}", warning);
-    }
-
-    // Debug: print labels and instructions
-    eprintln!("Labels:");
-    for (label, addr) in &assembler.labels {
-        eprintln!("  {} -> 0x{:X}", label, addr);
-    }
-    eprintln!("Symbols:");
-    for (symbol, value) in &assembler.symbols {
-        eprintln!("  {} = {}", symbol, value);
-    }
-    if !assembler.greg_inits.is_empty() {
-        eprintln!("Global Register Initializations:");
-        for (reg, value) in &assembler.greg_inits {
-            eprintln!("  ${} = 0x{:X}", reg, value);
-        }
-    }
-    eprintln!("Instructions ({}):", assembler.instructions.len());
-    for (addr, inst) in &assembler.instructions {
-        eprintln!("  0x{:X}: {:?}", addr, inst);
     }
 
     // Check if there are any instructions to assemble
