@@ -6,12 +6,10 @@ use super::*;
 // source_text): pc.1 of the mmixdb effort. ----------------------------
 
 /// Line fidelity across a labeled `debug` directive: the pinning test.
-/// Mirrors `examples/hello_world.mms`'s shape (a labeled `debug "..."`
-/// line, then a labeled instruction a couple of lines down). Reverting
-/// the `preprocess_debug` line-count-preserving fix (Step 1) -- i.e.
-/// restoring the old two-line label/PUSHJ expansion -- shifts every
-/// following line by one and makes this assertion fail; that was
-/// verified by hand before landing (see the prompt's report).
+/// A labeled `debug "..."` line, then a labeled instruction a couple of
+/// lines down. Reverting the `preprocess_debug` line-count-preserving
+/// fix -- i.e. restoring the old two-line label/PUSHJ expansion --
+/// shifts every following line by one and makes this assertion fail.
 #[test]
 fn test_debug_directive_preserves_line_fidelity() {
     let lines = [

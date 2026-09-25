@@ -1,7 +1,9 @@
 #![cfg(feature = "cli")]
 
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 fn checksmix() -> Command {
@@ -45,19 +47,35 @@ fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let stdout_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        stdout.read_to_end(&mut buf).unwrap();
+        buf
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        stderr.read_to_end(&mut buf).unwrap();
+        buf
+    });
     let deadline = Instant::now() + limit;
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             panic!("child exceeded {limit:?} wall clock; --max-steps failed to bound it");
         }
-        std::thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
+    };
+    Output {
+        status,
+        stdout: stdout_reader.join().unwrap(),
+        stderr: stderr_reader.join().unwrap(),
     }
-    child.wait_with_output().unwrap()
 }
 
 fn assert_exit_1_names_input(out: &Output, input: &str) {
@@ -787,5 +805,26 @@ fn run_overflowing_byte_warns_and_halts_cleanly() {
     assert!(
         stderr.contains(&overflow_warning()),
         "run should print the overflow warning; stderr: {stderr}"
+    );
+}
+
+// ── mmixasm: a clean build writes nothing to stderr ──────────────────────
+
+#[test]
+fn mmixasm_clean_build_writes_nothing_to_stderr() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_mmixasm_clean_build.mmo");
+    let mut cmd = mmixasm();
+    cmd.args(["-o"]).arg(&tmp_mmo).arg(fixture("hello.mms"));
+    let out = hermetic_output(&mut cmd);
+    let _ = std::fs::remove_file(&tmp_mmo);
+    assert!(
+        out.status.success(),
+        "a clean build should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "mmixasm should write nothing to stderr on a clean build; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
