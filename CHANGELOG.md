@@ -8,6 +8,8 @@
 * `checksmix --max-steps N` and `checksmix run --max-steps N` stop an MMIX program, `.mms` or `.mmo`, that has not halted after N instructions, print `program did not halt within N instructions; @ = #…` on stderr and exit 124; without the flag a program runs until it halts, as before
 * **Breaking: `Fopen`'s name is the guest's bytes, passed to the host unchanged.** `BYTE "é.txt",0` no longer opens `é.txt`; name it by its UTF-8 bytes instead, `BYTE #C3,#A9,".txt",0`. A name is never truncated, so one longer than 256 bytes now opens. The trade: a file whose name is not valid UTF-8, such as a Latin-1 name on a Linux filesystem, cannot be opened
 * `Fputs` and `Fputws` cap each call at 1,048,576 bytes and 524,288 wydes, up from 10,000 and 5,000, a documented departure from the reference, which has none. Every string that wrote whole still does; one between the old and new bound now writes whole too; one past the new bound was already cut, and is cut later
+* **Breaking: a character constant, and each character of a string constant, is the character's Unicode value.** `'é'` is `#E9`, `'算'` is `#7B97`; a bare character constant is no longer ASCII-only. In a `WYDE`, `TETRA` or `OCTA` list, a string character above `#FF` now takes its own code point instead of its low byte alone; `WYDE "π"` assembles `#03C0`, not `#00C0`
+* **Breaking: `debug "text"` writes non-ASCII text as its own UTF-8 bytes**, not one truncated byte per character; `debug "€"` now writes `E2 82 AC`, not `AC`
 
 0.3.13 (2026-09-22)
 

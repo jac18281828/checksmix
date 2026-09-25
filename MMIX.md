@@ -1,6 +1,6 @@
 # MMIX Instruction Quick Reference
 
-MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), or character literals — one quote, one character, one quote, the character possibly a quote itself, so `'''` is the apostrophe; every operand is an MMIXAL expression (see "Expressions" below). A leading `0` is an ordinary decimal digit, as in MMIXAL — `SET $1,010` loads 10, and there is no octal spelling. A string literal has no escape mechanism either: its content is exactly what it spells, one byte per character (a data directive's own per-character rule for a string is in "Assembler directives" below).
+MMIX is a 64-bit big-endian RISC machine (Knuth, 1999) with 256 general-purpose registers (`$0`–`$255`), a separate special-register file, byte-addressed memory, and fixed 32-bit instructions. Immediates in assembly may be decimal, hexadecimal (`#`-prefixed, or `0x`/`0X`-prefixed — also a checksmix extension), or character literals — one quote, one character, one quote, the character possibly a quote itself, so `'''` is the apostrophe; a character literal's value is that character's Unicode scalar value: `'é'` is `#E9`, `'算'` is `#7B97`. Every operand is an MMIXAL expression (see "Expressions" below). A leading `0` is an ordinary decimal digit, as in MMIXAL — `SET $1,010` loads 10, and there is no octal spelling. A string literal has no escape mechanism either: its content is exactly what it spells, one unit per character, each its character's constant (a data directive's own per-character rule for a string is in "Assembler directives" below).
 
 ## Memory access
 
@@ -541,8 +541,8 @@ program order across every translation unit assembled together. `K` is one
 byte, so a 257th `debug` directive in one program is an assembly error
 naming its file and line.
 
-The directive's text is taken exactly as written between the quotes, one
-byte per character, and lives in a table outside guest memory: nothing is
+The directive's text is taken exactly as written between the quotes, as its
+own UTF-8 bytes, and lives in a table outside guest memory: nothing is
 written to guest memory and no label is generated. Running the TRAP writes
 the string and a newline (`#0A`) to handle 1, changing no register —
 `$255` included. A `K` past the table's end prints nothing and reports a

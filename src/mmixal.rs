@@ -934,12 +934,12 @@ impl DataAtoms {
         }
     }
 
-    fn from_bytes(first: u8, rest: Vec<u8>) -> Self {
+    fn from_chars(first: u32, rest: Vec<u32>) -> Self {
         DataAtoms {
             head: ExprValue::Pure(first as u64),
             tail: rest
                 .into_iter()
-                .map(|byte| ExprValue::Pure(byte as u64))
+                .map(|ch| ExprValue::Pure(ch as u64))
                 .collect(),
         }
     }
@@ -1158,7 +1158,11 @@ impl MMixAssembler {
                         result.push_str(label);
                         result.push_str(&format!("\tTRAP\t0,Debug,{k}\n"));
                     }
-                    strings.push(Self::decode_byte_string(&caps[2]));
+                    // debug text keeps the source's UTF-8 bytes: it lives
+                    // outside guest memory, going straight to the host's
+                    // handle 1, not through a data directive's per-character
+                    // value.
+                    strings.push(caps[2].as_bytes().to_vec());
                 }
                 None => {
                     result.push_str(line);
@@ -1171,12 +1175,12 @@ impl MMixAssembler {
         (result, strings, overflow)
     }
 
-    /// Decode a data directive's string literal content into the bytes it
-    /// represents: one byte per character, keeping only its low byte. Every
-    /// caller across both passes and `debug` text goes through this single
-    /// function so none can disagree with another on a string's size.
-    fn decode_byte_string(content: &str) -> Vec<u8> {
-        content.chars().map(|ch| ch as u8).collect()
+    /// Decode a data directive's string literal content into the values it
+    /// represents: one item per character, its Unicode scalar value. Both
+    /// passes go through this single function so neither can disagree with
+    /// the other on a string's size.
+    fn decode_char_values(content: &str) -> Vec<u32> {
+        content.chars().map(|ch| ch as u32).collect()
     }
 
     /// Insert a predefined symbol at its root-namespace key. The root
@@ -5069,24 +5073,25 @@ impl MMixAssembler {
             .ok_or_else(|| "Missing data expression".to_string())
     }
 
-    /// A `string_literal`'s content, decoded to its first byte and the
-    /// rest. Rejects an empty string with an error at its own position;
-    /// the one exemption, `BYTE ""` standing entirely alone, is caught by
-    /// [`Self::is_bare_empty_string`] before either pass reaches this.
+    /// A `string_literal`'s content, decoded to its first character's
+    /// Unicode scalar value and the rest. Rejects an empty string with an
+    /// error at its own position; the one exemption, `BYTE ""` standing
+    /// entirely alone, is caught by [`Self::is_bare_empty_string`] before
+    /// either pass reaches this.
     fn decode_data_string_literal(
         &self,
         string_pair: &pest::iterators::Pair<Rule>,
-    ) -> Result<(u8, Vec<u8>), String> {
+    ) -> Result<(u32, Vec<u32>), String> {
         let (line, col) = string_pair.line_col();
         let text = string_pair.as_str();
-        let mut bytes = Self::decode_byte_string(&text[1..text.len() - 1]).into_iter();
-        let first = bytes.next().ok_or_else(|| {
+        let mut values = Self::decode_char_values(&text[1..text.len() - 1]).into_iter();
+        let first = values.next().ok_or_else(|| {
             format!(
                 "{}:{}:{}: an empty string is not a value inside an expression",
                 self.current_filename, line, col
             )
         })?;
-        Ok((first, bytes.collect()))
+        Ok((first, values.collect()))
     }
 
     /// Evaluate a `data_value` (a `data_expr`) into the values it
@@ -5176,8 +5181,8 @@ impl MMixAssembler {
                 Ok(atoms)
             }
             Rule::string_literal => {
-                let (first_byte, rest) = self.decode_data_string_literal(&first)?;
-                Ok(DataAtoms::from_bytes(first_byte, rest))
+                let (first_char, rest) = self.decode_data_string_literal(&first)?;
+                Ok(DataAtoms::from_chars(first_char, rest))
             }
             _ => Ok(DataAtoms::one(self.eval_expr(first)?)),
         }
@@ -5255,14 +5260,7 @@ impl MMixAssembler {
                 let ch = inner.chars().next().ok_or_else(|| {
                     "grammar admits exactly one character between the quotes".to_string()
                 })?;
-
-                if !ch.is_ascii() {
-                    return Err(format!(
-                        "Line {}:{}: Char literal must be ASCII byte, got {:?}",
-                        line, col, ch
-                    ));
-                }
-                ch as u8 as u64
+                ch as u32 as u64
             }
             // A digit string the grammar matched always has a value: a hex
             // or decimal constant of 2^64 or more reduces mod 2^64, the
@@ -6416,12 +6414,6 @@ mod tests {
         let mut asm = MMixAssembler::new("ANDI $1, $2, 'A'", "<test>");
         asm.parse().unwrap();
         assert_eq!(asm.instructions[0].1, MMixInstruction::ANDI(1, 2, 65));
-    }
-
-    #[test]
-    fn test_parse_char_literal_non_ascii_error() {
-        let mut asm = MMixAssembler::new("ANDI $1, $2, 'Ā'", "<test>");
-        assert!(asm.parse().is_err());
     }
 
     #[test]
@@ -11083,6 +11075,58 @@ Main    SETI    $1,7
         assert_first_instruction("SET $1,'0'", MMixInstruction::SETL(1, 48));
         assert_first_instruction("SET $1,'%'", MMixInstruction::SETL(1, 37));
         assert_first_instruction("SET $1,';'", MMixInstruction::SETL(1, 59));
+    }
+
+    #[test]
+    fn test_char_literal_takes_any_characters_unicode_scalar_value() {
+        // p. 37 rule 2(c): a character constant is the Unicode value of
+        // the quoted character.
+        assert_first_instruction("SET $1,'é'", MMixInstruction::SETL(1, 0xE9));
+        assert_first_instruction("SET $1,'π'", MMixInstruction::SETL(1, 0x3C0));
+        assert_first_instruction("SET $1,'Ω'", MMixInstruction::SETL(1, 0x3A9));
+    }
+
+    #[test]
+    fn test_wyde_char_and_string_literals_take_their_code_point() {
+        // p. 37, the paragraph after rule 2: a string stands for the
+        // character constants of its characters.
+        assert_first_instruction("WYDE '算'", MMixInstruction::WYDE(0x7B97));
+        assert_first_instruction("WYDE \"π\"", MMixInstruction::WYDE(0x03C0));
+    }
+
+    #[test]
+    fn test_octa_string_takes_the_characters_full_code_point() {
+        assert_first_instruction("OCTA \"€\"", MMixInstruction::OCTA(0x20AC));
+    }
+
+    #[test]
+    fn test_wyde_string_combines_its_code_point_with_an_operator() {
+        assert_first_instruction("WYDE \"π\"+1", MMixInstruction::WYDE(0x03C1));
+    }
+
+    #[test]
+    fn test_byte_string_char_below_0x100_takes_its_code_point() {
+        // A BYTE string's character takes its code point value; below
+        // #100 that value fits the byte directly.
+        assert_first_instruction("BYTE \"é\"", MMixInstruction::BYTE(0xE9));
+    }
+
+    #[test]
+    fn test_wyde_string_label_offset_counts_characters_not_utf8_bytes() {
+        // A string contributes one item per character, not per UTF-8
+        // byte: "πé" is two WYDE items, six bytes, regardless of either
+        // character's own value. Checks the label against the address
+        // `L`'s own instruction actually lands at, not only the label
+        // map.
+        let mut asm = MMixAssembler::new("W WYDE \"πé\",0\nL BYTE 1", "<test>");
+        asm.parse().unwrap();
+        let w = *asm.labels.get("W").unwrap();
+        let l = *asm.labels.get("L").unwrap();
+        assert_eq!(l, w + 6);
+        assert_eq!(
+            asm.instructions.iter().find(|(addr, _)| *addr == l),
+            Some(&(l, MMixInstruction::BYTE(1)))
+        );
     }
 
     #[test]

@@ -603,6 +603,16 @@ Main\tdebug\t\"hi\"
     assert_eq!(mmix.get_register(1), 7);
 }
 
+/// `debug "text"` writes the source text's own UTF-8 bytes: `€`
+/// (U+20AC) is `E2 82 AC`, three bytes, not its low byte alone.
+#[test]
+fn test_debug_directive_writes_non_ascii_text_as_utf8_bytes() {
+    let source = "\tLOC\t#100\nMain\tdebug\t\"€\"\n\tTRAP\t0,Halt,0\n";
+    let (_, stop, stdout) = assemble_and_run_bounded(source, 1_000);
+    assert_eq!(stop, Stop::Halted);
+    assert_eq!(stdout.as_bytes(), [0xE2, 0x82, 0xAC, b'\n']);
+}
+
 /// `TRAP 0,Debug,K` writes its string and a newline to handle 1 and
 /// changes no register -- not even `$255`. Reverting to the stub
 /// expansion (a `JMP`/`SAVE`/`GETA`/`TRAP`/`UNSAVE` sequence) would move
