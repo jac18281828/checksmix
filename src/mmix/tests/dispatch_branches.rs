@@ -617,3 +617,26 @@ fn test_goi() {
     assert_eq!(mmix.get_register(1), 4); // Return address
     assert_eq!(mmix.get_pc(), 5200); // Jump to 5000 + 200
 }
+
+#[test]
+fn test_go_at_top_of_memory_wraps_return_address() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0xFFFFFFFFFFFFFFFC);
+    mmix.set_register(2, 1000);
+    mmix.set_register(3, 24);
+    mmix.write_tetra(0xFFFFFFFFFFFFFFFC, 0x9E010203); // GO $1,$2,$3
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0); // @+4 wraps to 0
+    assert_eq!(mmix.get_pc(), 1024); // Jump to 1000 + 24
+}
+
+#[test]
+fn test_goi_at_top_of_memory_wraps_return_address() {
+    let mut mmix = MMix::new();
+    mmix.set_pc(0xFFFFFFFFFFFFFFFC);
+    mmix.set_register(2, 5000);
+    mmix.write_tetra(0xFFFFFFFFFFFFFFFC, 0x9F0102C8); // GOI $1,$2,200
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(1), 0); // @+4 wraps to 0
+    assert_eq!(mmix.get_pc(), 5200); // Jump to 5000 + 200
+}

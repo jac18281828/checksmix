@@ -952,16 +952,17 @@ impl MMix {
                 true
             }
             Opcode::GO => {
-                // GO $X, $Y, $Z - Go to location
+                // GO $X, $Y, $Z - Go to location. u($X) <- @+4 mod 2^64,
+                // per the Instruction Reference's GO page.
                 let addr = self.get_register(y).wrapping_add(self.get_register(z));
-                self.set_register(x, self.pc + 4); // Save return address
+                self.set_register(x, self.pc.wrapping_add(4));
                 self.pc = addr;
                 true
             }
             Opcode::GOI => {
-                // GOI $X, $Y, Z - Go to location immediate
+                // GOI $X, $Y, Z - Go to location immediate. Same rule as GO.
                 let addr = self.get_register(y).wrapping_add(z as u64);
-                self.set_register(x, self.pc + 4); // Save return address
+                self.set_register(x, self.pc.wrapping_add(4));
                 self.pc = addr;
                 true
             }
