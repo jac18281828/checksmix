@@ -323,7 +323,7 @@ Construct one on the thread that runs it, and wrap it in
 MMIX is Knuth's "pretty clean" machine architecture, and he documented it himself:
 
 - [Knuth's MMIX page](https://www-cs-faculty.stanford.edu/~knuth/mmix.html): the
-  canonical home: design rationale, current news, and why MIX was retired.
+  canonical home: design rationale and current news.
 - [*The Art of Computer Programming*](https://www-cs-faculty.stanford.edu/~knuth/taocp.html),
   Volume 1 Fascicle 1, *MMIX: A RISC Computer for the New Millennium* (2005): the
   instruction set as Knuth teaches it, and the shortest path in.
@@ -340,12 +340,6 @@ runs here.
   per-instruction reference.
 - [*MMIXware: A RISC Computer for the Third Millennium*](https://www-cs-faculty.stanford.edu/~knuth/mmixware.html):
   the full definition of MMIX, with an assembler and simulator (Springer LNCS 1750, 1999).
-
-## Legacy MIX
-
-`checksmix` began as a MIX emulator. `.mix` and `.mixal` files still run through
-`checksmix` ([`example.mix`](examples/example.mix) is one), but MMIX is the target
-and new work belongs in `.mms`.
 
 ## Contribute
 

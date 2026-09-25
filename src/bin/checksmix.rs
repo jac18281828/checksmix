@@ -1,6 +1,6 @@
 use checksmix::{
-    MMix, MMixAssembler, Mix, MmoDecoder, MmoGenerator, Program, ValueFormat, entry_point,
-    start_program, write_image,
+    MMix, MMixAssembler, MmoDecoder, MmoGenerator, ValueFormat, entry_point, start_program,
+    write_image,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -11,7 +11,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 #[derive(Parser, Debug)]
 #[command(
     name = "checksmix",
-    about = "Run MIX/MMIX programs and assemblers",
+    about = "Run MMIX programs and assemblers",
     version,
     author,
     args_conflicts_with_subcommands = true,
@@ -26,8 +26,8 @@ struct Cli {
     unsigned: bool,
 
     /// Program file(s) to execute. A single file dispatches by extension
-    /// (.mix/.mixal/.mms/.mmo); multiple files must all be .mms and are
-    /// assembled into one shared symbol space before execution.
+    /// (.mms/.mmo); multiple files must all be .mms and are assembled into
+    /// one shared symbol space before execution.
     #[arg(required = true, num_args = 1..)]
     program_files: Vec<String>,
 }
@@ -96,7 +96,6 @@ fn dispatch_run(program_files: &[String], value_format: ValueFormat) {
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
         match extension {
-            "mix" | "mixal" => run_mix(program_file),
             "mms" => run_mms(program_files, value_format),
             "mmo" => run_mmo(program_file, value_format),
             _ => {
@@ -108,7 +107,7 @@ fn dispatch_run(program_files: &[String], value_format: ValueFormat) {
                         extension
                     }
                 );
-                eprintln!("Supported extensions: .mix, .mixal, .mms, .mmo");
+                eprintln!("Supported extensions: .mms, .mmo");
                 process::exit(1);
             }
         }
@@ -183,45 +182,6 @@ fn cmd_build(files: &[PathBuf], output: Option<&Path>) {
         process::exit(1);
     });
     println!("{}", out_path.display());
-}
-
-fn run_mix(filename: &str) {
-    let input = fs::read_to_string(filename).unwrap_or_else(|err| {
-        eprintln!("Error reading file '{}': {}", filename, err);
-        process::exit(1);
-    });
-
-    println!("=== MIX Computer ===");
-    println!("=== Loading program from: {} ===", filename);
-    println!();
-
-    let mut program = Program::new(&input);
-    if let Err(err) = program.parse() {
-        eprintln!("Error: {}", err);
-        process::exit(1);
-    }
-
-    println!(
-        "Program loaded successfully with {} instructions",
-        program.instruction_count()
-    );
-    println!();
-
-    let mut mix = Mix::new();
-
-    println!("=== Initial Machine State ===");
-    println!("{}", mix);
-    println!();
-
-    println!("=== Executing Program ===");
-    mix.execute(&program);
-    println!();
-
-    println!("=== Final Machine State ===");
-    println!("{}", mix);
-    println!();
-
-    println!("Execution completed.");
 }
 
 fn run_mms(filenames: &[String], value_format: ValueFormat) {

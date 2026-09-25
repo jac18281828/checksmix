@@ -41,7 +41,6 @@ cli = ["dep:clap", "dep:rustyline", "dep:tracing-subscriber"]
 [dependencies]
 pest = "2.7"
 pest_derive = "2.8"
-lyn = "0.1.0"
 tracing = "0.1.44"
 regex = "1.12"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }

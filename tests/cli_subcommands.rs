@@ -235,6 +235,21 @@ fn run_all_instructions_test_has_no_debug_write_byte_noise() {
     );
 }
 
+// ── run: an unrecognized extension names what runs ──────────────────────────
+
+#[test]
+fn run_unknown_extension_exits_1_and_lists_supported_extensions() {
+    let out = checksmix().arg("program.txt").output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "unknown extension exits 1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line == "Supported extensions: .mms, .mmo"),
+        "stderr should list the supported extensions; stderr: {stderr}"
+    );
+}
+
 // ── build/mmixasm: a program with a GREG carries it in the postamble ────────
 
 fn find_lop_post(mmo_data: &[u8]) -> usize {

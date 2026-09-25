@@ -23,11 +23,6 @@ is a fast MMIX emulator. It can parse and execute MMIX assembly
 .RB ( .mms )
 directly, or load MMIX object files
 .RB ( .mmo ).
-Legacy MIX programs
-.RB ( .mix
-or
-.BR .mixal )
-are also supported.
 .PP
 When invoked with a file (or without a subcommand), the default behavior is
 .BR run .
@@ -56,15 +51,13 @@ source files into a single
 .B .mmo
 object file. Multiple inputs are assembled into one shared symbol space.
 .SH EXIT STATUS
-For an MMIX program
-.RB ( .mms " or " .mmo ),
 .B run
 exits with
 .B $255
 mod 256 when the program executes
 .BR "TRAP 0,Halt,0" ,
 and with 1 when assembly or loading fails or the machine halts any other
-way. A MIX program exits 0 unless it fails to load.
+way.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG
