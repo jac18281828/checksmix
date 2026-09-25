@@ -29,6 +29,7 @@
 * The published crate drops the repository's integration tests and its CI, editor, container and agent files (`tests/`, `.github/`, `.vscode/`, `.devcontainer/`, `Dockerfile`, `CLAUDE.md`, `AGENTS.md`, `commitlint.config.js`), and takes the README's description
 * `contrib/mmix-mode.el` loads on Emacs 29 again. Since 0.3.10 it called `string-remove-suffix` and `string-remove-prefix` without requiring `subr-x`, which defines them there, so on Emacs 29 fontifying any buffer failed with `void-function string-remove-suffix`; later Emacs defines them in core, which hid it
 * Every example under `examples/` halts with 0 unless its header says otherwise; `fibonacci.mms` and `time.mms` print their results instead of returning them as the exit code
+* `mmixasm` no longer writes a listing of every label, symbol and instruction to standard error on a successful build; its errors and assembler warnings still do
 
 0.3.13 (2026-09-22)
 
