@@ -16,23 +16,31 @@ runs wrong, or a whole feature.
 ## Before you push
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo check
+cargo fmt --check
+cargo clippy --all-targets --all-features --no-deps -- -D warnings
 cargo test
-cargo test --no-default-features
+cargo run --release --bin checksmix -- run examples/all_instructions_test.mms
 cargo check --lib --no-default-features --target wasm32-unknown-unknown
-cargo run --release --bin checksmix -- examples/all_instructions_test.mms
+cargo test --no-default-features
 ```
 
-The last one prints `All tests passed!` and exits 0. Green on all of them,
-and green in CI.
+The `cargo run` line prints `All tests passed!` and exits 0. Green on all of
+them, and green in CI.
+
+`tests/soundness.rs` runs whole programs and checks each two ways: a known
+answer, worked out without running `checksmix`, and a golden state dump
+under `tests/resources/soundness/golden/`. A red golden with a green known
+answer means the machine state moved.
+`CHECKSMIX_REWRITE_GOLDEN=1 cargo test --test soundness` retakes the goldens
+— run it only when that change is intended.
 
 ## Tests
 
 Add tests for behavior changes, and prove each one fails when its target
 breaks: break the code on purpose, watch the test go red, put it back. A
-vacuous test covers nothing. Unit tests are hermetic: no network, no files
-outside the checked-in tree. Integration tests under `tests/` may read files.
+vacuous test covers nothing. Unit tests must be hermetic: no network, no
+external files or assets. Integration tests under `tests/` may read files.
 
 Every mnemonic the assembler accepts belongs in
 `examples/all_instructions_test.mms`, in both operand forms where both exist.
