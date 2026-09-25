@@ -131,7 +131,9 @@ error.
 .TP
 .BR "set " \fITARGET\fR " " \fIVALUE\fR
 Write a general register, a special register, or the memory octa at a hex
-address's aligned 8-byte base. A symbol whose type is a register alias
+address's aligned 8-byte base. \fBrL\fR accepts at most \fBrG\fR; \fBrG\fR
+accepts 32\-255 and at least \fBrL\fR; any other value is rejected and
+changes nothing. A symbol whose type is a register alias
 (produced by \fBGREG\fR or by an \fBIS\fR bound to a register, e.g.
 \fBSp\fR) is settable the same way; a plain label and a symbol whose type
 is a constant (an \fBIS\fR bound to a non-register value) are not \(em

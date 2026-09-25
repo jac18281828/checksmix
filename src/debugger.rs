@@ -660,6 +660,9 @@ impl Debugger {
             return self.write_register_and_report(n, parsed);
         }
         if let Some(reg) = special_reg_from_name(target) {
+            if let Some(err) = self.rejected_special_set(reg, parsed) {
+                return err;
+            }
             self.mmix.set_special(reg, parsed);
             return format!("{target} = {}", format_value(parsed, self.format));
         }
@@ -675,6 +678,27 @@ impl Debugger {
         format!(
             "No settable target \"{target}\" (register, special register, or hex memory address only)"
         )
+    }
+
+    /// `set`'s bound on rL and rG, the two special registers that index the
+    /// register file: an out-of-range value there panics `save_context` or
+    /// corrupts the machine, where every other special register's excess
+    /// bits are only data. rL accepts at most rG, raising included; rG
+    /// accepts `PUT rG`'s own range, 32-255 and at least rL. `None` when
+    /// `value` is in range, or `reg` is neither register.
+    fn rejected_special_set(&self, reg: SpecialReg, value: u64) -> Option<String> {
+        match reg {
+            SpecialReg::RL => {
+                let rg = self.mmix.get_special(SpecialReg::RG);
+                (value > rg).then(|| format!("Invalid rL {value}: must not exceed rG={rg}"))
+            }
+            SpecialReg::RG => {
+                let rl = self.mmix.get_special(SpecialReg::RL);
+                (!(32..=255).contains(&value) || value < rl)
+                    .then(|| format!("Invalid rG {value}: must be 32-255 and at least rL={rl}"))
+            }
+            _ => None,
+        }
     }
 
     fn write_register_and_report(&mut self, n: u8, value: u64) -> String {
@@ -828,7 +852,7 @@ run/reset     r, run                           Reset to the freshly-loaded image
 break         b <line>, b <label>, b <addr>, break …   Set a breakpoint at a source line, label, or hex address.
 delete        d, delete, d <line>, d <label>, d <addr>   Delete one breakpoint, or every breakpoint given no argument.
 print         p <arg>, print <arg>             Print a register, special register, label address, IS/GREG symbol, or the memory octa at the address's aligned base. p/f and p/x, attached or detached, print it as an IEEE double or in hex.
-set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not.
+set           set <target> <value>             Write a register, special register, or the memory octa at a hex address; a register-aliasing symbol (GREG or register-valued IS) is settable, a label or constant-valued IS symbol is not. rL accepts at most rG and rG accepts 32-255 and at least rL; any other value is rejected and changes nothing.
 state         bt, backtrace, info reg, info registers   Print the full register dump.
 breakpoints   info break, info breakpoints     List every currently-set breakpoint with its source location.
 list          l, list                          Print source lines around the current PC.
@@ -1974,6 +1998,11 @@ AddFunc\tADDU\t$0,$0,$1
 
     const MINIMAL_PROGRAM: &str = "\tLOC\t#100\nMain\tTRAP\t0,Halt,0\n";
 
+    /// No `GREG`, so `derive_rg` gives rG = 255 and rL starts at 0.
+    /// `SAVE` indexes `general_regs` by rL, so an out-of-range `set rL`
+    /// that reached it would panic `save_context`.
+    const SAVE_PROGRAM: &str = "\tLOC\t#100\nMain\tSAVE\t$255,0\n\tTRAP\t0,Halt,0\n";
+
     /// `Limit` is a constant-valued `IS` symbol -- not a storage location,
     /// and not settable, distinct from a register-aliasing `GREG`/`IS $N`
     /// symbol.
@@ -2056,6 +2085,57 @@ Main\tTRAP\t0,Halt,0
         let above_ra_max = crate::mmix::RA_MAX + 1;
         dbg.do_set(name.to_string(), format!("0x{above_ra_max:x}"));
         assert_eq!(dbg.mmix.get_special(SpecialReg::RA), above_ra_max);
+    }
+
+    /// `set rL` above rG is rejected, rL unchanged, and `SAVE` (which
+    /// indexes `general_regs` by rL) still runs without a panic.
+    #[test]
+    fn set_rl_above_rg_is_rejected_and_save_still_runs() {
+        let mut dbg = Debugger::load(assemble(SAVE_PROGRAM, "save.mms"));
+
+        let msg = dbg.do_set(SpecialReg::RL.name().to_string(), "300".to_string());
+        assert_eq!(msg, "Invalid rL 300: must not exceed rG=255");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+
+        let msg = dbg.do_set(SpecialReg::RL.name().to_string(), "256".to_string());
+        assert_eq!(msg, "Invalid rL 256: must not exceed rG=255");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+
+        dbg.execute(Command::Stepi); // SAVE $255,0 -- must not panic
+        assert_eq!(dbg.mmix.get_pc(), 0x104);
+    }
+
+    /// `set rG` outside 32-255, or below rL, is rejected and rG unchanged.
+    #[test]
+    fn set_rg_outside_put_specials_range_is_rejected() {
+        let mut dbg = Debugger::load(assemble(SAVE_PROGRAM, "save.mms"));
+
+        let msg = dbg.do_set(SpecialReg::RG.name().to_string(), "31".to_string());
+        assert_eq!(msg, "Invalid rG 31: must be 32-255 and at least rL=0");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 255);
+
+        let msg = dbg.do_set(SpecialReg::RG.name().to_string(), "256".to_string());
+        assert_eq!(msg, "Invalid rG 256: must be 32-255 and at least rL=0");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 255);
+    }
+
+    /// `set rG` and `set rL` accept a value that keeps rL <= rG, and the
+    /// rL rejection above `rG`'s new value names that value.
+    #[test]
+    fn set_rg_then_rl_accepts_within_the_new_bound() {
+        let mut dbg = Debugger::load(assemble(SAVE_PROGRAM, "save.mms"));
+
+        let msg = dbg.do_set(SpecialReg::RG.name().to_string(), "40".to_string());
+        assert_eq!(msg, "rG = 40");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 40);
+
+        let msg = dbg.do_set(SpecialReg::RL.name().to_string(), "41".to_string());
+        assert_eq!(msg, "Invalid rL 41: must not exceed rG=40");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 0);
+
+        let msg = dbg.do_set(SpecialReg::RL.name().to_string(), "40".to_string());
+        assert_eq!(msg, "rL = 40");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 40);
     }
 
     /// `set` reaches `Command::execute`'s dispatch, not just `do_set`

@@ -19,6 +19,7 @@
 * **Breaking: a bare `""` in a data list assembles as one zero unit of the directive's width and warns**, shifting the address of anything after it; the same empty string beside an operator or inside parentheses keeps its existing error
 * **Breaking: `Fwrite` moves at most 1,048,576 bytes a call.** A larger `size` writes the first 1,048,576 bytes and returns the short write's `n − size`, where it used to size a host allocation from the guest's own count. `Fread`/`Fwrite` read `size` as a full octabyte on every target
 * `GO` and `GOI` store `@+4` mod 2^64: a release build already wrapped the return address silently at the top of memory; a debug build no longer panics there
+* **Breaking: mmixdb's `set` rejects an rL or rG the register file cannot hold.** `set rL` now accepts at most rG and `set rG` accepts 32-255 and at least rL; a value outside those bounds used to take effect and could panic or corrupt the machine on the next `SAVE`, `PUSHJ` or `POP`
 
 0.3.13 (2026-09-22)
 
