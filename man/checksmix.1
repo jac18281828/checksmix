@@ -1,6 +1,6 @@
 .TH CHECKSMIX 1 "2026-09-22" "checksmix 0.3.14"
 .SH NAME
-checksmix \- run MMIX assembly or object files with a lightweight emulator
+checksmix \- run MMIX assembly or object files
 .SH SYNOPSIS
 .B checksmix
 .RI [ options ]
@@ -19,7 +19,7 @@ checksmix \- run MMIX assembly or object files with a lightweight emulator
 .I FILE.mms...
 .SH DESCRIPTION
 .B checksmix
-is a fast MMIX emulator. It can parse and execute MMIX assembly
+is an MMIX emulator. It can parse and execute MMIX assembly
 .RB ( .mms )
 directly, or load MMIX object files
 .RB ( .mmo ).
@@ -60,6 +60,11 @@ print any assembler warning to standard error the same way
 does; a warning never fails the run.
 .SH OPTIONS
 .TP
+.B \-\-unsigned
+Display register values as unsigned decimals in
+.B run
+mode.
+.TP
 .BI \-\-max\-steps " " N
 Stop
 .B run
@@ -98,6 +103,9 @@ mod 256 = 124 exits 124 too, the stderr line tells the two apart.
 Enable tracing output from the emulator. Example:
 .BR RUST_LOG=checksmix=debug .
 .SH FILES
+These live in the source repository, not in the published crate, which
+excludes
+.IR examples/ .
 .TP
 .I examples/hello_world.mms
 Minimal program using
@@ -118,14 +126,6 @@ checksmix examples/hello_world.mms
 .fi
 .RE
 .PP
-Run a prebuilt object file:
-.PP
-.RS
-.nf
-checksmix target/hello_world.mmo
-.fi
-.RE
-.PP
 Check syntax of assembly source files without executing:
 .PP
 .RS
@@ -134,11 +134,21 @@ checksmix check examples/hello_world.mms
 .fi
 .RE
 .PP
-Build an object file from assembly source:
+Build an object file from assembly source, writing
+.I examples/hello_world.mmo
+beside the source:
 .PP
 .RS
 .nf
-checksmix build -o target/output.mmo examples/hello_world.mms
+checksmix build examples/hello_world.mms
+.fi
+.RE
+.PP
+Run that prebuilt object file:
+.PP
+.RS
+.nf
+checksmix examples/hello_world.mmo
 .fi
 .RE
 .PP
@@ -146,7 +156,7 @@ Assemble multiple source files into one shared symbol space, then run:
 .PP
 .RS
 .nf
-checksmix examples/module1.mms examples/module2.mms
+checksmix main.mms lib.mms
 .fi
 .RE
 .PP
@@ -154,7 +164,7 @@ Or assemble them first, then run the object file:
 .PP
 .RS
 .nf
-checksmix build examples/module1.mms examples/module2.mms -o /tmp/combined.mmo
+checksmix build main.mms lib.mms -o /tmp/combined.mmo
 checksmix /tmp/combined.mmo
 .fi
 .RE
