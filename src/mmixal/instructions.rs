@@ -441,6 +441,7 @@ impl MMixAssembler {
     }
 }
 
+mod control;
 mod floating_point;
 mod integer;
 mod load_store;
