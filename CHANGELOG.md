@@ -4,6 +4,7 @@
 * **Breaking: the MIX emulator is gone.** The library no longer exports `Mix`, `Computer`, `Program`, `Instruction` or `ProgramParseError`, and `checksmix` no longer runs `.mix` or `.mixal` files; it exits 1 on either as an unknown extension
 * **Breaking: `ValueFormat` is `#[non_exhaustive]`.** A downstream `match` on it needs a wildcard arm; naming a variant still works
 * **Breaking: `Stop::Breakpoint` is gone.** `MMix::run_bounded` never returned it; delete any arm that names it
+* **Breaking: `Debugger::machine` and `Debugger::machine_mut` are gone.** To capture a debugged program's output, pass `Debugger::load_with_host` a host that shares its buffer, as the README's `Capture` example does; an embedder that needs the machine drives `MMix` directly, loading it with `write_image`, `entry_point` and `start_program`
 
 0.3.13 (2026-09-22)
 

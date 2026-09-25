@@ -337,18 +337,6 @@ impl Debugger {
         }
     }
 
-    /// The loaded machine, for reading final register or memory state after
-    /// a run without parsing the command output.
-    pub fn machine(&self) -> &MMix {
-        &self.mmix
-    }
-
-    /// The loaded machine, mutably — the route to the installed [`Host`] via
-    /// [`MMix::host_mut`].
-    pub fn machine_mut(&mut self) -> &mut MMix {
-        &mut self.mmix
-    }
-
     pub fn set_fullname(&mut self, on: bool) {
         self.fullname = on;
     }
@@ -1812,13 +1800,13 @@ Loop\tJMP\tLoop
     fn journal_enabled_flag_survives_debugger_runs_reset() {
         let asm = assemble(CALL_PROGRAM, "call.mms");
         let mut dbg = Debugger::load(asm);
-        dbg.machine_mut().set_journal(true);
+        dbg.mmix.set_journal(true);
         dbg.execute(Command::Run);
-        dbg.machine_mut().take_journal(); // drain the first run's writes
+        dbg.mmix.take_journal(); // drain the first run's writes
         // `disable` is never called; `Command::Run` resets the machine.
         dbg.execute(Command::Run);
         assert!(
-            !dbg.machine_mut().take_journal().is_empty(),
+            !dbg.mmix.take_journal().is_empty(),
             "the enabled flag must survive do_run's reset()"
         );
     }
