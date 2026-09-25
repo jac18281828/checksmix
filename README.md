@@ -29,12 +29,14 @@ cargo build --release          # binaries land in target/release/
 
 - `checksmix` runs `.mms` source or a `.mmo` object file.
   `checksmix check` assembles without running; `checksmix build` writes a `.mmo`.
-- `mmixasm` assembles `.mms` to `.mmo` and lists the symbols, labels and code it produced.
+- `mmixasm` assembles `.mms` to a `.mmo` file beside the source.
 - `mmixdb` steps through `.mms` source with breakpoints, register and memory
   inspection, and Emacs GUD support.
 
 `checksmix` has 256 general-purpose registers, 32 special registers, a sparse 64-bit
-address space and the MMIXAL reference's TRAP file I/O.
+address space and the MMIXAL reference's TRAP file I/O, except a `StdIn`
+read, which always fails (see [`MMIX.md`](MMIX.md)'s "TRAP interface"
+section).
 
 Assemble once and run the object file:
 
@@ -52,11 +54,11 @@ Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 - [`exit_code.mms`](examples/exit_code.mms): return a value to the shell.
 - [`hello_world.mms`](examples/hello_world.mms): print a string to standard output.
 - [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
-- [`fibonacci.mms`](examples/fibonacci.mms): return fib(20) as the exit code.
+- [`fibonacci.mms`](examples/fibonacci.mms): compute fib(20) in a loop and print the result.
 - [`big_fib.mms`](examples/big_fib.mms): compute fib(100) in multi-precision arithmetic.
 - [`prime.mms`](examples/prime.mms): test a number for primality and print the verdict.
 - [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
-- [`time.mms`](examples/time.mms): read the host clock.
+- [`time.mms`](examples/time.mms): read the host clock and print the Unix time.
 - [`all_instructions_test.mms`](examples/all_instructions_test.mms): run every mnemonic as a regression suite.
 
 ### Perpetual leap year
@@ -149,19 +151,19 @@ Special Registers:
   rV   = 0x369c200400000000 (3935055375966928896)
   rG   = 0x00000000000000fe (254)
 
-Memory: 169 bytes used
+Memory: 145 bytes used
 
 
 === Executing Program ===
 The first leap year after 2026 is 2028
-HALT trap at PC=0x0000000000000188, exit code=0
-Execution stopped at PC=0x000000000000018c after 106 instructions
+HALT trap at PC=0x0000000000000164, exit code=0
+Execution stopped at PC=0x0000000000000168 after 91 instructions
 
-Executed 106 instructions
+Executed 91 instructions
 
 === Final Machine State ===
 MMIX Computer State:
-  PC = 0x000000000000018c
+  PC = 0x0000000000000168
 
 General Registers:
   $1   = 0x00000000000007ea (2026)
@@ -169,7 +171,7 @@ General Registers:
   $254 = 0x2000000000000000 (2305843009213693952)
 
 Special Registers:
-  rJ   = 0x0000000000000170 (368)
+  rJ   = 0x0000000000000158 (344)
   rR   = 0x0000000000000002 (2)
   rN   = 0x00000000000007d9 (2009)
   rO   = 0x6000000000000000 (6917529027641081856)
@@ -181,7 +183,7 @@ Special Registers:
   rG   = 0x00000000000000fe (254)
   rL   = 0x0000000000000004 (4)
 
-Memory: 178 bytes used
+Memory: 154 bytes used
 
 
 Execution completed.
@@ -204,7 +206,7 @@ mmixdb --fullname examples/fibonacci.mms   # Emacs GUD marker mode
 
 `mmixdb` debugs `.mms` source; a `.mmo` carries no source map.
 `--fullname` is auto-enabled when the `INSIDE_EMACS` environment variable is
-set (i.e. when run from Emacs's `gud-mode`).
+set.
 
 | Command | Forms | Semantics |
 |---|---|---|
@@ -306,8 +308,10 @@ let out = Rc::new(RefCell::new(Vec::new()));
 let mut mmix = MMix::with_host(Capture(out.clone()));
 ```
 
-Clone the buffer handle *before* moving the host in; `with_host` consumes it
-and hands back no way to reach it again.
+Clone the buffer handle *before* moving the host in, or reach it later
+through `MMix::host_mut` (a `&mut dyn Host` while you still hold the
+machine) or `MMix::into_host` (the boxed `Host` once you are done with the
+machine).
 
 `Debugger::load_with_host` takes a host the same way, for programs you want to
 step through rather than run straight out. `Debugger::load` installs `StdHost`,
@@ -329,7 +333,8 @@ MMIX is Knuth's "pretty clean" machine architecture, and he documented it himsel
   instruction set as Knuth teaches it, and the shortest path in.
 
 `checksmix` follows the same instruction set, so a program written from any of these
-runs here.
+runs here, except for a `StdIn` read, which always fails (see
+[`MMIX.md`](MMIX.md)'s "TRAP interface" section).
 
 ## Related projects
 
