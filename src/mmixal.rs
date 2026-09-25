@@ -2851,7 +2851,7 @@ impl MMixAssembler {
         match inner.as_rule() {
             // SET is one tetra whichever variant it selects.
             Rule::inst_set => Ok(MMixInstruction::SETRR(0, 0)),
-            Rule::inst_seti => Ok(MMixInstruction::SET(0, 0)), // Placeholder: SETI $X,IMM (will expand)
+            Rule::inst_seti => Ok(MMixInstruction::SET(0, 0)),
             Rule::inst_setl_ri => Ok(MMixInstruction::SETL(0, 0)),
             Rule::inst_seth_ri => Ok(MMixInstruction::SETH(0, 0)),
             Rule::inst_setmh_ri => Ok(MMixInstruction::SETMH(0, 0)),
@@ -5529,7 +5529,7 @@ impl MMixAssembler {
         self.local_occurrence[idx] += 1;
     }
 
-    /// Evaluate a leaf numeric literal: hex, octal, decimal or char.
+    /// Evaluate a leaf numeric literal: hex, decimal or char.
     fn eval_literal(&self, pair: pest::iterators::Pair<Rule>) -> Result<ExprValue, String> {
         let (line, col) = pair.line_col();
         let text = pair.as_str();
@@ -6004,7 +6004,6 @@ impl MMixAssembler {
     }
 }
 
-// Keep all the existing tests - they should work unchanged
 #[cfg(test)]
 mod tests {
     use super::*;
