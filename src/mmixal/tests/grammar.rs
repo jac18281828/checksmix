@@ -401,6 +401,77 @@ fn test_debug_strings_span_translation_units_in_program_order() {
     );
 }
 
+// ---- `debug` directive matcher: which lines it accepts, exactly --------
+
+#[test]
+fn test_debug_directive_lines_and_their_captures() {
+    let cases = [
+        ("\tdebug \"hi\"\n", "\tTRAP\t0,Debug,0\n", "hi"),
+        ("debug debug \"hi\"\n", "debug\tTRAP\t0,Debug,0\n", "hi"),
+        ("debug \"hi\"  \n", "\tTRAP\t0,Debug,0\n", "hi"),
+        ("debug \"\"\n", "\tTRAP\t0,Debug,0\n", ""),
+        ("Main\u{a0}debug \"x\"\n", "Main\tTRAP\t0,Debug,0\n", "x"),
+        ("\u{a0}debug \"x\"\n", "\tTRAP\t0,Debug,0\n", "x"),
+        ("debug\u{a0}\"x\"\n", "\tTRAP\t0,Debug,0\n", "x"),
+        (
+            "Main debug  \t \"x y\"\t\n",
+            "Main\tTRAP\t0,Debug,0\n",
+            "x y",
+        ),
+    ];
+    for (source, expected_result, expected_text) in cases {
+        let (result, strings, overflow) = MMixAssembler::preprocess_debug(source, "t.mms", 0);
+        assert_eq!(result, expected_result, "output for {source:?}");
+        assert_eq!(
+            strings,
+            vec![expected_text.as_bytes().to_vec()],
+            "captures for {source:?}"
+        );
+        assert!(overflow.is_none(), "unexpected overflow for {source:?}");
+    }
+}
+
+#[test]
+fn test_lines_that_are_not_a_debug_directive_pass_through_unchanged() {
+    let lines = [
+        "debugger \"hi\"\n",
+        "debug \"hi\" x\n",
+        "debug \"hi\" % c\n",
+        "debug \"a\"b\"\n",
+        "debug\"hi\"\n",
+        "Ldebug \"x\"\n",
+        "DEBUG \"x\"\n",
+        "Main  Extra debug \"x\"\n",
+        "  Main debug \"x\"\n",
+    ];
+    for line in lines {
+        let (result, strings, overflow) = MMixAssembler::preprocess_debug(line, "t.mms", 0);
+        assert_eq!(result, line, "line {line:?} must pass through unchanged");
+        assert!(strings.is_empty(), "line {line:?} must collect nothing");
+        assert!(overflow.is_none());
+    }
+}
+
+#[test]
+fn test_debug_directive_overflow_column_counts_characters_not_bytes() {
+    let cases = [
+        ("debug \"x\"\n", 1),
+        ("  debug \"x\"\n", 3),
+        ("\u{a0}debug \"x\"\n", 2),
+        ("Main\u{a0}debug \"x\"\n", 6),
+    ];
+    for (source, expected_col) in cases {
+        let (result, strings, overflow) = MMixAssembler::preprocess_debug(source, "t.mms", 256);
+        assert_eq!(result, "", "output for {source:?}");
+        assert_eq!(strings, vec![b"x".to_vec()], "captures for {source:?}");
+        assert_eq!(
+            overflow,
+            Some(("t.mms".to_string(), 1, expected_col)),
+            "overflow column for {source:?}"
+        );
+    }
+}
+
 #[test]
 fn test_multibyte_byte_string_is_not_aligned() {
     // Alignment comes from the item's kind, not its size: a four-byte BYTE
