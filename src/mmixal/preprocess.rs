@@ -1,8 +1,13 @@
 //! Source preprocessing: whole-line comment blanking, `debug` directive expansion, and `INCLUDE` resolution.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::DebugDirectiveOverflow;
 use super::MMixAssembler;
-use regex::Regex;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -50,33 +55,28 @@ impl MMixAssembler {
         filename: &str,
         start_index: usize,
     ) -> (String, Vec<Vec<u8>>, DebugDirectiveOverflow) {
-        // A directive, optionally preceded by its own label. A fixed,
-        // valid pattern compiled once per call: infallible.
-        let debug_re = Regex::new(r#"(?m)^([^\s]*\s+)?(debug)\s+"([^"]*)"\s*$"#).unwrap();
-
         let mut result = String::new();
         let mut strings = Vec::new();
         let mut overflow = None;
 
         for (index, line) in source.lines().enumerate() {
-            match debug_re.captures(line) {
-                Some(caps) => {
+            match match_debug_line(line) {
+                Some((label, text)) => {
                     let k = start_index + strings.len();
                     if k > 255 {
                         if overflow.is_none() {
-                            let col = caps.get(1).map_or(0, |m| m.as_str().chars().count()) + 1;
+                            let col = label.map_or(0, |l| l.chars().count()) + 1;
                             overflow = Some((filename.to_string(), index + 1, col));
                         }
                     } else {
-                        let label = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-                        result.push_str(label);
+                        result.push_str(label.map(str::trim).unwrap_or(""));
                         result.push_str(&format!("\tTRAP\t0,Debug,{k}\n"));
                     }
                     // debug text keeps the source's UTF-8 bytes: it lives
                     // outside guest memory, going straight to the host's
                     // handle 1, not through a data directive's per-character
                     // value.
-                    strings.push(caps[3].as_bytes().to_vec());
+                    strings.push(text.as_bytes().to_vec());
                 }
                 None => {
                     result.push_str(line);
@@ -257,4 +257,49 @@ impl MMixAssembler {
         }
         result
     }
+}
+
+/// Matches one line against a `debug "text"` directive: an optional
+/// label (blanks included, for the caller to trim and to count toward
+/// its overflow column) and the quoted text. A blank is any
+/// `char::is_whitespace` character.
+fn match_debug_line(line: &str) -> Option<(Option<&str>, &str)> {
+    if let Some((label_end, text)) = match_labeled_debug(line) {
+        return Some((Some(&line[..label_end]), text));
+    }
+    let text = match_debug_after(line, 0)?;
+    Some((None, text))
+}
+
+/// The labeled form: a run of blanks, alone or after a leading token,
+/// directly ahead of the keyword. Returns the label's byte length and
+/// the captured text.
+fn match_labeled_debug(line: &str) -> Option<(usize, &str)> {
+    let ws_start = line.char_indices().find(|(_, c)| c.is_whitespace())?.0;
+    let label_end = line[ws_start..]
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map_or(line.len(), |(i, _)| ws_start + i);
+    let text = match_debug_after(line, label_end)?;
+    Some((label_end, text))
+}
+
+/// The keyword, its required trailing blank, and the quoted text,
+/// starting at `start`. Rejects a missing blank or opening quote, an
+/// unterminated text, and any non-blank text after the closing quote.
+fn match_debug_after(line: &str, start: usize) -> Option<&str> {
+    let rest = line.get(start..)?.strip_prefix("debug")?;
+    let ws_end = rest
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map_or(rest.len(), |(i, _)| i);
+    if ws_end == 0 {
+        return None;
+    }
+    let after_quote = rest[ws_end..].strip_prefix('"')?;
+    let close = after_quote.find('"')?;
+    if after_quote[close + 1..].chars().any(|c| !c.is_whitespace()) {
+        return None;
+    }
+    Some(&after_quote[..close])
 }
