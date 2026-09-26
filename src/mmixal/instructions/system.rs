@@ -3,6 +3,7 @@
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::operands::ZForm;
+use super::super::tree::Children;
 use super::MMixInstruction;
 
 impl MMixAssembler {
@@ -15,7 +16,7 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<(u8, u8, u8), String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
         let Some(operands) = parts.next() else {
             return Ok((0, 0, 0));
@@ -41,7 +42,7 @@ impl MMixAssembler {
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok((x, y, z))
             }
-            _ => unreachable!("TRAP/TRIP/SWYM take zero, one, two or three operands"),
+            _ => Err(parts.unexpected(&operands)),
         }
     }
 
@@ -109,7 +110,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
         let operands = parts.next().unwrap();
         match operands.as_rule() {
@@ -124,7 +125,7 @@ impl MMixAssembler {
                 let z = self.parse_register(ops.next().unwrap())?;
                 Ok(MMixInstruction::UNSAVE(0, z))
             }
-            _ => unreachable!("UNSAVE takes one or two operands"),
+            _ => Err(parts.unexpected(&operands)),
         }
     }
 

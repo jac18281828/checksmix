@@ -16,6 +16,7 @@ mod passes;
 mod preprocess;
 mod source_loc;
 mod symbols;
+mod tree;
 
 /// Assemble a snippet whose first instruction is the one under test
 /// and assert it produced the expected enum variant. Snippets are

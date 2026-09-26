@@ -1,8 +1,16 @@
 //! Expression evaluation: operator precedence, data-list folding, and literal decoding.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::MMixAssembler;
 use super::Rule;
 use super::SymbolType;
+use super::tree::Children;
+use super::tree::unexpected_text;
 
 /// What an MMIXAL expression evaluates to: a pure 64-bit value, or a register
 /// number. `Register` carries the full 64-bit value unary `$` produced, or
@@ -104,49 +112,39 @@ impl MMixAssembler {
         match pair.as_rule() {
             // Wraps exactly one `expr`; some call sites hand this container
             // pair straight to the evaluator unwrapped.
-            Rule::operand_list_one => self.eval_expr(
-                pair.into_inner()
-                    .next()
-                    .expect("operand wraps exactly one expr"),
-            ),
+            Rule::operand_list_one => self.eval_expr(Children::of(pair).required()?),
             Rule::expr | Rule::group_expr | Rule::data_group_expr => {
-                let mut parts = pair.into_inner();
-                let mut acc = self.eval_expr(parts.next().expect("expr has a term"))?;
+                let mut parts = Children::of(pair);
+                let mut acc = self.eval_expr(parts.required()?)?;
                 while let Some(op) = parts.next() {
                     let (line, col) = op.line_col();
-                    let rhs = self.eval_expr(parts.next().expect("weak operator needs a term"))?;
+                    let rhs = self.eval_expr(parts.required()?)?;
                     acc = self.apply_weak(op.as_str(), acc, rhs, line, col)?;
                 }
                 Ok(acc)
             }
             Rule::term | Rule::group_term | Rule::data_group_term => {
-                let mut parts = pair.into_inner();
-                let mut acc = self.eval_expr(parts.next().expect("term has a primary"))?;
+                let mut parts = Children::of(pair);
+                let mut acc = self.eval_expr(parts.required()?)?;
                 while let Some(op) = parts.next() {
                     let (line, col) = op.line_col();
-                    let rhs =
-                        self.eval_expr(parts.next().expect("strong operator needs a primary"))?;
+                    let rhs = self.eval_expr(parts.required()?)?;
                     acc = self.apply_strong(op.as_str(), acc, rhs, line, col)?;
                 }
                 Ok(acc)
             }
             Rule::primary | Rule::group_primary | Rule::data_group_primary => {
                 let (line, col) = pair.line_col();
-                let mut parts = pair.into_inner();
-                let first = parts.next().expect("primary has a child");
+                let mut parts = Children::of(pair);
+                let first = parts.required()?;
                 if first.as_rule() == Rule::unary_op {
-                    let operand =
-                        self.eval_expr(parts.next().expect("unary operator needs an operand"))?;
+                    let operand = self.eval_expr(parts.required()?)?;
                     self.apply_unary(first.as_str(), operand, line, col)
                 } else {
                     self.eval_expr(first)
                 }
             }
-            Rule::group | Rule::data_group => self.eval_expr(
-                pair.into_inner()
-                    .next()
-                    .expect("group has an inner expression"),
-            ),
+            Rule::group | Rule::data_group => self.eval_expr(Children::of(pair).required()?),
             // Reached only through `data_group_primary`: a parenthesized
             // group always needs a single value.
             Rule::string_literal => self.eval_group_string(pair),
@@ -155,11 +153,7 @@ impl MMixAssembler {
                 self.require_valid((line, col))?;
                 Ok(ExprValue::Pure(self.current_addr))
             }
-            Rule::constant => self.eval_literal(
-                pair.into_inner()
-                    .next()
-                    .expect("constant has exactly one literal"),
-            ),
+            Rule::constant => self.eval_literal(Children::of(pair).required()?),
             Rule::global_id => {
                 let (line, col) = pair.line_col();
                 let text = pair.as_str();
@@ -453,7 +447,7 @@ impl MMixAssembler {
                 "{}:{}:{}: unary {} cannot apply to a register",
                 self.current_filename, line, col, op
             )),
-            _ => unreachable!("grammar admits only + - ~ $ & as unary_op"),
+            _ => Err(unexpected_text(Rule::unary_op, op)),
         }
     }
 
@@ -553,7 +547,7 @@ impl MMixAssembler {
                 }
             }
             "&" => a & b,
-            _ => unreachable!("grammar admits only * / // % << >> & as strong_op"),
+            _ => return Err(unexpected_text(Rule::strong_op, op)),
         };
         Ok(ExprValue::Pure(value))
     }

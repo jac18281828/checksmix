@@ -3,6 +3,7 @@
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::operands::ZForm;
+use super::super::tree::Children;
 use super::MMixInstruction;
 use tracing::debug;
 
@@ -334,7 +335,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
         let Some(operands) = parts.next() else {
             return Ok(MMixInstruction::POP(0, 0, 0));
@@ -353,7 +354,7 @@ impl MMixAssembler {
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok(MMixInstruction::POP(x, y, z))
             }
-            _ => unreachable!("POP takes zero, one or two operands"),
+            _ => Err(parts.unexpected(&operands)),
         }
     }
 

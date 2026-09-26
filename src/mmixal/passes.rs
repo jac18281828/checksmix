@@ -1,4 +1,10 @@
 //! The two-pass walk: `parse`, per-statement dispatch, and special-mode (`BSPEC`/`ESPEC`) handling.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::MMixAssembler;
 use super::MMixalParser;
@@ -6,6 +12,7 @@ use super::Rule;
 use super::SourceLoc;
 use super::SymbolType;
 use super::instructions::MMixInstruction;
+use super::tree::Children;
 use tracing::{debug, instrument};
 
 impl MMixAssembler {
@@ -242,7 +249,7 @@ impl MMixAssembler {
             match inner_pair.as_rule() {
                 Rule::label_def => {
                     let (line, col) = inner_pair.line_col();
-                    let ident = inner_pair.into_inner().next().unwrap();
+                    let ident = Children::of(inner_pair).required()?;
                     pending_label = Some((ident.as_str().to_string(), line, col));
                 }
                 Rule::local_label_def => {
@@ -281,7 +288,7 @@ impl MMixAssembler {
                     Self::require_addr(self.place_item(size), &self.current_filename, item)?;
                 }
                 Rule::directive => {
-                    let directive_pair = inner_pair.into_inner().next().unwrap();
+                    let directive_pair = Children::of(inner_pair).required()?;
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
                             if self.in_special_mode {
@@ -419,7 +426,7 @@ impl MMixAssembler {
                             // IS directive doesn't advance current_addr.
                         }
                         Rule::prefix_directive => {
-                            self.parse_prefix_directive(directive_pair);
+                            self.parse_prefix_directive(directive_pair)?;
                         }
                         Rule::local_directive => {
                             Self::require_blank_label(
@@ -523,9 +530,9 @@ impl MMixAssembler {
     /// `LOCAL expr`: `expr` must resolve to a register, checked at the
     /// close of assembly against the global threshold `next_greg` derives.
     fn handle_local_directive(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<(), String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _keyword = parts.next();
-        let operand = parts.next().unwrap();
+        let operand = parts.required()?;
         let (line, col) = operand.line_col();
         self.scan_uses_for_redefinition(&operand);
         let reg = self.parse_register(operand)?;
@@ -544,9 +551,9 @@ impl MMixAssembler {
                 self.current_filename, line, col
             ));
         }
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _keyword = parts.next();
-        let operand = parts.next().unwrap();
+        let operand = parts.required()?;
         let (op_line, op_col) = operand.line_col();
         self.scan_uses_for_redefinition(&operand);
         let value = self.parse_number(operand)?;
@@ -596,7 +603,7 @@ impl MMixAssembler {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::label_def => {
-                    let ident = inner_pair.into_inner().next().unwrap();
+                    let ident = Children::of(inner_pair).required()?;
                     let (line, col) = ident.line_col();
                     label_name = Some((ident.as_str().to_string(), line, col));
                 }
@@ -625,7 +632,7 @@ impl MMixAssembler {
                     }
                 }
                 Rule::directive => {
-                    let directive_pair = inner_pair.into_inner().next().unwrap();
+                    let directive_pair = Children::of(inner_pair).required()?;
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
                             if self.in_special_mode {
@@ -703,7 +710,7 @@ impl MMixAssembler {
                             self.parse_is_directive(directive_pair, false)?;
                         }
                         Rule::prefix_directive => {
-                            self.parse_prefix_directive(directive_pair);
+                            self.parse_prefix_directive(directive_pair)?;
                         }
                         Rule::local_directive => {}
                         Rule::bspec_directive => {

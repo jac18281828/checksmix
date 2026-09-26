@@ -2,6 +2,7 @@
 
 use super::MMixAssembler;
 use super::Rule;
+use super::tree::Children;
 
 /// MMIX Assembly Language Parser
 /// Parses MMIX assembly language into binary object code (.mmo)
@@ -306,6 +307,12 @@ pub enum MMixInstruction {
     HALT, // HALT - stop execution
 }
 
+#[deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 impl MMixAssembler {
     pub(super) fn parse_instruction(
         &mut self,
@@ -430,13 +437,13 @@ impl MMixAssembler {
     where
         F: FnOnce(u8, u8, u8) -> MMixInstruction,
     {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.imm_byte(ops.next().unwrap(), mnem)?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, mnem)?;
         Ok(f(x, y, z))
     }
 }

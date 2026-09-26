@@ -990,6 +990,7 @@ mod operands;
 mod passes;
 mod preprocess;
 mod symbols;
+mod tree;
 
 pub use instructions::MMixInstruction;
 

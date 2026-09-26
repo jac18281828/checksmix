@@ -3,6 +3,7 @@
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::operands::ZForm;
+use super::super::tree::Children;
 use super::MMixInstruction;
 
 impl MMixAssembler {
@@ -10,7 +11,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let mnem_pair = parts.next().unwrap();
         let mnem = mnem_pair.as_str().to_uppercase();
         let operands = parts.next().unwrap();
@@ -31,7 +32,7 @@ impl MMixAssembler {
                 let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
                 (x, y, ZForm::Imm(offset))
             }
-            _ => unreachable!("memory auto instructions take two or three operands"),
+            _ => return Err(parts.unexpected(&operands)),
         };
 
         match (mnem.as_str(), z) {

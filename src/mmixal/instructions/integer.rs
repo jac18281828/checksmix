@@ -3,6 +3,7 @@
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::operands::ZForm;
+use super::super::tree::Children;
 use super::MMixInstruction;
 
 impl MMixAssembler {
@@ -88,7 +89,7 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let mnem = parts.next().unwrap().as_str().to_uppercase();
         let operands = parts.next().unwrap();
         let (x, y, z) = match operands.as_rule() {
@@ -106,7 +107,7 @@ impl MMixAssembler {
                 let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
                 (x, 0, z)
             }
-            _ => unreachable!("NEG/NEGU take two or three operands"),
+            _ => return Err(parts.unexpected(&operands)),
         };
 
         match (mnem.as_str(), z) {

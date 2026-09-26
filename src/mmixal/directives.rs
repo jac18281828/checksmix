@@ -1,10 +1,17 @@
 //! Data and pseudo directives: `BYTE`/`WYDE`/`TETRA`/`OCTA`, `LOC`, `IS`, and `PREFIX`.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::MMixAssembler;
 use super::Rule;
 use super::SymbolType;
 use super::expressions::ExprValue;
 use super::instructions::MMixInstruction;
+use super::tree::Children;
 use tracing::debug;
 
 impl MMixAssembler {
@@ -214,9 +221,9 @@ impl MMixAssembler {
         &mut self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<(), String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _directive = parts.next(); // Skip "LOC" keyword
-        let addr = self.parse_number(parts.next().unwrap())?;
+        let addr = self.parse_number(parts.required()?)?;
         self.current_addr = addr;
         self.past_end = false;
         Ok(())
@@ -227,13 +234,13 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         checking: bool,
     ) -> Result<(), String> {
-        let mut parts = pair.into_inner();
-        let lhs = parts.next().unwrap();
+        let mut parts = Children::of(pair);
+        let lhs = parts.required()?;
         let lhs_rule = lhs.as_rule();
         let (line, col) = lhs.line_col();
         let raw_name = lhs.as_str().to_string();
         let _is_keyword = parts.next(); // Skip "IS" keyword
-        let value_pair = parts.next().unwrap();
+        let value_pair = parts.required()?;
         let (vline, vcol) = value_pair.line_col();
 
         self.scan_uses_for_redefinition(&value_pair);
@@ -259,11 +266,15 @@ impl MMixAssembler {
     /// `PREFIX :` is the root (the empty prefix) and `PREFIX :Foo:` equals
     /// `PREFIX Foo:`. checksmix replaces the prefix outright rather than
     /// qualifying a relative operand against the current one.
-    pub(super) fn parse_prefix_directive(&mut self, pair: pest::iterators::Pair<Rule>) {
-        let mut parts = pair.into_inner();
+    pub(super) fn parse_prefix_directive(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(), String> {
+        let mut parts = Children::of(pair);
         let _directive = parts.next(); // Skip "PREFIX" keyword
-        let arg = parts.next().expect("prefix_arg required by grammar");
+        let arg = parts.required()?;
         let arg_str = arg.as_str();
         self.current_prefix = arg_str.strip_prefix(':').unwrap_or(arg_str).to_string();
+        Ok(())
     }
 }
