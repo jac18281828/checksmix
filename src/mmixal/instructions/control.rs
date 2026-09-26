@@ -1,4 +1,10 @@
 //! The branch, jump, GETA/GETAB and PUSHJ/PUSHGO/POP/GO control-flow family.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
@@ -87,12 +93,12 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let target = self.parse_number(ops.next().unwrap())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let target = self.parse_number(ops.required()?)?;
 
         // Each mnemonic names the variant to emit for a forward target and
         // the one for a backward target.
@@ -124,11 +130,11 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let target = self.parse_number(ops.next().unwrap())?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let target = self.parse_number(ops.required()?)?;
         let mnem = mnem.map_or_else(|| "JMP".to_string(), |m| m.as_str().to_uppercase());
         let resolved = self.relative_field(&mnem, target, 24, (line, col), " (use GO instead)")?;
         Ok(if resolved.backward {
@@ -143,12 +149,12 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let target = self.parse_number(ops.next().unwrap())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let target = self.parse_number(ops.required()?)?;
 
         type ProbableBranch = fn(u8, u8, u8) -> MMixInstruction;
         let mnem = mnem.as_str().to_uppercase();
@@ -179,13 +185,13 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next(); // Skip mnemonic
-        let operand = parts.next().unwrap(); // Get operand_list_two
+        let operand = parts.required()?; // Get operand_list_two
 
-        let mut operand_parts = operand.into_inner();
-        let reg_pair = operand_parts.next().unwrap();
-        let addr_pair = operand_parts.next().unwrap();
+        let mut operand_parts = Children::of(operand);
+        let reg_pair = operand_parts.required()?;
+        let addr_pair = operand_parts.required()?;
 
         let x = self.parse_register(reg_pair)?;
         let addr = self.parse_number(addr_pair)?;
@@ -223,13 +229,13 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next(); // Skip mnemonic
-        let operand = parts.next().unwrap(); // Get operand_list_two
+        let operand = parts.required()?; // Get operand_list_two
 
-        let mut operand_parts = operand.into_inner();
-        let reg_pair = operand_parts.next().unwrap();
-        let addr_pair = operand_parts.next().unwrap();
+        let mut operand_parts = Children::of(operand);
+        let reg_pair = operand_parts.required()?;
+        let addr_pair = operand_parts.required()?;
 
         let x = self.parse_register(reg_pair)?;
         let addr = self.parse_number(addr_pair)?;
@@ -253,12 +259,12 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operand = parts.next().unwrap();
-        let mut ops = operand.into_inner();
-        let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJ")?;
-        let addr = self.parse_number(ops.next().unwrap())?;
+        let operand = parts.required()?;
+        let mut ops = Children::of(operand);
+        let x = self.parse_reg_or_byte(ops.required()?, "PUSHJ")?;
+        let addr = self.parse_number(ops.required()?)?;
         let resolved = self.relative_field("PUSHJ", addr, 16, (line, col), "")?;
         let (y, z) = Self::split_hi_lo_byte(resolved.field as u16);
         Ok(if resolved.backward {
@@ -273,12 +279,12 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operand = parts.next().unwrap();
-        let mut ops = operand.into_inner();
-        let x = self.parse_reg_or_byte(ops.next().unwrap(), "PUSHJB")?;
-        let addr = self.parse_number(ops.next().unwrap())?;
+        let operand = parts.required()?;
+        let mut ops = Children::of(operand);
+        let x = self.parse_reg_or_byte(ops.required()?, "PUSHJB")?;
+        let addr = self.parse_number(ops.required()?)?;
         let resolved = self.relative_field("PUSHJB", addr, 16, (line, col), "")?;
         let (y, z) = Self::split_hi_lo_byte(resolved.field as u16);
         Ok(MMixInstruction::PUSHJB(x, y, z))
@@ -290,26 +296,26 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let operands = parts.next().unwrap();
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?.as_str().to_uppercase();
+        let operands = parts.required()?;
         let is_three = operands.as_rule() == Rule::operand_list_three;
-        let mut ops = operands.into_inner();
-        let x_pair = ops.next().unwrap();
+        let mut ops = Children::of(operands);
+        let x_pair = ops.required()?;
         let x = if mnem == "PUSHGO" {
             self.parse_reg_or_byte(x_pair, &mnem)?
         } else {
             self.parse_register(x_pair)?
         };
         let (y, z) = if is_three {
-            let y = self.parse_register(ops.next().unwrap())?;
-            let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+            let y = self.parse_register(ops.required()?)?;
+            let z = self.lower_z_operand(ops.required()?, &mnem)?;
             (y, z)
         } else {
             // The two-operand memory form: the second operand is a register
             // (an offset of zero) or a base address resolved against a
             // preceding GREG.
-            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            let (y, offset) = self.resolve_memory_base_operand(ops.required()?)?;
             (y, ZForm::Imm(offset))
         };
 
@@ -342,15 +348,15 @@ impl MMixAssembler {
         };
         match operands.as_rule() {
             Rule::operand_list_two => {
-                let mut ops = operands.into_inner();
-                let x = self.imm_byte(ops.next().unwrap(), "POP")?;
-                let yz = self.imm_wyde(ops.next().unwrap(), "POP")?;
+                let mut ops = Children::of(operands);
+                let x = self.imm_byte(ops.required()?, "POP")?;
+                let yz = self.imm_wyde(ops.required()?, "POP")?;
                 let (y, z) = Self::split_hi_lo_byte(yz);
                 Ok(MMixInstruction::POP(x, y, z))
             }
             Rule::operand_list_one => {
-                let mut ops = operands.into_inner();
-                let xyz = self.imm_three_bytes(ops.next().unwrap(), "POP")?;
+                let mut ops = Children::of(operands);
+                let xyz = self.imm_three_bytes(ops.required()?, "POP")?;
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok(MMixInstruction::POP(x, y, z))
             }
