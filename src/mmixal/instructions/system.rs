@@ -1,4 +1,10 @@
 //! The TRAP/GET/PUT/SAVE/UNSAVE/RESUME/TRIP/SWYM/SYNC system family.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
@@ -23,22 +29,22 @@ impl MMixAssembler {
         };
         match operands.as_rule() {
             Rule::operand_list_three => {
-                let mut ops = operands.into_inner();
-                let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
-                let y = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
-                let z = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
+                let mut ops = Children::of(operands);
+                let x = self.parse_reg_or_byte(ops.required()?, mnem)?;
+                let y = self.parse_reg_or_byte(ops.required()?, mnem)?;
+                let z = self.parse_reg_or_byte(ops.required()?, mnem)?;
                 Ok((x, y, z))
             }
             Rule::operand_list_two => {
-                let mut ops = operands.into_inner();
-                let x = self.parse_reg_or_byte(ops.next().unwrap(), mnem)?;
-                let yz = self.imm_wyde(ops.next().unwrap(), mnem)?;
+                let mut ops = Children::of(operands);
+                let x = self.parse_reg_or_byte(ops.required()?, mnem)?;
+                let yz = self.imm_wyde(ops.required()?, mnem)?;
                 let (y, z) = Self::split_hi_lo_byte(yz);
                 Ok((x, y, z))
             }
             Rule::operand_list_one => {
-                let mut ops = operands.into_inner();
-                let xyz = self.imm_three_bytes(ops.next().unwrap(), mnem)?;
+                let mut ops = Children::of(operands);
+                let xyz = self.imm_three_bytes(ops.required()?, mnem)?;
                 let (x, y, z) = Self::split_xyz_bytes(xyz);
                 Ok((x, y, z))
             }
@@ -58,11 +64,11 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.special_register(ops.next().unwrap(), "GET")?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_register(ops.required()?)?;
+        let z = self.special_register(ops.required()?, "GET")?;
         Ok(MMixInstruction::GET(x, z))
     }
 
@@ -70,11 +76,11 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.special_register(ops.next().unwrap(), "PUT")?;
-        match self.lower_z_operand(ops.next().unwrap(), "PUT")? {
+        let mut ops = Children::of(parts.required()?);
+        let x = self.special_register(ops.required()?, "PUT")?;
+        match self.lower_z_operand(ops.required()?, "PUT")? {
             ZForm::Reg(z) => Ok(MMixInstruction::PUT(x, z)),
             ZForm::Imm(z) => Ok(MMixInstruction::PUTI(x, z)),
         }
@@ -84,11 +90,11 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.special_register(ops.next().unwrap(), "PUTI")?;
-        let z = self.imm_byte(ops.next().unwrap(), "PUTI")?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.special_register(ops.required()?, "PUTI")?;
+        let z = self.imm_byte(ops.required()?, "PUTI")?;
         Ok(MMixInstruction::PUTI(x, z))
     }
 
@@ -96,11 +102,11 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.imm_byte(ops.next().unwrap(), "SAVE")?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, "SAVE")?;
         Ok(MMixInstruction::SAVE(x, z))
     }
 
@@ -112,17 +118,17 @@ impl MMixAssembler {
     ) -> Result<MMixInstruction, String> {
         let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
+        let operands = parts.required()?;
         match operands.as_rule() {
             Rule::operand_list_two => {
-                let mut ops = operands.into_inner();
-                let x = self.imm_byte(ops.next().unwrap(), "UNSAVE")?;
-                let z = self.parse_register(ops.next().unwrap())?;
+                let mut ops = Children::of(operands);
+                let x = self.imm_byte(ops.required()?, "UNSAVE")?;
+                let z = self.parse_register(ops.required()?)?;
                 Ok(MMixInstruction::UNSAVE(x, z))
             }
             Rule::operand_list_one => {
-                let mut ops = operands.into_inner();
-                let z = self.parse_register(ops.next().unwrap())?;
+                let mut ops = Children::of(operands);
+                let z = self.parse_register(ops.required()?)?;
                 Ok(MMixInstruction::UNSAVE(0, z))
             }
             _ => Err(parts.unexpected(&operands)),
@@ -135,10 +141,10 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
         let xyz = match parts.next() {
-            Some(op) => self.imm_three_bytes(op.into_inner().next().unwrap(), "RESUME")?,
+            Some(op) => self.imm_three_bytes(Children::of(op).required()?, "RESUME")?,
             None => 0,
         };
         Ok(MMixInstruction::RESUME(xyz))
@@ -167,10 +173,10 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
         let xyz = match parts.next() {
-            Some(op) => self.imm_three_bytes(op.into_inner().next().unwrap(), "SYNC")?,
+            Some(op) => self.imm_three_bytes(Children::of(op).required()?, "SYNC")?,
             None => 0,
         };
         Ok(MMixInstruction::SYNC(xyz))
