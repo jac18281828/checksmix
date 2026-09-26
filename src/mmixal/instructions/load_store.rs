@@ -1,4 +1,10 @@
 //! The load/store instruction family, including the LDA and uncached/uncommon forms.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
@@ -12,24 +18,24 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let mut parts = Children::of(pair);
-        let mnem_pair = parts.next().unwrap();
+        let mnem_pair = parts.required()?;
         let mnem = mnem_pair.as_str().to_uppercase();
-        let operands = parts.next().unwrap();
+        let operands = parts.required()?;
         let (x, y, z) = match operands.as_rule() {
             Rule::operand_list_three => {
-                let mut ops = operands.into_inner();
-                let x = self.parse_register(ops.next().unwrap())?;
-                let y = self.parse_register(ops.next().unwrap())?;
-                let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+                let mut ops = Children::of(operands);
+                let x = self.parse_register(ops.required()?)?;
+                let y = self.parse_register(ops.required()?)?;
+                let z = self.lower_z_operand(ops.required()?, &mnem)?;
                 (x, y, z)
             }
             Rule::operand_list_two => {
                 // The two-operand memory form: the second operand is a
                 // register (an offset of zero) or a base address resolved
                 // against a preceding GREG.
-                let mut ops = operands.into_inner();
-                let x = self.parse_register(ops.next().unwrap())?;
-                let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+                let mut ops = Children::of(operands);
+                let x = self.parse_register(ops.required()?)?;
+                let (y, offset) = self.resolve_memory_base_operand(ops.required()?)?;
                 (x, y, ZForm::Imm(offset))
             }
             _ => return Err(parts.unexpected(&operands)),
@@ -92,13 +98,13 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "LDBI" => Ok(MMixInstruction::LDBI(x, y, z)),
@@ -127,14 +133,14 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.parse_register(ops.required()?)?;
 
-        match self.lower_z_operand(ops.next().unwrap(), "LDA")? {
+        match self.lower_z_operand(ops.required()?, "LDA")? {
             ZForm::Reg(z) => Ok(MMixInstruction::LDA(x, y, z)),
             ZForm::Imm(z) => Ok(MMixInstruction::LDAI(x, y, z)),
         }
@@ -154,12 +160,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let (y, offset) = self.resolve_memory_base_operand(ops.required()?)?;
         Ok(MMixInstruction::LDAI(x, y, offset))
     }
 
@@ -225,18 +231,18 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
+        let operands = parts.required()?;
         let is_three = operands.as_rule() == Rule::operand_list_three;
-        let mut ops = operands.into_inner();
-        let x = self.parse_reg_or_byte(ops.next().unwrap(), "STCO")?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_reg_or_byte(ops.required()?, "STCO")?;
         let (y, z) = if is_three {
-            let y = self.parse_register(ops.next().unwrap())?;
-            let z = self.lower_z_operand(ops.next().unwrap(), "STCO")?;
+            let y = self.parse_register(ops.required()?)?;
+            let z = self.lower_z_operand(ops.required()?, "STCO")?;
             (y, z)
         } else {
-            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            let (y, offset) = self.resolve_memory_base_operand(ops.required()?)?;
             (y, ZForm::Imm(offset))
         };
         match z {
@@ -249,12 +255,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.imm_byte(ops.next().unwrap(), "STCOI")?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.imm_byte(ops.next().unwrap(), "STCOI")?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.imm_byte(ops.required()?, "STCOI")?;
+        let y = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, "STCOI")?;
         Ok(MMixInstruction::STCOI(x, y, z))
     }
 
@@ -264,18 +270,18 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let operands = parts.next().unwrap();
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?.as_str().to_uppercase();
+        let operands = parts.required()?;
         let is_three = operands.as_rule() == Rule::operand_list_three;
-        let mut ops = operands.into_inner();
-        let x = self.parse_reg_or_byte(ops.next().unwrap(), &mnem)?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_reg_or_byte(ops.required()?, &mnem)?;
         let (y, z) = if is_three {
-            let y = self.parse_register(ops.next().unwrap())?;
-            let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+            let y = self.parse_register(ops.required()?)?;
+            let z = self.lower_z_operand(ops.required()?, &mnem)?;
             (y, z)
         } else {
-            let (y, offset) = self.resolve_memory_base_operand(ops.next().unwrap())?;
+            let (y, offset) = self.resolve_memory_base_operand(ops.required()?)?;
             (y, ZForm::Imm(offset))
         };
 
