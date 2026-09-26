@@ -1,8 +1,15 @@
 //! The floating-point instruction family.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::operands::ZForm;
+use super::super::tree::Children;
 use super::MMixInstruction;
 
 impl MMixAssembler {
@@ -10,13 +17,13 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.parse_register(ops.required()?)?;
+        let z = self.parse_register(ops.required()?)?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FCMP" => Ok(MMixInstruction::FCMP(x, y, z)),
@@ -45,12 +52,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.imm_byte(ops.required()?, mnem.as_str())?;
+        let z = self.parse_register(ops.required()?)?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FIX" => Ok(MMixInstruction::FIX(x, y, z)),
@@ -70,12 +77,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.parse_register(ops.next().unwrap())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let z = self.parse_register(ops.required()?)?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FIX" => Ok(MMixInstruction::FIX(x, 0, z)),
@@ -95,12 +102,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.imm_byte(ops.next().unwrap(), &mnem)?;
-        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?.as_str().to_uppercase();
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.imm_byte(ops.required()?, &mnem)?;
+        let z = self.lower_z_operand(ops.required()?, &mnem)?;
 
         match (mnem.as_str(), z) {
             ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, y, z)),
@@ -120,12 +127,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap().as_str().to_uppercase();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.lower_z_operand(ops.next().unwrap(), &mnem)?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?.as_str().to_uppercase();
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let z = self.lower_z_operand(ops.required()?, &mnem)?;
 
         match (mnem.as_str(), z) {
             ("FLOT", ZForm::Reg(z)) => Ok(MMixInstruction::FLOT(x, 0, z)),
@@ -146,12 +153,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let mut ops = parts.next().unwrap().into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let y = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
-        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_register(ops.required()?)?;
+        let y = self.imm_byte(ops.required()?, mnem.as_str())?;
+        let z = self.imm_byte(ops.required()?, mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FLOTI" => Ok(MMixInstruction::FLOTI(x, y, z)),
@@ -170,12 +177,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
-        let mnem = parts.next().unwrap();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let x = self.parse_register(ops.next().unwrap())?;
-        let z = self.imm_byte(ops.next().unwrap(), mnem.as_str())?;
+        let mut parts = Children::of(pair);
+        let mnem = parts.required()?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let x = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, mnem.as_str())?;
 
         match mnem.as_str().to_uppercase().as_str() {
             "FLOTI" => Ok(MMixInstruction::FLOTI(x, 0, z)),
