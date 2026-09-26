@@ -89,13 +89,11 @@ Two commits on a feature branch (`claude/<topic>`), landed together:
 1. Add an `X.Y.Z` entry to `CHANGELOG.md` and commit — this is R, the release
    commit.
 2. Tag R `X.Y.Z`, signed and annotated.
-3. Bump `Cargo.toml` to `X.Y.(Z+1)`, set the `.TH` version in every `man/*.1`
-   to match, run `cargo check` so `Cargo.lock` refreshes, and commit all of
-   it as `docs: X.Y.(Z+1)` — this is S, staging the next release.
+3. Bump `Cargo.toml` to `X.Y.(Z+1)`, run `cargo check` so `Cargo.lock`
+   refreshes, and commit it as `chore: X.Y.(Z+1)` — this is S, staging the
+   next release.
 4. FF-merge into `main`; push `main`, then the tag — `deploy-crate` publishes
    on tag push.
 5. Delete the feature branch (local and remote).
 
-The tag version equals the code version at the tagged commit. `Cargo.toml`
-and the man pages must agree at every commit —
-`docs_consistency::man_page_versions_match_cargo_toml` enforces it.
+The tag version equals the code version at the tagged commit.
