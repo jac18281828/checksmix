@@ -30,6 +30,7 @@
 * `contrib/mmix-mode.el` loads on Emacs 29 again. Since 0.3.10 it called `string-remove-suffix` and `string-remove-prefix` without requiring `subr-x`, which defines them there, so on Emacs 29 fontifying any buffer failed with `void-function string-remove-suffix`; later Emacs defines them in core, which hid it
 * `checksmix` no longer depends on the `regex` crate
 * The man pages no longer state a version
+* Each release attaches one archive per platform holding the three binaries, their man pages, the README and the licence, where it attached a bare `checksmix` before
 
 0.3.13 (2026-09-22)
 
