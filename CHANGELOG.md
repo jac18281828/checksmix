@@ -28,6 +28,7 @@
 * Every error `MMixAssembler::parse` or `MMixAssembler::resolve_includes` returns now begins `file:line:col:`. `Expected expression, got: …`, `Expected a literal, got: …`, `symbol '…' redefined`, `predefined symbol '…' redefined after its value was used at …`, `` too many `debug` directives … ``, `BSPEC has no matching ESPEC before end of input`, `LOCAL ${reg} is not below the global threshold`, `{what} is not allowed inside BSPEC/ESPEC`, `{keyword} takes no label`, `BSPEC does not nest`, `BSPEC operand {v} does not fit in two bytes`, `ESPEC has no matching BSPEC`, `include cycle detected: …` and `cannot read included file '…': …` each gain a column, a file, or both
 * The published crate drops the repository's integration tests and its CI, editor, container and agent files (`tests/`, `.github/`, `.vscode/`, `.devcontainer/`, `Dockerfile`, `CLAUDE.md`, `AGENTS.md`, `commitlint.config.js`), and takes the README's description
 * The man pages no longer state a version
+* Each release attaches one archive per platform holding the three binaries, their man pages, the README and the licence, where it attached a bare `checksmix` before
 
 0.3.13 (2026-09-22)
 

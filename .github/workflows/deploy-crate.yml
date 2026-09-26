@@ -3,123 +3,281 @@ on:
   push:
     tags:
       - '*'
-# Add explicit permissions
+  workflow_dispatch:
 permissions:
-  contents: write
-  packages: write
+  contents: read
 jobs:
-  deploy:
+  verify:
+    uses: ./.github/workflows/ci-cd.yml
+  release-checks:
+    name: Release-only checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      - name: Format check
-        run: cargo fmt --all -- --check
-      - name: Clippy check
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Run tests
-        run: cargo test --all
-      - name: Build release
-        run: cargo build --release
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CRATES_IO }}
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO }}
-      - name: Generate documentation
-        run: cargo doc --no-deps --all-features
-      - name: GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          prerelease: false
-          tag_name: ${{ github.ref_name }}
-          name: Release v${{ github.ref_name }}
-          body: |
-            ## What's Changed
-
-            See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
-
-            ## Installation
-
-            ```bash
-            cargo install checksmix --version ${{ github.ref_name }}
-            ```
-
-            Or download the binaries from the assets below.
-          generate_release_notes: true
-          make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  build-binaries:
-    runs-on: ${{ matrix.os }}
-    needs: deploy
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check tag matches package version
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"$/\1/')
+          if [ "${{ github.ref_name }}" != "$version" ]; then
+            echo "tag ${{ github.ref_name }} does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+      - name: Dry-run publish
+        run: cargo publish --dry-run
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact-name: checksmix-linux-x86_64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact-name: checksmix-windows-x86_64.exe
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact-name: checksmix-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact-name: checksmix-macos-aarch64
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - name: Install target
-        run: rustup target add ${{ matrix.target }}
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
-      - name: Build release binary
+          targets: ${{ matrix.target }}
+      - name: Read package version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"$/\1/')" >> "$GITHUB_OUTPUT"
+      - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Prepare binary (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Package archive (Unix)
+        if: runner.os != 'Windows'
+        id: package-unix
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+          OUT_DIR: ${{ runner.temp }}
         run: |
-          cp target/${{ matrix.target }}/release/checksmix ${{ matrix.artifact-name }}
-          strip ${{ matrix.artifact-name }}
-      - name: Prepare binary (Windows)
-        if: matrix.os == 'windows-latest'
+          set -euo pipefail
+          stem="checksmix-${VERSION}-${TARGET}"
+          stage="${OUT_DIR}/${stem}"
+          archive="${OUT_DIR}/${stem}.tar.gz"
+          rm -rf "$stage"
+          mkdir -p "$stage/man"
+          for bin in checksmix mmixasm mmixdb; do
+            cp "target/${TARGET}/release/${bin}" "$stage/$bin"
+          done
+          cp man/checksmix.1 man/mmixasm.1 man/mmixdb.1 "$stage/man/"
+          cp README.md LICENCE "$stage/"
+          tar -czf "$archive" -C "$OUT_DIR" "$stem"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - name: Verify archive (Unix)
+        if: runner.os != 'Windows'
+        env:
+          ARCHIVE: ${{ steps.package-unix.outputs.archive }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          Copy-Item target/${{ matrix.target }}/release/checksmix.exe ${{ matrix.artifact-name }}
-      - name: Upload release assets
+          set -euo pipefail
+          stem="checksmix-${VERSION}-${TARGET}"
+          workdir=$(mktemp -d)
+          tar -xzf "$ARCHIVE" -C "$workdir"
+
+          actual="$workdir/actual.txt"
+          (cd "$workdir" && find "$stem" | sort) > "$actual"
+
+          expected="$workdir/expected.txt"
+          cat > "$expected" <<EOF
+          $stem
+          $stem/LICENCE
+          $stem/README.md
+          $stem/checksmix
+          $stem/man
+          $stem/man/checksmix.1
+          $stem/man/mmixasm.1
+          $stem/man/mmixdb.1
+          $stem/mmixasm
+          $stem/mmixdb
+          EOF
+          sort -o "$expected" "$expected"
+
+          if ! diff -u "$expected" "$actual"; then
+            echo "archive contents do not match the expected stem, man/ and eight files" >&2
+            exit 1
+          fi
+
+          for bin in checksmix mmixasm mmixdb; do
+            got=$("$workdir/$stem/$bin" --version)
+            want="$bin $VERSION"
+            if [ "$got" != "$want" ]; then
+              echo "$bin --version printed '$got', expected '$want'" >&2
+              exit 1
+            fi
+          done
+
+          output=$("$workdir/$stem/checksmix" run "$PWD/examples/all_instructions_test.mms")
+          echo "$output"
+          if ! printf '%s\n' "$output" | grep -qx 'All tests passed!'; then
+            echo "checksmix run did not print 'All tests passed!'" >&2
+            exit 1
+          fi
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        id: package-windows
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+          OUT_DIR: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stem = "checksmix-$env:VERSION-$env:TARGET"
+          $stage = Join-Path $env:OUT_DIR $stem
+          $archive = Join-Path $env:OUT_DIR "$stem.zip"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Path (Join-Path $stage "man") | Out-Null
+          foreach ($bin in "checksmix", "mmixasm", "mmixdb") {
+            Copy-Item "target/$env:TARGET/release/$bin.exe" (Join-Path $stage "$bin.exe")
+          }
+          Copy-Item "man/checksmix.1", "man/mmixasm.1", "man/mmixdb.1" (Join-Path $stage "man")
+          Copy-Item "README.md", "LICENCE" $stage
+          Compress-Archive -Path $stage -DestinationPath $archive -Force
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+      - name: Verify archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ steps.package-windows.outputs.archive }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stem = "checksmix-$env:VERSION-$env:TARGET"
+          $workdir = Join-Path $env:RUNNER_TEMP "verify-$stem"
+          if (Test-Path $workdir) { Remove-Item -Recurse -Force $workdir }
+          Expand-Archive -Path $env:ARCHIVE -DestinationPath $workdir
+
+          $expected = @(
+            $stem,
+            "$stem\LICENCE",
+            "$stem\README.md",
+            "$stem\checksmix.exe",
+            "$stem\man",
+            "$stem\man\checksmix.1",
+            "$stem\man\mmixasm.1",
+            "$stem\man\mmixdb.1",
+            "$stem\mmixasm.exe",
+            "$stem\mmixdb.exe"
+          ) | Sort-Object
+
+          $actual = (Get-ChildItem -Recurse -Name -Path $workdir) | Sort-Object
+
+          $diff = Compare-Object $expected $actual
+          if ($diff) {
+            Write-Error "archive contents do not match the expected stem, man\ and eight files:`n$($diff | Out-String)"
+            exit 1
+          }
+
+          foreach ($bin in "checksmix", "mmixasm", "mmixdb") {
+            $exe = Join-Path $workdir "$stem\$bin.exe"
+            $got = & $exe --version
+            $want = "$bin $env:VERSION"
+            if ($got -ne $want) {
+              Write-Error "$bin --version printed '$got', expected '$want'"
+              exit 1
+            }
+          }
+
+          $checksmix = Join-Path $workdir "$stem\checksmix.exe"
+          $example = Join-Path $PWD "examples/all_instructions_test.mms"
+          $output = & $checksmix run $example
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "checksmix run exited $LASTEXITCODE"
+            exit 1
+          }
+          if ($output -notcontains "All tests passed!") {
+            Write-Error "checksmix run did not print 'All tests passed!'"
+            exit 1
+          }
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksmix-${{ matrix.target }}
+          path: ${{ steps.package-unix.outputs.archive || steps.package-windows.outputs.archive }}
+          if-no-files-found: error
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [verify, release-checks, build]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}
+          pattern: checksmix-*
+          merge-multiple: true
+      - name: Read package version
+        id: version
+        run: echo "version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"$/\1/')" >> "$GITHUB_OUTPUT"
+      - name: Guard release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCHIVE_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "checksmix-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+            "checksmix-${VERSION}-x86_64-pc-windows-msvc.zip"
+            "checksmix-${VERSION}-aarch64-apple-darwin.tar.gz"
+            "checksmix-${VERSION}-x86_64-apple-darwin.tar.gz"
+          )
+          missing=()
+          for f in "${expected[@]}"; do
+            [ -f "${ARCHIVE_DIR}/${f}" ] || missing+=("$f")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'missing release archive: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+          found=$(find "${ARCHIVE_DIR}" -maxdepth 1 -name 'checksmix-*' -type f | wc -l | tr -d ' ')
+          if [ "$found" -ne "${#expected[@]}" ]; then
+            echo "expected exactly ${#expected[@]} release archives in ${ARCHIVE_DIR}, found $found" >&2
+            exit 1
+          fi
+      - name: Dry-run publish
+        run: cargo publish --dry-run
+      - name: GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: ${{ matrix.artifact-name }}
+          name: Release v${{ steps.version.outputs.version }}
+          fail_on_unmatched_files: true
+          files: ${{ runner.temp }}/checksmix-*
+          body: |
+            ## Installation
+
+            ```
+            cargo install checksmix --version ${{ steps.version.outputs.version }}
+            ```
+
+            Or download the archive for your platform from the assets below.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish to crates.io
+        if: github.event_name == 'push'
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO }}
