@@ -29,6 +29,7 @@
 * The published crate drops the repository's integration tests and its CI, editor, container and agent files (`tests/`, `.github/`, `.vscode/`, `.devcontainer/`, `Dockerfile`, `CLAUDE.md`, `AGENTS.md`, `commitlint.config.js`), and takes the README's description
 * `contrib/mmix-mode.el` loads on Emacs 29 again. Since 0.3.10 it called `string-remove-suffix` and `string-remove-prefix` without requiring `subr-x`, which defines them there, so on Emacs 29 fontifying any buffer failed with `void-function string-remove-suffix`; later Emacs defines them in core, which hid it
 * `checksmix` no longer depends on the `regex` crate
+* The man pages no longer state a version
 
 0.3.13 (2026-09-22)
 
