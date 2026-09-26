@@ -1,8 +1,15 @@
 //! The SET/SETI/SETL/SETH/SETMH/SETML/INC*/OR*/ANDN* wyde-immediate family.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
 use super::super::expressions::ExprValue;
+use super::super::tree::Children;
 use super::MMixInstruction;
 
 impl MMixAssembler {
@@ -10,12 +17,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next(); // mnemonic_set
-        let operands = parts.next().unwrap(); // operand_list_two
-        let mut ops = operands.into_inner();
-        let dest = self.parse_register(ops.next().unwrap())?;
-        self.lower_set_source(dest, ops.next().unwrap())
+        let operands = parts.required()?; // operand_list_two
+        let mut ops = Children::of(operands);
+        let dest = self.parse_register(ops.required()?)?;
+        self.lower_set_source(dest, ops.required()?)
     }
 
     /// Resolve `SET`'s source operand into the instruction it selects: a
@@ -56,12 +63,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next(); // mnemonic_seti
-        let operands = parts.next().unwrap(); // operand_list_two
-        let mut ops = operands.into_inner();
-        let dest_reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.parse_number(ops.next().unwrap())?;
+        let operands = parts.required()?; // operand_list_two
+        let mut ops = Children::of(operands);
+        let dest_reg = self.parse_register(ops.required()?)?;
+        let val = self.parse_number(ops.required()?)?;
 
         Ok(MMixInstruction::SET(dest_reg, val))
     }
@@ -70,12 +77,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "SETL")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "SETL")?;
         Ok(MMixInstruction::SETL(reg, val))
     }
 
@@ -83,12 +90,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "SETH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "SETH")?;
         Ok(MMixInstruction::SETH(reg, val))
     }
 
@@ -96,12 +103,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "SETMH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "SETMH")?;
         Ok(MMixInstruction::SETMH(reg, val))
     }
 
@@ -109,12 +116,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "SETML")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "SETML")?;
         Ok(MMixInstruction::SETML(reg, val))
     }
 
@@ -122,12 +129,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "INCL")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "INCL")?;
         Ok(MMixInstruction::INCL(reg, val))
     }
 
@@ -135,12 +142,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "INCH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "INCH")?;
         Ok(MMixInstruction::INCH(reg, val))
     }
 
@@ -148,12 +155,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "INCMH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "INCMH")?;
         Ok(MMixInstruction::INCMH(reg, val))
     }
 
@@ -161,12 +168,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "INCML")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "INCML")?;
         Ok(MMixInstruction::INCML(reg, val))
     }
 
@@ -174,12 +181,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ORH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ORH")?;
         Ok(MMixInstruction::ORH(reg, val))
     }
 
@@ -187,12 +194,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ORMH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ORMH")?;
         Ok(MMixInstruction::ORMH(reg, val))
     }
 
@@ -200,12 +207,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ORML")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ORML")?;
         Ok(MMixInstruction::ORML(reg, val))
     }
 
@@ -213,12 +220,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ORL")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ORL")?;
         Ok(MMixInstruction::ORL(reg, val))
     }
 
@@ -226,12 +233,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ANDNH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ANDNH")?;
         Ok(MMixInstruction::ANDNH(reg, val))
     }
 
@@ -239,12 +246,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ANDNMH")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ANDNMH")?;
         Ok(MMixInstruction::ANDNMH(reg, val))
     }
 
@@ -252,12 +259,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ANDNML")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ANDNML")?;
         Ok(MMixInstruction::ANDNML(reg, val))
     }
 
@@ -265,12 +272,12 @@ impl MMixAssembler {
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        let mut parts = pair.into_inner();
+        let mut parts = Children::of(pair);
         let _mnem = parts.next();
-        let operands = parts.next().unwrap();
-        let mut ops = operands.into_inner();
-        let reg = self.parse_register(ops.next().unwrap())?;
-        let val = self.imm_wyde(ops.next().unwrap(), "ANDNL")?;
+        let operands = parts.required()?;
+        let mut ops = Children::of(operands);
+        let reg = self.parse_register(ops.required()?)?;
+        let val = self.imm_wyde(ops.required()?, "ANDNL")?;
         Ok(MMixInstruction::ANDNL(reg, val))
     }
 }
