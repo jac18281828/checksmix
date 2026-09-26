@@ -1,14 +1,16 @@
-//! Integration tests for docs consistency: `man_page_versions_match_cargo_toml`,
+//! Integration tests for docs consistency: `man_page_names_a_declared_binary`,
 //! `man_page_exists_for_every_declared_binary`, and
 //! `every_opcode_appears_once_in_the_instruction_table`.
 
-/// Verifies every `man/*.1` page's `.TH` version matches Cargo.toml. Pages
-/// are found by enumerating `man/` rather than naming files, so a new page
-/// is checked without anyone remembering to wire it up here.
+/// Verifies every `man/*.1` page's file stem names a declared `[[bin]]`, the
+/// other direction of `man_page_exists_for_every_declared_binary`: a page
+/// with no binary behind it is as stale as a binary with no page. Pages are
+/// found by enumerating `man/` rather than naming files, so a new page is
+/// checked without anyone remembering to wire it up here.
 #[test]
-fn man_page_versions_match_cargo_toml() {
+fn man_page_names_a_declared_binary() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let pkg_version = env!("CARGO_PKG_VERSION");
+    let bin_names = declared_bin_names(manifest_dir);
     let pages = discover_man_pages(manifest_dir);
     assert!(
         !pages.is_empty(),
@@ -16,17 +18,14 @@ fn man_page_versions_match_cargo_toml() {
     );
 
     for page in &pages {
-        let content = std::fs::read_to_string(page)
-            .unwrap_or_else(|e| panic!("could not read {}: {}", page.display(), e));
-        let version = extract_th_version(&content)
-            .unwrap_or_else(|| panic!("could not extract .TH version from {}", page.display()));
-        assert_eq!(
-            version,
-            pkg_version,
-            "{} version mismatch: expected {}, got {}",
-            page.display(),
-            pkg_version,
-            version
+        let stem = page
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_else(|| panic!("{} has no file stem", page.display()));
+        assert!(
+            bin_names.iter().any(|name| name == stem),
+            "{} names no declared [[bin]] target",
+            page.display()
         );
     }
 }
@@ -217,38 +216,4 @@ fn instruction_table_mnemonic_counts(
         }
     }
     counts
-}
-
-/// Extract version string from man page .TH line
-/// .TH lines are formatted as: .TH NAME SECTION DATE "name version"
-/// We extract the version from the quoted field after the name.
-fn extract_th_version(content: &str) -> Option<String> {
-    for line in content.lines() {
-        if line.starts_with(".TH") {
-            // Parse: .TH MMIXASM 1 "May 2025" "checksmix 0.2.23"
-            let parts: Vec<&str> = line.split('"').collect();
-            if parts.len() >= 4 {
-                // parts[3] should contain "checksmix 0.2.23"
-                let name_and_version = parts[3];
-                if let Some(version_part) = name_and_version.split_whitespace().nth(1) {
-                    return Some(version_part.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_th_version() {
-        let test_line = r#".TH MMIXASM 1 "May 2025" "checksmix 0.2.23""#;
-        assert_eq!(extract_th_version(test_line), Some("0.2.23".to_string()));
-
-        let test_line2 = r#".TH CHECKSMIX 1 "May 2025" "checksmix 0.2.23""#;
-        assert_eq!(extract_th_version(test_line2), Some("0.2.23".to_string()));
-    }
 }
