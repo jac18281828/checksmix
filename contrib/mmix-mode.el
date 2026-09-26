@@ -51,6 +51,7 @@
 (require 'compile)
 (require 'eldoc)
 (require 'help-mode)
+(require 'subr-x)
 
 (defgroup mmix nil
   "Editing checksmix MMIXAL source."
