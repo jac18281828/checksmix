@@ -240,6 +240,9 @@ impl Host for TestHost {
                 capture.diagnostics.pop();
             }
             TrapCode::Fputs if arg == 1 => {}
+            // Any index: a debug line prints to stdout, so a golden
+            // still catches it.
+            TrapCode::Debug => {}
             other => {
                 if capture.disallowed_trap.is_none() {
                     capture.disallowed_trap = Some(format!("{other:?} (handle {arg})"));
@@ -561,7 +564,7 @@ fn a_program_that_never_halts_fails_on_budget() {
 
 #[test]
 fn a_run_that_never_reaches_a_halt_trap_fails_naming_it() {
-    // Register-form TRAP halts the machine directly, without going
+    // An unsimulated TRAP halts the machine directly, without going
     // through the Halt trap.
     let source = "\tLOC\t#100\nMain\tTRAP\t1,2,3\n";
     let err = match run_program("register-trap", source, 1_000) {
@@ -569,17 +572,21 @@ fn a_run_that_never_reaches_a_halt_trap_fails_naming_it() {
         Err(err) => err,
     };
     assert!(err.contains("halted without a Halt trap"), "{err}");
-    assert!(err.contains("Register TRAP"), "{err}");
+    assert!(err.contains("unsimulated TRAP 1,2,3"), "{err}");
 }
 
 #[test]
 fn a_diagnostic_before_a_clean_halt_still_fails_the_run() {
-    let source = "\tLOC\t#100\nMain\tTRAP\t0,99,0\n\tTRAP\t0,Halt,0\n";
-    let err = match run_program("unhandled-trap-code", source, 1_000) {
+    let source = "\tLOC\t#100\nMain\tTRAP\t0,Debug,200\n\tTRAP\t0,Halt,0\n";
+    let err = match run_program("debug-index-200", source, 1_000) {
         Ok(_) => panic!("expected a run that emitted a diagnostic to fail"),
         Err(err) => err,
     };
-    assert!(err.contains("Unhandled TRAP code 99"), "{err}");
+    assert!(
+        err.contains("debug: index 200 has no string in the table"),
+        "{err}"
+    );
+    assert!(err.contains("run emitted a diagnostic"), "{err}");
 }
 
 // ============================================================

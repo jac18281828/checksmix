@@ -460,7 +460,9 @@ pre-`ADD` `$5` in `rY`.
 `RESUME 0` returns from a handler: if `rX` is negative — always true right
 after a trip — execution continues at `rW`. Otherwise `rX`'s top byte is a
 ropcode; `0` reinserts the instruction in `rX`'s low tetra as if it stood at
-`rW − 4`, then continues at `rW`. Ropcodes `1`–`3` (operand substitution,
+`rW − 4`, then continues at `rW` — unless that instruction is itself
+`RESUME`, which halts the same way ropcodes `1`–`3` do rather than
+dispatching itself again. Ropcodes `1`–`3` (operand substitution,
 forced-trap emulation, page-table insertion) and `RESUME` with a nonzero `Z`
 (the kernel's `RESUME 1`) have nothing in this VM to act on and halt with a
 diagnostic instead, PC unmoved.
@@ -553,13 +555,20 @@ an `Fopen` name that is not valid UTF-8.
 ### Extensions
 
 Three codes are checksmix's own, numbered `#80`–`#82` so an old binary's
-codes 11–13 reach the unhandled-TRAP diagnostic rather than the wrong call:
+codes 11–13 halt as an unsimulated `TRAP` rather than running the wrong call:
 
 | Code | Value | Behavior |
 | --- | --- | --- |
 | `Fputc` | `#80` | Write one byte (`$255`'s low byte) to `Handle`; shares `Fputs`'s capability check and read-write switching. Returns 0, or −1. |
 | `Time` | `#81` | `Handle` (`Z`) selects the unit: 0 seconds, 1 milliseconds, 2 microseconds since the Unix epoch. Returns the time in `$255`. |
 | `Debug` | `#82` | Backs the `debug "text"` directive, below. |
+
+A `TRAP` outside both tables above — any `X ≠ 0`, or `X = 0` with a `Code`
+neither one lists — sets `rBB ← $255`, `$255 ← rJ`, `rWW` to the address of
+the instruction after the `TRAP`, `rXX` to the `TRAP` instruction word with
+its high bit set, and `rYY`/`rZZ` to `$Y`/`$Z`, exactly as the reference's
+TRAP page gives them. It then halts with a diagnostic, PC on the `TRAP`,
+exit code 1 — this VM has no kernel at `rT` to receive control.
 
 ### `debug "text"`
 

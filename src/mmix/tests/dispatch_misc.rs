@@ -110,6 +110,27 @@ fn test_resume_ropcodes_1_to_3_halt() {
     }
 }
 
+/// `RESUME 0` must not insert a `RESUME`: a `RESUME` in `rX` would
+/// otherwise dispatch itself again, without ever advancing `rW`.
+#[test]
+fn test_resume_rx_inserting_resume_halts() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_pc(0x100);
+    mmix.set_special(SpecialReg::RX, 0x0000_0000_F900_0000);
+    mmix.set_special(SpecialReg::RW, 0x300);
+    mmix.write_tetra(0x100, 0xF9000000); // RESUME 0
+
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_pc(), 0x100, "PC stays on the outer RESUME");
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "RESUME: rX inserts a RESUME at PC=0x0000000000000100"
+    );
+}
+
 #[test]
 fn test_resume_with_nonzero_z_halts() {
     let (host, handle) = CaptureHost::new();

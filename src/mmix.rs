@@ -387,8 +387,8 @@ impl MMix {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Stop {
-    /// The machine halted: a `Halt` trap, an unhandled TRIP, an unhandled
-    /// register trap, or a diagnostic rejection (illegal-instruction,
+    /// The machine halted: a `Halt` trap, an unhandled TRIP, an unsimulated
+    /// `TRAP`, or a diagnostic rejection (illegal-instruction,
     /// privileged-operation, or an unloaded vector) — `execute_instruction`
     /// returning `false` covers every case with no finer distinction.
     /// [`MMix::get_exit_code`] distinguishes only the `Halt` trap from

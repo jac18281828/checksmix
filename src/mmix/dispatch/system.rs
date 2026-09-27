@@ -18,39 +18,22 @@ impl MMix {
     ) -> bool {
         match opcode {
             Opcode::TRAP => {
-                // TRAP X, YZ or TRAP X, Y, Z - Force trap interrupt
-                // X = 0 for immediate (YZ), X > 0 for register ($Y, $Z)
-                // For immediate form: Y is the trap number, Z is an argument
+                // TRAP X, Y, Z (trap.html): X = 0 with a Y that
+                // TrapCode::from_u8 names is one of checksmix's own
+                // syscalls; everything else is a trap the reference sends
+                // to a kernel this emulator does not model.
                 if x == 0 {
-                    // Immediate TRAP - handle system calls
-                    match TrapCode::from_u8(y) {
-                        Some(trap) => self.handle_trap(trap, z),
-                        None => {
-                            debug!(trap_code = y, arg = z, "TRAP: Unhandled trap code");
-                            self.host.diagnostic(&format!(
-                                "Unhandled TRAP code {} at PC={:#018x}",
-                                y, self.pc
-                            ));
-                            self.advance_pc();
-                            true
-                        }
+                    if let Some(trap) = TrapCode::from_u8(y) {
+                        return self.handle_trap(trap, z);
                     }
-                } else {
-                    // Register form - not commonly used for syscalls
-                    let trap_val = {
-                        let y_val = self.get_register(y);
-                        let z_val = self.get_register(z);
-                        (y_val << 32) | z_val
-                    };
-                    self.host.diagnostic(&format!(
-                        "Register TRAP x={} y=$ {} z=$ {} val=0x{:016X} at PC={:#018x}",
-                        x, y, z, trap_val, self.pc
-                    ));
-                    self.set_special(SpecialReg::RBB, trap_val);
-                    self.advance_pc();
-                    self.exit_code = 1;
-                    false // Halt by default for unhandled register traps
+                    debug!(trap_code = y, arg = z, "TRAP: unsimulated trap code");
                 }
+                // $Y and $Z are read here, before halt_unsimulated_trap
+                // overwrites $255, so a field naming $255 sees its
+                // pre-trap value.
+                let y_val = self.get_register(y);
+                let z_val = self.get_register(z);
+                self.halt_unsimulated_trap(op_byte, x, y, z, y_val, z_val)
             }
             // Stack/System instructions - opcodes 0xF6-0xF7, 0xF9-0xFF
             Opcode::PUT => {
@@ -84,7 +67,9 @@ impl MMix {
                 // interruptible instruction, no emulated opcode and no page
                 // table, so ropcodes 1-3 never arise legitimately. Each
                 // unsupported form halts through the shared MMix::reject
-                // path: diagnostic, false, PC unmoved.
+                // path: diagnostic, false, PC unmoved. A ropcode-0 rX
+                // whose own opcode is RESUME halts the same way, rather
+                // than dispatching itself forever.
                 if z != 0 {
                     return self.reject(&format!(
                         "RESUME {z}: privileged form (RESUME 1) at PC={:#018x}",
@@ -118,6 +103,12 @@ impl MMix {
                         ));
                     }
                 };
+                if ins_opcode == Opcode::RESUME {
+                    return self.reject(&format!(
+                        "RESUME: rX inserts a RESUME at PC={:#018x}",
+                        self.pc
+                    ));
+                }
                 self.pc = self.get_special(SpecialReg::RW).wrapping_sub(4);
                 self.dispatch(ins_opcode, ins_op, ins_x, ins_y, ins_z)
             }
@@ -184,5 +175,42 @@ impl MMix {
             }
             _ => unreachable!("dispatch routes only system opcodes to dispatch_system"),
         }
+    }
+
+    /// Halts on a TRAP the reference sends to a kernel this emulator does
+    /// not model (trap.html): sets rBB, $255, rWW, rXX, rYY and rZZ to the
+    /// values a kernel handler would find on entry, then halts, PC on the
+    /// TRAP. Control would then pass to rT; checksmix models no kernel.
+    /// `y_val` and `z_val` are the caller's pre-trap reads of `$Y` and
+    /// `$Z`, taken before this call overwrites `$255`.
+    fn halt_unsimulated_trap(
+        &mut self,
+        op_byte: u8,
+        x: u8,
+        y: u8,
+        z: u8,
+        y_val: u64,
+        z_val: u64,
+    ) -> bool {
+        let old_255 = self.get_register(255);
+        self.set_special(SpecialReg::RBB, old_255);
+        self.set_register(255, self.get_special(SpecialReg::RJ));
+        self.set_special(SpecialReg::RWW, self.pc.wrapping_add(4));
+        self.set_special(
+            SpecialReg::RXX,
+            0x8000_0000_0000_0000
+                | ((op_byte as u64) << 24)
+                | ((x as u64) << 16)
+                | ((y as u64) << 8)
+                | z as u64,
+        );
+        self.set_special(SpecialReg::RYY, y_val);
+        self.set_special(SpecialReg::RZZ, z_val);
+        self.host.diagnostic(&format!(
+            "unsimulated TRAP {x},{y},{z} at PC={:#018x}",
+            self.pc
+        ));
+        self.exit_code = 1;
+        false
     }
 }

@@ -27,7 +27,7 @@ const MAX_TRAP_WYDES: usize = MAX_TRAP_BYTES / 2;
 /// further argument (an address, for a call that takes two).
 /// `Fputc`, `Time` and `Debug` are checksmix's own extensions, given codes
 /// (`#80`-`#82`) well above the reference's range so an old binary's codes
-/// 11-13 reach the unhandled-TRAP diagnostic rather than the wrong call.
+/// 11-13 halt as an unsimulated `TRAP` rather than running the wrong call.
 ///
 /// More trap codes may be added in future releases, so downstream matches
 /// must carry a wildcard arm.

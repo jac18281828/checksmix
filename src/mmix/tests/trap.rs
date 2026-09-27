@@ -95,19 +95,97 @@ fn test_trap_halt() {
     assert_eq!(mmix.get_pc(), 4); // PC still advances
 }
 
-/// the register form (`X != 0`) halts and exits 1, like every
-/// other halt but the `Halt` trap.
+/// An `X != 0` trap halts as unsimulated and exits 1, like every other
+/// halt but the `Halt` trap.
 #[test]
-fn test_trap_register_form_halts_and_exits_1() {
+fn test_trap_x_nonzero_halts_unsimulated_and_exits_1() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
     mmix.set_register(2, 10);
     mmix.set_register(3, 20);
-    mmix.write_tetra(0, 0x00010203); // TRAP 1,$2,$3 -- register form
+    mmix.write_tetra(0, 0x00010203); // TRAP 1,$2,$3
     assert!(!mmix.execute_instruction());
     assert_eq!(mmix.get_exit_code(), 1);
     assert_eq!(handle.diagnostics().len(), 1);
-    assert!(handle.diagnostics()[0].contains("Register TRAP"));
+    assert_eq!(
+        handle.diagnostics()[0],
+        "unsimulated TRAP 1,2,3 at PC=0x0000000000000000"
+    );
+}
+
+/// `X = 0` with a `Y` `TrapCode::from_u8` does not name halts as
+/// unsimulated, with the TRAP page's registers set from the pre-trap
+/// machine state.
+#[test]
+fn test_trap_x_zero_unknown_code_halts_with_trap_page_registers() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(99, 0x1111);
+    mmix.set_register(7, 0x2222);
+    mmix.set_register(255, 0x3333);
+    mmix.set_special(SpecialReg::RJ, 0x4444);
+    mmix.write_tetra(0, 0x00006307); // TRAP 0,99,7
+
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(mmix.get_pc(), 0);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "unsimulated TRAP 0,99,7 at PC=0x0000000000000000"
+    );
+    assert_eq!(mmix.get_special(SpecialReg::RBB), 0x3333);
+    assert_eq!(mmix.get_register(255), 0x4444);
+    assert_eq!(mmix.get_special(SpecialReg::RWW), 4);
+    assert_eq!(mmix.get_special(SpecialReg::RXX), 0x8000_0000_0000_6307);
+    assert_eq!(mmix.get_special(SpecialReg::RYY), 0x1111);
+    assert_eq!(mmix.get_special(SpecialReg::RZZ), 0x2222);
+}
+
+/// `X != 0` sets the TRAP page's registers from full-width `$Y`/`$Z`
+/// contents.
+#[test]
+fn test_trap_x_nonzero_sets_trap_page_registers_from_full_width_y() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(10, 0x1234_0000_0000_0000);
+    mmix.set_register(20, 0xABCD);
+    mmix.set_register(255, 0x5555);
+    mmix.set_special(SpecialReg::RJ, 0x6666);
+    mmix.write_tetra(0, 0x00050A14); // TRAP 5,10,20
+
+    assert!(!mmix.execute_instruction());
+    assert_eq!(mmix.get_exit_code(), 1);
+    assert_eq!(mmix.get_pc(), 0);
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(
+        handle.diagnostics()[0],
+        "unsimulated TRAP 5,10,20 at PC=0x0000000000000000"
+    );
+    assert_eq!(mmix.get_special(SpecialReg::RBB), 0x5555);
+    assert_eq!(mmix.get_register(255), 0x6666);
+    assert_eq!(mmix.get_special(SpecialReg::RWW), 4);
+    assert_eq!(mmix.get_special(SpecialReg::RXX), 0x8000_0000_0005_0A14);
+    assert_eq!(mmix.get_special(SpecialReg::RYY), 0x1234_0000_0000_0000);
+    assert_eq!(mmix.get_special(SpecialReg::RZZ), 0xABCD);
+}
+
+/// `Y` and `Z` naming `$255` still read the pre-trap value: the reads
+/// happen before `$255 ← rJ` overwrites it.
+#[test]
+fn test_trap_y_and_z_as_255_read_before_255_is_overwritten() {
+    let (host, handle) = CaptureHost::new();
+    let mut mmix = MMix::with_host(host);
+    mmix.set_register(255, 0x1357);
+    mmix.set_special(SpecialReg::RJ, 0x2468);
+    mmix.write_tetra(0, 0x0005FFFF); // TRAP 5,255,255
+
+    assert!(!mmix.execute_instruction());
+    assert_eq!(handle.diagnostics().len(), 1);
+    assert_eq!(mmix.get_special(SpecialReg::RYY), 0x1357);
+    assert_eq!(mmix.get_special(SpecialReg::RZZ), 0x1357);
+    assert_eq!(mmix.get_special(SpecialReg::RBB), 0x1357);
+    assert_eq!(mmix.get_register(255), 0x2468);
 }
 
 #[test]

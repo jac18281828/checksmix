@@ -82,7 +82,7 @@ pub trait Host: Any {
 
     /// Flush any buffered output. `Halt` is the only event that calls this,
     /// mirroring the process exiting without running destructors — a
-    /// program that stops via register-form `TRAP` or the `TRIP`
+    /// program that stops via an unsimulated `TRAP` or the `TRIP`
     /// instruction never reaches it, and `MMix` has no `Drop`. A host must
     /// not rely on `flush` for correctness. No-op by default.
     fn flush(&mut self) {}
@@ -92,17 +92,18 @@ pub trait Host: Any {
     /// milliseconds from it by division.
     fn now_micros(&mut self) -> u64;
 
-    /// Report an operator-facing diagnostic message (an unhandled trap
-    /// code, a truncated string, a HALT/TRIP notice). `StdHost` sends these
-    /// to stderr via `eprintln!`.
+    /// Report an operator-facing diagnostic message (an unsimulated
+    /// `TRAP`, a truncated string, a HALT/TRIP notice). `StdHost` sends
+    /// these to stderr via `eprintln!`.
     fn diagnostic(&mut self, msg: &str);
 
     /// Observe a trap after `handle_trap`'s dispatch has run, with `$255`
     /// captured both before and after. No-op by default.
     ///
-    /// Only recognized trap codes reach this hook. An unhandled code, the
-    /// register form of `TRAP` (`X != 0`, which halts the machine), and the
-    /// `TRIP` instruction all report through `diagnostic` instead.
+    /// Only recognized trap codes reach this hook. An unsimulated `TRAP`
+    /// (any `X != 0`, or `X = 0` with a `Y` `TrapCode::from_u8` does not
+    /// name, both of which halt the machine), and the `TRIP` instruction,
+    /// report through `diagnostic` instead.
     ///
     /// `arg255` and `result255` do not mean the same thing for every trap:
     /// - `Halt` never writes `$255`, so `result255` is simply the exit code
