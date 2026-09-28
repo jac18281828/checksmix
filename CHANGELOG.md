@@ -1,4 +1,4 @@
-0.4.0 (unreleased)
+0.4.0 (2026-09-28)
 
 * `break` and `delete` take a `#` or `0x` hex address as `print` does, rounded down to its tetra, and an unprefixed number is still a source line
 * After `GO` or `PUSHGO` to an address off a tetra boundary, a line, label or hex breakpoint on any instruction reached from there now fires under `step`, `next`, `continue` and `run`; every breakpoint is keyed on its tetra, so a label or data line at `#109` sets, lists and deletes as `0x108`
