@@ -268,15 +268,15 @@ emacs --batch -L contrib -l contrib/mmix-mode-test.el -f ert-run-tests-batch-and
 `clap`, `rustyline` and `tracing-subscriber` dependencies the CLIs need live behind
 the `cli` feature, which is on by default. A library-only consumer, notably one
 targeting `wasm32-unknown-unknown` where `rustyline` does not build, turns it off.
-[playmmix](https://playmmix.2ad.com) is built this way, on `checksmix = { version = "0.3",
-default-features = false }`, and runs the emulator in the browser as wasm.
+[playmmix](https://playmmix.2ad.com) is built this way, with `default-features = false`,
+and runs the emulator in the browser as wasm.
 
 ```toml
 # default — library plus the CLI dependency tree
-checksmix = "0.3"
+checksmix = "0.4"
 
 # library only
-checksmix = { version = "0.3", default-features = false }
+checksmix = { version = "0.4", default-features = false }
 ```
 
 Either form gives you the library. The `checksmix`, `mmixasm` and `mmixdb`
