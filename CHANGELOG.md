@@ -1,4 +1,4 @@
-0.4.1 (unreleased)
+0.4.1 (2026-09-28)
 
 * An unsimulated `TRAP` halts instead of continuing. A `TRAP 0,Code,Z` whose `Code` `TrapCode::from_u8` does not name now halts the machine, where it used to print a diagnostic and continue; and `X ≠ 0` now sets `rBB`, `$255`, `rWW`, `rXX`, `rYY` and `rZZ` as the reference's TRAP page gives them, where it used to write `($Y << 32) | $Z` to `rBB` alone, dropping `$Y`'s high half. Either way the PC stays on the `TRAP`. A `RESUME 0` whose `rX` carries a `RESUME` now halts as ropcodes 1–3 do, instead of dispatching itself until the host stack overflows
 * An instruction field's, `SET`'s and a data directive's out-of-range message quotes an operand of `2^63` or more as its own source text instead of a signed 64-bit rendering, since a `u64` alone cannot tell a negative literal from a wide unsigned one: `BYTE #FFFFFFFFFFFFFF00` now warns quoting `#FFFFFFFFFFFFFF00`, not `-256`. `SET` hints `SETI or NEG for a negative constant` only when that quoted text itself begins with `-`, as `SET $1,-1`'s does; `SET $1,0-1`'s text does not, so it hints `SETI` alone though its value also wraps to `2^63` or more
