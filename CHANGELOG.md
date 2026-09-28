@@ -1,3 +1,7 @@
+0.4.2 (unreleased)
+
+* `Host` gains `read`, a `fd`/`buf` counterpart to `write`; a fd 0 (`StdIn`) `Fread`/`Fgets`/`Fgetws` now routes through it instead of always failing. The default returns `Unsupported`, keeping every existing embedder's results; `StdHost` reads the process's own stdin. `Fgets`/`Fgetws` store their zero terminator at end of file on handle 0 too, as they already do for a file, and an `Fread` of size 0 on handle 0 now returns 0, not −1, matching a file
+
 0.4.1 (2026-09-28)
 
 * An unsimulated `TRAP` halts instead of continuing. A `TRAP 0,Code,Z` whose `Code` `TrapCode::from_u8` does not name now halts the machine, where it used to print a diagnostic and continue; and `X ≠ 0` now sets `rBB`, `$255`, `rWW`, `rXX`, `rYY` and `rZZ` as the reference's TRAP page gives them, where it used to write `($Y << 32) | $Z` to `rBB` alone, dropping `$Y`'s high half. Either way the PC stays on the `TRAP`. A `RESUME 0` whose `rX` carries a `RESUME` now halts as ropcodes 1–3 do, instead of dispatching itself until the host stack overflows

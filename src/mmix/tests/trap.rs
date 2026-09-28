@@ -85,6 +85,159 @@ fn test_trap_fwrite_stdout_size_above_i64_max_wraps_correctly() {
     assert_eq!(mmix.get_register(255), 0x8000000000100000);
 }
 
+/// A `Host` implementing every method but `read`, so the trait's own
+/// default -- `Err` of kind `Unsupported` -- is what a handle-0 call sees.
+struct NoReadHost;
+
+impl Host for NoReadHost {
+    fn write(&mut self, _fd: u8, _bytes: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        0
+    }
+
+    fn diagnostic(&mut self, _msg: &str) {}
+}
+
+/// `Fread` on handle 0 reads the host's queued bytes: a full read returns
+/// 0, and a short read at end of input returns `n - size`. `CaptureHost`
+/// hands out one byte per `read` call, so this also proves `Fread`'s chunk
+/// loop accumulates across several host calls rather than assuming one call
+/// fills the request.
+#[test]
+fn test_trap_fread_handle0_reads_host_bytes() {
+    let (mut host, _handle) = CaptureHost::new();
+    host.queue_input(b"ABCDE");
+    let mut mmix = MMix::with_host(host);
+    let buffer_addr = 5_000u64;
+
+    write_two_octa_params(&mut mmix, buffer_addr, 5);
+    mmix.write_tetra(0, 0x00000300); // TRAP 0, Fread (3), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 0);
+    assert_eq!(
+        (0..5)
+            .map(|i| mmix.read_byte(buffer_addr + i))
+            .collect::<Vec<_>>(),
+        b"ABCDE"
+    );
+
+    let (mut host, _handle) = CaptureHost::new();
+    host.queue_input(b"XYZ");
+    let mut mmix = MMix::with_host(host);
+    write_two_octa_params(&mut mmix, buffer_addr, 5);
+    mmix.write_tetra(0, 0x00000300); // TRAP 0, Fread (3), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (3u64).wrapping_sub(5));
+    assert_eq!(
+        (0..3)
+            .map(|i| mmix.read_byte(buffer_addr + i))
+            .collect::<Vec<_>>(),
+        b"XYZ"
+    );
+}
+
+/// `Fgets` on handle 0 stops after a newline, stores the terminator and
+/// returns the count.
+#[test]
+fn test_trap_fgets_handle0_stops_at_newline() {
+    let (mut host, _handle) = CaptureHost::new();
+    host.queue_input(b"hi\nignored");
+    let mut mmix = MMix::with_host(host);
+    let buffer_addr = 6_000u64;
+    for i in 0..16 {
+        mmix.write_byte(buffer_addr + i, 0xFF);
+    }
+
+    write_two_octa_params(&mut mmix, buffer_addr, 16);
+    mmix.write_tetra(0, 0x00000400); // TRAP 0, Fgets (4), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 3);
+    assert_eq!(
+        (0..3)
+            .map(|i| mmix.read_byte(buffer_addr + i))
+            .collect::<Vec<_>>(),
+        b"hi\n"
+    );
+    assert_eq!(mmix.read_byte(buffer_addr + 3), 0);
+}
+
+/// `Fgetws` on handle 0 reads whole wydes and stops at `#000A`.
+/// `CaptureHost` hands out one byte per `read` call, so this also proves
+/// `Fgetws` assembles each wyde from two host calls rather than one.
+#[test]
+fn test_trap_fgetws_handle0_reads_whole_wydes_and_stops_at_000a() {
+    let (mut host, _handle) = CaptureHost::new();
+    host.queue_input(&[0x00, 0x41, 0x00, 0x0A, 0x00, 0x42]);
+    let mut mmix = MMix::with_host(host);
+    let buffer_addr = 7_000u64;
+    for i in 0..8 {
+        mmix.write_byte(buffer_addr + i, 0xFF);
+    }
+
+    write_two_octa_params(&mut mmix, buffer_addr, 8);
+    mmix.write_tetra(0, 0x00000500); // TRAP 0, Fgetws (5), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 2);
+    assert_eq!(
+        (0..4)
+            .map(|i| mmix.read_byte(buffer_addr + i))
+            .collect::<Vec<_>>(),
+        vec![0x00, 0x41, 0x00, 0x0A]
+    );
+    assert_eq!(mmix.read_byte(buffer_addr + 4), 0);
+    assert_eq!(mmix.read_byte(buffer_addr + 5), 0);
+}
+
+/// A host that leaves `read` at its default: `Fread` reports
+/// `-(size + 1)` for a nonzero size and 0 for size 0; `Fgets` and `Fgetws`
+/// both report -1.
+#[test]
+fn test_trap_default_host_read_fails_on_handle0_but_fread_size_0_succeeds() {
+    let mut mmix = MMix::with_host(NoReadHost);
+    write_two_octa_params(&mut mmix, 8_000, 10);
+    mmix.write_tetra(0, 0x00000300); // TRAP 0, Fread (3), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), u64::MAX.wrapping_sub(10));
+
+    let mut mmix = MMix::with_host(NoReadHost);
+    write_two_octa_params(&mut mmix, 8_000, 0);
+    mmix.write_tetra(0, 0x00000300); // TRAP 0, Fread (3), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 0);
+
+    let mut mmix = MMix::with_host(NoReadHost);
+    for i in 0..16 {
+        mmix.write_byte(8_000 + i, 0xFF);
+    }
+    write_two_octa_params(&mut mmix, 8_000, 16);
+    mmix.write_tetra(0, 0x00000400); // TRAP 0, Fgets (4), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    assert_eq!(
+        mmix.read_byte(8_000),
+        0,
+        "the zero terminator is still stored"
+    );
+
+    let mut mmix = MMix::with_host(NoReadHost);
+    for i in 0..8 {
+        mmix.write_byte(8_000 + i, 0xFF);
+    }
+    write_two_octa_params(&mut mmix, 8_000, 8);
+    mmix.write_tetra(0, 0x00000500); // TRAP 0, Fgetws (5), 0 (StdIn)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    assert_eq!(
+        mmix.read_byte(8_000),
+        0,
+        "the zero terminator is still stored"
+    );
+    assert_eq!(mmix.read_byte(8_001), 0);
+}
+
 #[test]
 fn test_trap_halt() {
     let mut mmix = MMix::new();
@@ -395,7 +548,8 @@ fn test_halt_routes_diagnostic_and_flush_to_host() {
 
 #[test]
 fn test_boxed_host_delegates_every_method() {
-    let (host, handle) = CaptureHost::with_clock(7_000_000);
+    let (mut host, handle) = CaptureHost::with_clock(7_000_000);
+    host.queue_input(b"Q");
     let boxed: Box<dyn Host> = Box::new(host);
     let mut mmix = MMix::with_host(boxed);
 
@@ -409,8 +563,16 @@ fn test_boxed_host_delegates_every_method() {
     assert_eq!(mmix.get_register(255), 7);
 
     mmix.set_pc(8);
+    let buffer_addr = 100u64;
+    write_two_octa_params(&mut mmix, buffer_addr, 1);
+    mmix.write_tetra(8, 0x00000300); // TRAP 0, Fread (3), 0 (StdIn) -> read
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 0);
+    assert_eq!(mmix.read_byte(buffer_addr), b'Q');
+
+    mmix.set_pc(12);
     mmix.set_register(255, 9);
-    mmix.write_tetra(8, 0x00000000); // TRAP 0, Halt (0) -> flush + diagnostic
+    mmix.write_tetra(12, 0x00000000); // TRAP 0, Halt (0) -> flush + diagnostic
     assert!(!mmix.execute_instruction());
 
     // One assertion per trait method, so a missed delegation names itself.
@@ -423,6 +585,9 @@ fn test_boxed_host_delegates_every_method() {
             (TrapCode::Fputc, 1, u64::from(b'Z'), 0),
             // $255 enters Time as 0: Fputc stored 0 there on success.
             (TrapCode::Time, 0, 0, 7),
+            // $255 enters Fread holding write_two_octa_params' own scratch
+            // address; a successful single-byte read reports 0.
+            (TrapCode::Fread, 0, 200_000, 0),
             (TrapCode::Halt, 0, 9, 9),
         ]
     ); // trap

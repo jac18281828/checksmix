@@ -34,9 +34,9 @@ cargo build --release          # binaries land in target/release/
   inspection, and Emacs GUD support.
 
 `checksmix` has 256 general-purpose registers, 32 special registers, a sparse 64-bit
-address space and the MMIXAL reference's TRAP file I/O, except a `StdIn`
-read, which always fails (see [`MMIX.md`](MMIX.md)'s "TRAP interface"
-section).
+address space and the MMIXAL reference's TRAP file I/O, including `StdIn`:
+`checksmix run` feeds a guest from the shell's own stdin (see
+[`MMIX.md`](MMIX.md)'s "TRAP interface" section).
 
 Assemble once and run the object file:
 
@@ -284,9 +284,9 @@ executables come from `cargo install checksmix`, not from a `[dependencies]` ent
 
 ### Capturing what a program emits
 
-By default an `MMix` writes to the process's stdout and stderr. Implement
-`Host` to intercept what the program writes, the clock behind the `Time` trap,
-diagnostics and every recognized `TRAP`:
+By default an `MMix` reads and writes the process's own stdin, stdout and
+stderr. Implement `Host` to intercept what the program reads and writes, the
+clock behind the `Time` trap, diagnostics and every recognized `TRAP`:
 
 ```rust
 use checksmix::{Host, MMix};
@@ -315,7 +315,8 @@ machine).
 
 `Debugger::load_with_host` takes a host the same way, for programs you want to
 step through rather than run straight out. `Debugger::load` installs `StdHost`,
-so a debugged program's output goes to the process and never reaches you.
+so a debugged program's output goes to the process and never reaches you, and
+its `StdIn` reads the process's own stdin.
 
 An `MMix` holds its host as `Box<dyn Host>` and so is none of `Send`, `Sync`,
 `UnwindSafe` or `RefUnwindSafe`; a `Debugger` holds an `MMix` and inherits that.
@@ -333,8 +334,8 @@ MMIX is Knuth's "pretty clean" machine architecture, and he documented it himsel
   instruction set as Knuth teaches it, and the shortest path in.
 
 `checksmix` follows the same instruction set, so a program written from any of these
-runs here, except for a `StdIn` read, which always fails (see
-[`MMIX.md`](MMIX.md)'s "TRAP interface" section).
+runs here, `StdIn` included (see [`MMIX.md`](MMIX.md)'s "TRAP interface"
+section).
 
 ## Related projects
 

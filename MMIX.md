@@ -543,9 +543,10 @@ Handles 0, 1 and 2 (`StdIn`, `StdOut`, `StdErr`, the predefined symbols'
 values) are open at start with `TextRead`, `TextWrite`, `TextWrite`.
 **Departure from the reference:** `Fopen`/`Fclose` on any of them return −1
 and leave the stream as it was, rather than letting the program rebind them
-— checksmix routes handles 1 and 2 through the host's own write, which has
-no file underneath to rebind, and a `StdIn` read always fails, since the
-host has no read primitive.
+— checksmix routes handles 1 and 2 through the host's own write and handle 0
+through its own read, neither of which has a file underneath to rebind.
+`checksmix run` reads the shell's own stdin; an embedder's own `Host`
+decides for itself, and fails by default.
 
 **Departure from the reference:** the reference places no length limit on
 `Fwrite`, `Fopen`'s name, `Fputs`, or `Fputws`, and accepts any size or

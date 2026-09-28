@@ -3,6 +3,7 @@
 
 use super::*;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 /// What a `CaptureHost` records, shared with the test via `CaptureHandle`.
@@ -43,11 +44,13 @@ impl CaptureHandle {
 }
 
 /// A `Host` that records writes, diagnostics, and trap events instead of
-/// sending them to the process, and reports a fixed clock rather than
-/// `SystemTime::now()`.
+/// sending them to the process, reports a fixed clock rather than
+/// `SystemTime::now()`, and serves `Host::read` from a queued byte buffer
+/// one byte per call — so a caller that ignores a short read fails.
 struct CaptureHost {
     log: Rc<RefCell<CaptureLog>>,
     clock_micros: u64,
+    input: VecDeque<u8>,
 }
 
 impl CaptureHost {
@@ -58,6 +61,7 @@ impl CaptureHost {
             Self {
                 log,
                 clock_micros: 0,
+                input: VecDeque::new(),
             },
             handle,
         )
@@ -67,6 +71,11 @@ impl CaptureHost {
         let (mut host, handle) = Self::new();
         host.clock_micros = clock_micros;
         (host, handle)
+    }
+
+    /// Queues `bytes` for `Host::read` to hand out one at a time.
+    fn queue_input(&mut self, bytes: &[u8]) {
+        self.input.extend(bytes);
     }
 }
 
@@ -79,6 +88,22 @@ impl Host for CaptureHost {
             _ => return Err(std::io::Error::other("CaptureHost: unsupported fd")),
         }
         Ok(())
+    }
+
+    fn read(&mut self, fd: u8, buf: &mut [u8]) -> std::io::Result<usize> {
+        if fd != 0 {
+            return Err(std::io::Error::other("CaptureHost: unsupported fd"));
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        match self.input.pop_front() {
+            Some(byte) => {
+                buf[0] = byte;
+                Ok(1)
+            }
+            None => Ok(0),
+        }
     }
 
     fn flush(&mut self) {

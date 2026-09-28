@@ -1,8 +1,9 @@
-use checksmix::{Command, Debugger, MMixAssembler, parse_command};
+use checksmix::{Command, Debugger, Host, MMixAssembler, StdHost, TrapCode, parse_command};
 use clap::Parser;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -25,6 +26,36 @@ struct Cli {
     fullname: bool,
 }
 
+/// `mmixdb`'s own `Host`: every process-level effect but `read` goes to
+/// `StdHost`. `read` never touches the process's real stdin, which
+/// `rustyline` owns for debugger commands, so a guest `StdIn` read fails,
+/// as it does under the default `Host::read`.
+struct DebuggerHost {
+    stdio: StdHost,
+}
+
+impl Host for DebuggerHost {
+    fn write(&mut self, fd: u8, bytes: &[u8]) -> io::Result<()> {
+        self.stdio.write(fd, bytes)
+    }
+
+    fn flush(&mut self) {
+        self.stdio.flush()
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        self.stdio.now_micros()
+    }
+
+    fn diagnostic(&mut self, msg: &str) {
+        self.stdio.diagnostic(msg)
+    }
+
+    fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
+        self.stdio.trap(code, arg, arg255, result255)
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -45,7 +76,7 @@ fn main() {
         process::exit(1);
     });
 
-    let mut debugger = Debugger::load(assembler);
+    let mut debugger = Debugger::load_with_host(assembler, DebuggerHost { stdio: StdHost });
     let fullname = cli.fullname || std::env::var_os("INSIDE_EMACS").is_some();
     debugger.set_fullname(fullname);
 

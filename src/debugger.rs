@@ -302,7 +302,10 @@ pub struct Debugger {
 impl Debugger {
     /// Load an assembled program: run the `run_mms` load sequence (write
     /// every instruction's bytes to memory, then resolve the entry point)
-    /// and set PC there.
+    /// and set PC there. Installs [`crate::StdHost`], so a guest's `StdIn`
+    /// reads the process's own stdin — unsuitable for a caller (`mmixdb`)
+    /// whose own stdin already carries something else, which wants
+    /// [`Debugger::load_with_host`] instead.
     pub fn load(assembler: MMixAssembler) -> Debugger {
         Self::with_machine(MMix::new(), assembler)
     }
@@ -310,11 +313,13 @@ impl Debugger {
     /// Load an assembled program into a machine whose process-level effects
     /// go to `host` rather than the process — the entry point an embedder
     /// needs, since [`Debugger::load`] installs [`crate::StdHost`] and offers
-    /// no way to reach the output afterwards.
+    /// no way to reach the output afterwards, or to control what a guest's
+    /// `StdIn` reads.
     ///
     /// `Command::Run` resets the machine between runs but keeps the host, so
-    /// a host that accumulates output sees every run appended. Clear the
-    /// host's buffers between runs if that is not what you want.
+    /// a host that accumulates output sees every run appended, and one that
+    /// serves `StdIn` from a fixed buffer must rewind that buffer itself —
+    /// `Debugger` has no hook for it.
     pub fn load_with_host<H: Host + 'static>(assembler: MMixAssembler, host: H) -> Debugger {
         Self::with_machine(MMix::with_host(host), assembler)
     }

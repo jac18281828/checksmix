@@ -2,26 +2,26 @@
 
 use super::TrapCode;
 use std::any::Any;
-use std::io::{Write, stderr, stdout};
+use std::io::{Read, Write, stderr, stdin, stdout};
 use std::time::SystemTime;
 
-/// Routes every process-level effect an `MMix` produces: writes to fd 1/2,
-/// the wall clock, and diagnostic messages (`StdHost` prints them to
-/// stderr).
+/// Routes every process-level effect an `MMix` produces: writes to fd 1/2, a
+/// read from fd 0, the wall clock, and diagnostic messages (`StdHost` prints
+/// them to stderr).
 ///
-/// `MMix::new()` installs `StdHost`, which writes to the process's own
-/// stdout and stderr. `MMix::with_host` accepts any `Host`, which is how an
-/// embedder (a wasm host with no stdout, a test harness that wants to
-/// inspect bytes rather than print them) captures what the machine emits
-/// instead of losing it to the process.
+/// `MMix::new()` installs `StdHost`, which reads the process's own stdin
+/// and writes to its stdout and stderr. `MMix::with_host` accepts any
+/// `Host`, which is how an embedder (a wasm host with no stdin or stdout, a
+/// test harness that wants to feed and inspect bytes rather than a real
+/// stream) replaces what the machine reads and emits instead of routing it
+/// through the process.
 ///
 /// File-descriptor traps (`Fopen`/`Fclose`/`Fread`/`Fgets`/`Fgetws`/
 /// `Fwrite`/`Fseek`/`Ftell` on a handle above 2, and fd 3+ of `Fputs`/
 /// `Fputc`/`Fputws`) do not go through the host — they keep using `std::fs`
 /// directly and fail naturally on platforms without a filesystem. Handles
-/// 0-2 belong to the host: `Fopen`/`Fclose` reject them. Fd 1 and 2 writes
-/// route through `Host`; a fd 0 (`StdIn`) read always fails, since `Host`
-/// has no read primitive.
+/// 0-2 belong to the host: `Fopen`/`Fclose` reject them. Fd 1 and 2 writes,
+/// and a fd 0 (`StdIn`) read, route through `Host`.
 ///
 /// `flush` and `trap` have no-op defaults, so an embedder implements only
 /// what it needs. The trait is object-safe — `MMix` stores it as
@@ -80,6 +80,17 @@ pub trait Host: Any {
     /// `Fputs` and `Fputws` store `bytes.len()` in `$255`; `Fputc` stores 0.
     fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()>;
 
+    /// Read raw bytes from file descriptor `fd` (only 0 reaches the host —
+    /// see the trait docs), `std::io::Read::read`'s meaning: `Ok(n)` for
+    /// `0 < n <= buf.len()` bytes read, `Ok(0)` at end of file.
+    ///
+    /// The default returns `Err` of kind `Unsupported`, so an embedder that
+    /// implements only `write` fails every `StdIn` read.
+    fn read(&mut self, fd: u8, buf: &mut [u8]) -> std::io::Result<usize> {
+        let _ = (fd, buf);
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
+
     /// Flush any buffered output. `Halt` is the only event that calls this,
     /// mirroring the process exiting without running destructors — a
     /// program that stops via an unsimulated `TRAP` or the `TRIP`
@@ -135,6 +146,10 @@ impl<H: Host + ?Sized> Host for Box<H> {
         (**self).write(fd, bytes)
     }
 
+    fn read(&mut self, fd: u8, buf: &mut [u8]) -> std::io::Result<usize> {
+        (**self).read(fd, buf)
+    }
+
     fn flush(&mut self) {
         (**self).flush()
     }
@@ -153,13 +168,14 @@ impl<H: Host + ?Sized> Host for Box<H> {
 }
 
 /// The `Host` behind `MMix::new()`: the process's own I/O — locked
-/// `stdout`/`stderr` writes, `stdout().flush()` on halt, `SystemTime` for
-/// the clock, and `eprintln!` for diagnostics.
+/// `stdin`/`stdout`/`stderr` reads and writes, `stdout().flush()` on halt,
+/// `SystemTime` for the clock, and `eprintln!` for diagnostics.
 ///
-/// `write_bytes_to_fd` only ever calls `Host::write` with fd 1 or 2 (fd 3+
-/// reads its `File` from `file_handles`), but `StdHost` is a general `Host`
+/// `write_bytes_to_fd` only ever calls `Host::write` with fd 1 or 2, and
+/// `Host::read` is only ever called with fd 0 (fd 3+ uses its `File` from
+/// `file_handles` directly), but `StdHost` is a general `Host`
 /// implementation, so it treats any other fd as an error rather than
-/// assuming that invariant.
+/// assuming those invariants.
 pub struct StdHost;
 
 impl Host for StdHost {
@@ -167,6 +183,15 @@ impl Host for StdHost {
         match fd {
             1 => stdout().lock().write_all(bytes),
             2 => stderr().lock().write_all(bytes),
+            _ => Err(std::io::Error::other(format!(
+                "StdHost: unsupported file descriptor {fd}"
+            ))),
+        }
+    }
+
+    fn read(&mut self, fd: u8, buf: &mut [u8]) -> std::io::Result<usize> {
+        match fd {
+            0 => stdin().lock().read(buf),
             _ => Err(std::io::Error::other(format!(
                 "StdHost: unsupported file descriptor {fd}"
             ))),

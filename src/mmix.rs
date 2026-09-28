@@ -214,9 +214,8 @@ impl MMix {
         self.set_special(SpecialReg::RV, 0x369C200400000000);
 
         // StdIn/StdOut/StdErr are open at start, TextRead/TextWrite/TextWrite
-        // per the reference. None carries a `File`: fd 1 and 2's writes
-        // route through the installed `Host`; a fd 0 read always fails,
-        // since `Host` has no read primitive.
+        // per the reference. None carries a `File`: fd 1 and 2's writes, and
+        // a fd 0 read, route through the installed `Host`.
         self.file_handles.insert(
             0,
             FileHandle {

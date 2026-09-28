@@ -1,6 +1,6 @@
 #![cfg(feature = "cli")]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -72,6 +72,26 @@ fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
         }
         thread::sleep(Duration::from_millis(20));
     };
+    Output {
+        status,
+        stdout: stdout_reader.join().unwrap(),
+        stderr: stderr_reader.join().unwrap(),
+    }
+}
+
+/// Pipes `input` to `cmd`'s stdin, draining stdout/stderr on their own
+/// threads so a full pipe never deadlocks the child, then waits for it to
+/// exit. Closing the stdin handle after the write lets a child blocked on
+/// `read` see end of file.
+fn output_with_stdin(cmd: &mut Command, input: &[u8]) -> Output {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let stdout_reader = drain(child.stdout.take().unwrap());
+    let stderr_reader = drain(child.stderr.take().unwrap());
+    let status = child.wait().unwrap();
     Output {
         status,
         stdout: stdout_reader.join().unwrap(),
@@ -827,5 +847,44 @@ fn mmixasm_clean_build_writes_nothing_to_stderr() {
         out.stderr.is_empty(),
         "mmixasm should write nothing to stderr on a clean build; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ── StdIn reads: `checksmix run` from the shell ───────────────────────────
+//
+// echo.mms reads one line with Fgets and echoes it; a failed read prints
+// "no input" instead, so a test can tell the two cases apart in stdout
+// alone.
+
+#[test]
+fn run_echo_fixture_prints_a_piped_stdin_line() {
+    let mut cmd = checksmix();
+    cmd.args(["run"]).arg(fixture("echo.mms"));
+    let out = output_with_stdin(&mut cmd, b"hello\n");
+    assert!(
+        out.status.success(),
+        "the echo fixture halts with $255=0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("hello"),
+        "stdout should echo the piped line; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn mmixdb_without_stdin_option_fails_the_guest_read_and_keeps_its_own_quit() {
+    let mut cmd = mmixdb();
+    cmd.arg(fixture("echo.mms"));
+    let out = output_with_stdin(&mut cmd, b"run\nquit\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("no input"),
+        "the guest's Fgets must fail without --stdin; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("Quit"),
+        "mmixdb's own quit must still run -- the guest never sees it; stdout: {stdout}"
     );
 }

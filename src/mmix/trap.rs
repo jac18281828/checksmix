@@ -2,7 +2,7 @@
 
 use super::MMix;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use tracing::debug;
 
 /// The per-call byte bound shared by `Fopen`'s name, `Fwrite`, `Fputs` and
@@ -75,10 +75,9 @@ impl TrapCode {
 }
 
 /// One of `checksmix`'s open TRAP handles. Handles 0-2 are the standard
-/// streams: no backing `File` and fixed capabilities. Fd 1 and 2 writes
-/// route through the installed [`Host`]; a fd 0 read always fails, since
-/// `Host` has no read primitive. Handles 3-255 are whatever `Fopen`'s mode
-/// granted.
+/// streams: no backing `File` and fixed capabilities. Fd 1 and 2 writes, and
+/// a fd 0 read, route through the installed [`Host`]. Handles 3-255 are
+/// whatever `Fopen`'s mode granted.
 ///
 /// `read`, `write` and `seek` gate `Fread`/`Fgets`/`Fgetws`,
 /// `Fwrite`/`Fputs`/`Fputc`/`Fputws`, and `Fseek`/`Ftell` respectively.
@@ -152,6 +151,35 @@ impl MMix {
     /// Whether `handle` is open and grants seek access.
     fn handle_seekable(&self, handle: u8) -> bool {
         self.file_handles.get(&handle).is_some_and(|h| h.seek)
+    }
+
+    /// `Fread`, `Fgets` and `Fgetws`' one read path: `handle`'s byte
+    /// source, `Host::read` for handle 0 and the open `File` otherwise.
+    fn read_from_handle(&mut self, handle: u8, buf: &mut [u8]) -> std::io::Result<usize> {
+        if handle == 0 {
+            self.host.read(0, buf)
+        } else {
+            self.open_file(handle).read(buf)
+        }
+    }
+
+    /// Fills a whole wyde from `handle`'s byte source, retrying past a short
+    /// read the way `File::read_exact` does — `Host::read`'s only per-call
+    /// guarantee is "at most a full buffer". `None` at end of file, mid-wyde
+    /// or otherwise, or on an I/O error; either way any bytes already read
+    /// are discarded, matching `read_exact`.
+    fn read_wyde_from_handle(&mut self, handle: u8) -> Option<[u8; 2]> {
+        let mut wyde = [0u8; 2];
+        let mut total = 0;
+        while total < wyde.len() {
+            match self.read_from_handle(handle, &mut wyde[total..]) {
+                Ok(0) => return None,
+                Ok(n) => total += n,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(_) => return None,
+            }
+        }
+        Some(wyde)
     }
 
     /// Fails a TRAP whose precondition `ok` does not hold: stores `failure`
@@ -356,9 +384,8 @@ impl MMix {
             "TRAP: Fread"
         );
 
-        // Handle 0 (StdIn) has no host read primitive.
         if self.fail_unless(
-            self.handle_readable(handle) && handle != 0,
+            self.handle_readable(handle),
             u64::MAX.wrapping_sub(size) as i64,
         ) {
             return true;
@@ -374,8 +401,7 @@ impl MMix {
         let mut had_error = false;
         while total < size {
             let want = (size - total).min(chunk_size as u64) as usize;
-            let file = self.open_file(handle);
-            match file.read(&mut chunk[..want]) {
+            match self.read_from_handle(handle, &mut chunk[..want]) {
                 Ok(0) => break,
                 Ok(n) => {
                     for (i, &byte) in chunk[..n].iter().enumerate() {
@@ -420,7 +446,7 @@ impl MMix {
             "TRAP: Fgets"
         );
 
-        let ok = max_size != 0 && self.handle_readable(handle) && handle != 0;
+        let ok = max_size != 0 && self.handle_readable(handle);
         if self.fail_unless(ok, -1) {
             return true;
         }
@@ -429,8 +455,7 @@ impl MMix {
         let mut count = 0usize;
         while count < max_size - 1 {
             let mut byte = [0u8; 1];
-            let file = self.open_file(handle);
-            match file.read(&mut byte) {
+            match self.read_from_handle(handle, &mut byte) {
                 Ok(0) => break,
                 Ok(_) => {
                     self.write_byte(buffer_addr.wrapping_add(count as u64), byte[0]);
@@ -473,7 +498,7 @@ impl MMix {
             "TRAP: Fgetws"
         );
 
-        let ok = max_wydes != 0 && self.handle_readable(handle) && handle != 0;
+        let ok = max_wydes != 0 && self.handle_readable(handle);
         if self.fail_unless(ok, -1) {
             return true;
         }
@@ -481,10 +506,8 @@ impl MMix {
 
         let mut count = 0usize;
         while count < max_wydes - 1 {
-            let mut wyde = [0u8; 2];
-            let file = self.open_file(handle);
-            match file.read_exact(&mut wyde) {
-                Ok(_) => {
+            match self.read_wyde_from_handle(handle) {
+                Some(wyde) => {
                     self.write_byte(buffer_addr.wrapping_add((count * 2) as u64), wyde[0]);
                     self.write_byte(buffer_addr.wrapping_add((count * 2 + 1) as u64), wyde[1]);
                     count += 1;
@@ -492,7 +515,7 @@ impl MMix {
                         break;
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
         self.write_byte(buffer_addr.wrapping_add((count * 2) as u64), 0);
@@ -590,12 +613,12 @@ impl MMix {
         }
     }
 
-    /// The open `File` behind `handle`, for a read/write/seek call past its
-    /// capability check. Infallible there: `handle_readable`/
-    /// `handle_writable`/`handle_seekable` already confirmed an entry
-    /// exists, and every caller either excludes handle 0/1/2 (whose entries
-    /// carry no `File`) or, for a read, has already turned handle 0 aside
-    /// before reaching here.
+    /// The open `File` behind `handle`, for a write/seek call past its
+    /// capability check, or a read past `read_from_handle`'s handle-0
+    /// dispatch. Infallible there: `handle_readable`/`handle_writable`/
+    /// `handle_seekable` already confirmed an entry exists, and every
+    /// caller excludes handle 1/2 (whose entries carry no `File`) and, for
+    /// a read, routes handle 0 to `Host::read` before reaching here.
     fn open_file(&mut self, handle: u8) -> &mut File {
         self.file_handles
             .get_mut(&handle)
