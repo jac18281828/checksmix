@@ -1248,6 +1248,14 @@ fn test_immediate_boundary_negative_rejected_in_auto() {
 }
 
 #[test]
+fn test_immediate_boundary_out_of_range_quotes_a_non_literal_operand_as_written() {
+    assert_eq!(
+        assemble_err("ADD $1,$2,0-1"),
+        "<test>:1:11: immediate operand 0-1 out of range 0..255 for ADD"
+    );
+}
+
+#[test]
 fn test_immediate_register_max_255() {
     // $255 as Z must remain a register reference, not get
     // confused with the immediate 255.

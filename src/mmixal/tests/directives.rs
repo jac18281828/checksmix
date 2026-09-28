@@ -119,6 +119,17 @@ fn test_data_unit_overflow_warns_and_keeps_low_bytes() {
 }
 
 #[test]
+fn test_data_unit_overflow_quotes_a_non_literal_operand_as_written() {
+    let mut asm = MMixAssembler::new("BYTE 0-#100", "<test>");
+    asm.parse().unwrap();
+    assert_eq!(
+        asm.warnings(),
+        ["<test>:1:6: warning: value 0-#100 does not fit in a byte; \
+              its low byte assembles"]
+    );
+}
+
+#[test]
 fn test_data_list_two_overflowing_items_warn_in_order_once_each() {
     let mut asm = MMixAssembler::new("BYTE 300,300", "<test>");
     asm.parse().unwrap();

@@ -270,7 +270,38 @@ fn test_set_negative_literal_is_an_error_for_decimal_and_hex() {
     );
     assert_eq!(
         assemble_err("SET $1,-#10"),
-        "<test>:1:8: immediate operand -16 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        "<test>:1:8: immediate operand -#10 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+    );
+}
+
+/// A `SET` source of `2^63` or more quotes its own source text, not a
+/// signed rendering of the value, and hints `SETI` alone when that text
+/// is not a negative literal.
+#[test]
+fn test_set_out_of_range_hex_quotes_the_operand_as_written() {
+    assert_eq!(
+        assemble_err("SET $1,#8000000000000000"),
+        "<test>:1:8: immediate operand #8000000000000000 out of range 0..65535 for SET; use SETI for a wider constant"
+    );
+}
+
+#[test]
+fn test_set_out_of_range_expression_quotes_the_operand_as_written() {
+    assert_eq!(
+        assemble_err("SET $1,0-1"),
+        "<test>:1:8: immediate operand 0-1 out of range 0..65535 for SET; use SETI for a wider constant"
+    );
+}
+
+/// The `NEG` hint requires the value itself to be `2^63` or more, not
+/// merely a leading `-` in the operand's text: `-(-70000)` starts with
+/// `-` but evaluates to `70000`, well under the threshold, so it hints
+/// `SETI` alone.
+#[test]
+fn test_set_out_of_range_hint_requires_the_value_not_just_the_text() {
+    assert_eq!(
+        assemble_err("SET $1,-(-70000)"),
+        "<test>:1:8: immediate operand 70000 out of range 0..65535 for SET; use SETI for a wider constant"
     );
 }
 

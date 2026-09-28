@@ -28,14 +28,16 @@ impl MMixAssembler {
     /// Resolve `SET`'s source operand into the instruction it selects: a
     /// register value copies, a pure value at most `#FFFF` is `SETL`.
     /// `SET` is one tetra, so the immediate form carries 16 bits; anything
-    /// wider is an error naming `SETI` for a wider constant or `SETI`/`NEG`
-    /// for a negative one.
+    /// wider is an error naming `SETI` for a wider constant, or `SETI`/`NEG`
+    /// when the value is `2^63` or more and the operand as written begins
+    /// with `-`.
     fn lower_set_source(
         &self,
         dest: u8,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
         let (line, col) = pair.line_col();
+        let text = pair.as_str().trim();
 
         match self.eval_expr(pair)? {
             ExprValue::Register(r) => {
@@ -46,14 +48,18 @@ impl MMixAssembler {
                 if value <= 0xFFFF {
                     return Ok(MMixInstruction::SETL(dest, value as u16));
                 }
-                let hint = if value >= 0x8000_0000_0000_0000 {
+                let hint = if value >= 0x8000_0000_0000_0000 && text.starts_with('-') {
                     "use SETI or NEG for a negative constant"
                 } else {
                     "use SETI for a wider constant"
                 };
                 Err(format!(
                     "{}:{}:{}: immediate operand {} out of range 0..65535 for SET; {}",
-                    self.current_filename, line, col, value as i64, hint
+                    self.current_filename,
+                    line,
+                    col,
+                    Self::quote_out_of_range(value, text),
+                    hint
                 ))
             }
         }

@@ -23,25 +23,40 @@ impl MMixAssembler {
         mnem: &str,
     ) -> Result<ZForm, String> {
         let (line, col) = pair.line_col();
+        let text = pair.as_str().trim();
         match self.eval_expr(pair)? {
             ExprValue::Register(r) => {
                 let reg = self.require_register_in_range(r, line, col)?;
                 Ok(ZForm::Reg(reg))
             }
-            ExprValue::Pure(v) => self.imm_in_range(v, mnem, line, col),
+            ExprValue::Pure(v) => self.imm_in_range(v, mnem, text, line, col),
+        }
+    }
+
+    /// An out-of-range operand's display text for a diagnostic: below
+    /// `2^63` a `u64` prints in decimal; at or above `2^63` a `u64` alone
+    /// cannot tell a negative literal (`-1`) from a wide unsigned one
+    /// (`#FFFFFFFFFFFFFFFF`), so the operand's own source text stands in
+    /// for it.
+    pub(super) fn quote_out_of_range(v: u64, text: &str) -> String {
+        if v >= 0x8000_0000_0000_0000 {
+            text.to_string()
+        } else {
+            v.to_string()
         }
     }
 
     /// Range-check a resolved operand value against an instruction field's
     /// width, the one place every site in the range table calls: the value
-    /// must fit `0..=max` or assembly fails naming the field's own maximum
-    /// and the mnemonic as written. `v` prints as a signed 64-bit integer
-    /// when it is `2^63` or more, so a negative literal reports negative.
+    /// must fit `0..=max` or assembly fails naming the operand, via
+    /// [`Self::quote_out_of_range`] on `text` (the operand's own source
+    /// span, trimmed), the field's own maximum and the mnemonic as written.
     fn field_value(
         &self,
         v: u64,
         max: u64,
         mnem: &str,
+        text: &str,
         line: usize,
         col: usize,
     ) -> Result<u64, String> {
@@ -50,9 +65,28 @@ impl MMixAssembler {
         } else {
             Err(format!(
                 "{}:{}:{}: immediate operand {} out of range 0..{} for {}",
-                self.current_filename, line, col, v as i64, max, mnem
+                self.current_filename,
+                line,
+                col,
+                Self::quote_out_of_range(v, text),
+                max,
+                mnem
             ))
         }
+    }
+
+    /// Evaluate `pair` and range-check it against `0..=max`, the shared
+    /// path behind [`Self::imm_byte`], [`Self::imm_wyde`],
+    /// [`Self::imm_three_bytes`] and [`Self::special_register`].
+    fn parse_field(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        max: u64,
+        mnem: &str,
+    ) -> Result<u64, String> {
+        let (line, col) = pair.line_col();
+        let text = pair.as_str().trim();
+        self.field_value(self.parse_number(pair)?, max, mnem, text, line, col)
     }
 
     /// Evaluate `pair` and range-check it as an 8-bit instruction field
@@ -62,9 +96,7 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<u8, String> {
-        let (line, col) = pair.line_col();
-        self.field_value(self.parse_number(pair)?, 0xFF, mnem, line, col)
-            .map(|v| v as u8)
+        self.parse_field(pair, 0xFF, mnem).map(|v| v as u8)
     }
 
     /// Evaluate `pair` and range-check it as a 16-bit instruction field
@@ -75,9 +107,7 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<u16, String> {
-        let (line, col) = pair.line_col();
-        self.field_value(self.parse_number(pair)?, 0xFFFF, mnem, line, col)
-            .map(|v| v as u16)
+        self.parse_field(pair, 0xFFFF, mnem).map(|v| v as u16)
     }
 
     /// Evaluate `pair` and range-check it as a 24-bit instruction field
@@ -88,9 +118,7 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<u32, String> {
-        let (line, col) = pair.line_col();
-        self.field_value(self.parse_number(pair)?, 0xFF_FFFF, mnem, line, col)
-            .map(|v| v as u32)
+        self.parse_field(pair, 0xFF_FFFF, mnem).map(|v| v as u32)
     }
 
     /// Evaluate `pair` and range-check it as a special register number
@@ -100,16 +128,21 @@ impl MMixAssembler {
         pair: pest::iterators::Pair<Rule>,
         mnem: &str,
     ) -> Result<u8, String> {
-        let (line, col) = pair.line_col();
-        self.field_value(self.parse_number(pair)?, 31, mnem, line, col)
-            .map(|v| v as u8)
+        self.parse_field(pair, 31, mnem).map(|v| v as u8)
     }
 
     /// Range-check an already-resolved Z value as an 8-bit immediate
     /// (0..=255), for [`Self::lower_z_operand`], which has already told
     /// register and pure values apart.
-    fn imm_in_range(&self, v: u64, mnem: &str, line: usize, col: usize) -> Result<ZForm, String> {
-        self.field_value(v, 0xFF, mnem, line, col)
+    fn imm_in_range(
+        &self,
+        v: u64,
+        mnem: &str,
+        text: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<ZForm, String> {
+        self.field_value(v, 0xFF, mnem, text, line, col)
             .map(|v| ZForm::Imm(v as u8))
     }
 
@@ -125,9 +158,12 @@ impl MMixAssembler {
         mnem: &str,
     ) -> Result<u8, String> {
         let (line, col) = pair.line_col();
+        let text = pair.as_str().trim();
         match self.eval_expr(pair)? {
             ExprValue::Register(r) => self.require_register_in_range(r, line, col),
-            ExprValue::Pure(v) => self.field_value(v, 0xFF, mnem, line, col).map(|v| v as u8),
+            ExprValue::Pure(v) => self
+                .field_value(v, 0xFF, mnem, text, line, col)
+                .map(|v| v as u8),
         }
     }
 

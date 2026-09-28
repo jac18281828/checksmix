@@ -189,6 +189,7 @@ impl MMixAssembler {
         let mut result = Vec::new();
         for value in values_pair.into_inner() {
             let (line, col) = value.line_col();
+            let text = value.as_str().trim();
             if Self::is_bare_empty_string(&Self::data_expr(value.clone())?) {
                 self.warn(
                     line,
@@ -204,7 +205,7 @@ impl MMixAssembler {
                         col,
                         format!(
                             "value {} does not fit in a {unit}; its low {unit} assembles",
-                            val as i64
+                            Self::quote_out_of_range(val, text)
                         ),
                     );
                 }

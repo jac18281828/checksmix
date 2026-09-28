@@ -145,13 +145,19 @@ fn test_leading_zero_literal_is_decimal_not_octal() {
     assert_first_instruction("SETL $1,0100", MMixInstruction::SETL(1, 100));
 }
 
-/// The error keeps the decimal reading of a leading-zero literal
-/// (`-010` reads `-10`); a leading zero is never octal.
+/// SETI assembles a leading-zero literal by its decimal value, never octal:
+/// `-010` and `-10` assemble the same. SET's out-of-range error quotes the
+/// operand's own source text, leading zero included, not its value.
 #[test]
-fn test_negative_leading_zero_literal_is_an_error_reading_decimal() {
+fn test_negative_leading_zero_literal_assembles_as_decimal_not_octal() {
+    // SETI takes any value, so this pins the leading zero reading decimal
+    // (-10) rather than octal (-8); the SET error below quotes the operand
+    // text verbatim, so it does not show that reading on its own.
+    assert_first_instruction("SETI $1,-010", MMixInstruction::SET(1, u64::MAX - 9));
+    assert_first_instruction("SETI $1,-10", MMixInstruction::SET(1, u64::MAX - 9));
     assert_eq!(
         assemble_err("SET $1,-010"),
-        "<test>:1:8: immediate operand -10 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
+        "<test>:1:8: immediate operand -010 out of range 0..65535 for SET; use SETI or NEG for a negative constant"
     );
 }
 
