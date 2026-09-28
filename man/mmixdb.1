@@ -4,6 +4,7 @@ mmixdb \- interactive source-level debugger for MMIX assembly sources
 .SH SYNOPSIS
 .B mmixdb
 .RB [ \-\-fullname ]
+[\fB\-\-stdin\fR \fIFILE\fR]
 .I FILE.mms
 .RI [ FILE.mms ...]
 .SH DESCRIPTION
@@ -36,6 +37,18 @@ is set, so an Emacs session need not pass the flag explicitly. The marker
 has gdb\(aqs
 .B \-\-fullname
 shape, so Emacs\(aq own gdb marker filter parses it unchanged.
+.TP
+.BI \-\-stdin " " FILE
+Feed a guest program's
+.B StdIn
+reads from
+.IR FILE ,
+read whole at startup and replayed from the start before every
+.B run
+(including a blank line that repeats one). Without this option, a guest
+.B StdIn
+read fails, since
+.BR mmixdb "'s own stdin carries debugger commands, never the guest's input."
 .PP
 .I contrib/mmixdb.el
 provides

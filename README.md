@@ -202,11 +202,14 @@ the current source line shown as you go.
 ```bash
 mmixdb examples/fibonacci.mms
 mmixdb --fullname examples/fibonacci.mms   # Emacs GUD marker mode
+mmixdb --stdin FILE program.mms            # feed a program's StdIn from FILE
 ```
 
 `mmixdb` debugs `.mms` source; a `.mmo` carries no source map.
 `--fullname` is auto-enabled when the `INSIDE_EMACS` environment variable is
-set.
+set. Without `--stdin`, a guest `StdIn` read fails: `mmixdb`'s own stdin
+carries debugger commands, never the guest's input. With it, FILE is read
+whole at startup and replayed from the start on every `run`.
 
 | Command | Forms | Semantics |
 |---|---|---|

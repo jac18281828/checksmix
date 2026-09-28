@@ -49,15 +49,29 @@ fn hermetic_output(cmd: &mut Command) -> Output {
         .unwrap()
 }
 
-/// Runs a child expected to be stopped by its own `--max-steps` budget, but
-/// bounds its wall clock too: a budget that misses its path fails the test
-/// instead of hanging the test binary on a looping child.
-fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
-    cmd.stdin(Stdio::null())
-        .env_remove("RUST_LOG")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+/// The bound `output_with_stdin` gives a child: generous next to the work
+/// under test, but finite, so a blocked read fails the test instead of
+/// hanging the test binary.
+const STDIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Spawns `cmd` with `RUST_LOG` unset, feeding `stdin_input` if given and
+/// closing the handle afterward (or leaving stdin closed, for a child that
+/// reads none), then drains stdout/stderr on their own threads so a full
+/// pipe never deadlocks the child. Kills the child and fails the test if it
+/// outlives `limit`, rather than hanging the test binary on it.
+fn spawn_and_wait_within(cmd: &mut Command, limit: Duration, stdin_input: Option<&[u8]>) -> Output {
+    cmd.stdin(if stdin_input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .env_remove("RUST_LOG")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     let mut child = cmd.spawn().unwrap();
+    if let Some(input) = stdin_input {
+        child.stdin.take().unwrap().write_all(input).unwrap();
+    }
     let stdout_reader = drain(child.stdout.take().unwrap());
     let stderr_reader = drain(child.stderr.take().unwrap());
     let deadline = Instant::now() + limit;
@@ -68,7 +82,7 @@ fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child exceeded {limit:?} wall clock; --max-steps failed to bound it");
+            panic!("child exceeded {limit:?} wall clock");
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -79,24 +93,17 @@ fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
     }
 }
 
-/// Pipes `input` to `cmd`'s stdin, draining stdout/stderr on their own
-/// threads so a full pipe never deadlocks the child, then waits for it to
-/// exit. Closing the stdin handle after the write lets a child blocked on
-/// `read` see end of file.
+/// Runs a child expected to be stopped by its own `--max-steps` budget, but
+/// bounds its wall clock too: a budget that misses its path fails the test
+/// instead of hanging the test binary on a looping child.
+fn hermetic_output_within(cmd: &mut Command, limit: Duration) -> Output {
+    spawn_and_wait_within(cmd, limit, None)
+}
+
+/// Pipes `input` to `cmd`'s stdin and waits for it to exit, bounded by
+/// [`STDIN_TIMEOUT`].
 fn output_with_stdin(cmd: &mut Command, input: &[u8]) -> Output {
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    let stdout_reader = drain(child.stdout.take().unwrap());
-    let stderr_reader = drain(child.stderr.take().unwrap());
-    let status = child.wait().unwrap();
-    Output {
-        status,
-        stdout: stdout_reader.join().unwrap(),
-        stderr: stderr_reader.join().unwrap(),
-    }
+    spawn_and_wait_within(cmd, STDIN_TIMEOUT, Some(input))
 }
 
 fn assert_exit_1_names_input(out: &Output, input: &str) {
@@ -850,7 +857,8 @@ fn mmixasm_clean_build_writes_nothing_to_stderr() {
     );
 }
 
-// ── StdIn reads: `checksmix run` from the shell ───────────────────────────
+// ── StdIn reads: `checksmix run` from the shell, `mmixdb --stdin` from a
+// file, rewound before every run ────────────────────────────────────────
 //
 // echo.mms reads one line with Fgets and echoes it; a failed read prints
 // "no input" instead, so a test can tell the two cases apart in stdout
@@ -874,6 +882,63 @@ fn run_echo_fixture_prints_a_piped_stdin_line() {
 }
 
 #[test]
+fn mmixdb_stdin_option_rewinds_between_two_run_commands() {
+    let mut cmd = mmixdb();
+    cmd.arg(fixture("echo.mms"))
+        .arg("--stdin")
+        .arg(fixture("echo_input.txt"));
+    let out = output_with_stdin(&mut cmd, b"run\nrun\nquit\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.matches("world").count(),
+        2,
+        "run, run must echo the file's line twice; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn mmixdb_stdin_option_rewinds_on_a_blank_line_repeating_run() {
+    let mut cmd = mmixdb();
+    cmd.arg(fixture("echo.mms"))
+        .arg("--stdin")
+        .arg(fixture("echo_input.txt"));
+    let out = output_with_stdin(&mut cmd, b"run\n\nquit\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.matches("world").count(),
+        2,
+        "run, <blank> must echo the file's line twice; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn mmixdb_blank_line_repeating_continue_does_not_rewind() {
+    let mut cmd = mmixdb();
+    cmd.arg(fixture("echo_loop.mms"))
+        .arg("--stdin")
+        .arg(fixture("echo_loop_input.txt"));
+    let out = output_with_stdin(&mut cmd, b"break Main\nrun\ncontinue\n\nquit\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let first = stdout.find("first-line");
+    let second = stdout.find("second-line");
+    assert_eq!(
+        stdout.matches("first-line").count(),
+        1,
+        "the first line must be echoed once, not replayed; stdout: {stdout}"
+    );
+    assert_eq!(
+        stdout.matches("second-line").count(),
+        1,
+        "continue's blank-line repeat must read the next line, not rewind; \
+         stdout: {stdout}"
+    );
+    assert!(
+        first < second,
+        "first-line must precede second-line; stdout: {stdout}"
+    );
+}
+
+#[test]
 fn mmixdb_without_stdin_option_fails_the_guest_read_and_keeps_its_own_quit() {
     let mut cmd = mmixdb();
     cmd.arg(fixture("echo.mms"));
@@ -886,5 +951,23 @@ fn mmixdb_without_stdin_option_fails_the_guest_read_and_keeps_its_own_quit() {
     assert!(
         stdout.contains("Quit"),
         "mmixdb's own quit must still run -- the guest never sees it; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn mmixdb_stdin_option_missing_file_exits_one() {
+    let missing = fixture("no_such_stdin_input.txt");
+    let out = mmixdb()
+        .arg(fixture("echo.mms"))
+        .arg("--stdin")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected = format!("mmixdb: error reading '{}': ", missing.display());
+    assert!(
+        stderr.contains(&expected),
+        "stderr should name the missing file; stderr: {stderr}"
     );
 }

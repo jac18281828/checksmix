@@ -545,8 +545,9 @@ values) are open at start with `TextRead`, `TextWrite`, `TextWrite`.
 and leave the stream as it was, rather than letting the program rebind them
 — checksmix routes handles 1 and 2 through the host's own write and handle 0
 through its own read, neither of which has a file underneath to rebind.
-`checksmix run` reads the shell's own stdin; an embedder's own `Host`
-decides for itself, and fails by default.
+`checksmix run` reads the shell's own stdin; `mmixdb --stdin FILE` reads
+FILE, replayed from the start on every run, and without `--stdin` a read
+fails; an embedder's own `Host` decides for itself, and fails by default.
 
 **Departure from the reference:** the reference places no length limit on
 `Fwrite`, `Fopen`'s name, `Fputs`, or `Fputws`, and accepts any size or

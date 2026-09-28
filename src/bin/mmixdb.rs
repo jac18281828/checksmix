@@ -2,10 +2,12 @@ use checksmix::{Command, Debugger, Host, MMixAssembler, StdHost, TrapCode, parse
 use clap::Parser;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::rc::Rc;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -24,19 +26,56 @@ struct Cli {
     /// see `contrib/mmixdb.el`)
     #[arg(long, alias = "emacs")]
     fullname: bool,
+
+    /// Feed a guest's StdIn reads from FILE, read whole at startup and
+    /// replayed from the start on every `run` (mmixdb's own stdin carries
+    /// debugger commands, never the guest's input)
+    #[arg(long, value_name = "FILE")]
+    stdin: Option<PathBuf>,
+}
+
+/// The bytes behind a guest's `StdIn`, handed out to `Fread`/`Fgets`/
+/// `Fgetws` one `Host::read` call at a time and rewound to the start before
+/// every run.
+struct GuestInput {
+    bytes: Vec<u8>,
+    pos: usize,
+}
+
+impl GuestInput {
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        let remaining = &self.bytes[self.pos..];
+        let n = remaining.len().min(buf.len());
+        buf[..n].copy_from_slice(&remaining[..n]);
+        self.pos += n;
+        n
+    }
+
+    fn rewind(&mut self) {
+        self.pos = 0;
+    }
 }
 
 /// `mmixdb`'s own `Host`: every process-level effect but `read` goes to
 /// `StdHost`. `read` never touches the process's real stdin, which
-/// `rustyline` owns for debugger commands, so a guest `StdIn` read fails,
-/// as it does under the default `Host::read`.
+/// `rustyline` owns for debugger commands; with `--stdin` it serves
+/// `input`'s bytes instead, and without it a guest `StdIn` read fails, as it
+/// does under the default `Host::read`.
 struct DebuggerHost {
     stdio: StdHost,
+    input: Option<Rc<RefCell<GuestInput>>>,
 }
 
 impl Host for DebuggerHost {
     fn write(&mut self, fd: u8, bytes: &[u8]) -> io::Result<()> {
         self.stdio.write(fd, bytes)
+    }
+
+    fn read(&mut self, fd: u8, buf: &mut [u8]) -> io::Result<usize> {
+        match (&self.input, fd) {
+            (Some(input), 0) => Ok(input.borrow_mut().read(buf)),
+            _ => Err(io::Error::from(io::ErrorKind::Unsupported)),
+        }
     }
 
     fn flush(&mut self) {
@@ -54,6 +93,28 @@ impl Host for DebuggerHost {
     fn trap(&mut self, code: TrapCode, arg: u8, arg255: u64, result255: u64) {
         self.stdio.trap(code, arg, arg255, result255)
     }
+}
+
+/// Reads `path` whole into the shared buffer a `DebuggerHost` serves a
+/// guest's `StdIn` from. Exits the process on a read failure, in the form
+/// `assemble_sources` uses for a source file.
+fn load_guest_input(path: Option<PathBuf>) -> Option<Rc<RefCell<GuestInput>>> {
+    path.map(|path| {
+        let bytes = fs::read(&path).unwrap_or_else(|e| {
+            eprintln!("mmixdb: error reading '{}': {}", path.display(), e);
+            process::exit(1);
+        });
+        Rc::new(RefCell::new(GuestInput { bytes, pos: 0 }))
+    })
+}
+
+/// Mirrors `Debugger::execute`'s own `Command::Repeat` resolution just
+/// closely enough to know whether `cmd` is `run` itself, or a blank line
+/// repeating it -- the two cases the guest's `StdIn` must rewind for.
+/// `Debugger` exposes no way to ask it directly. `last_was_run` is whether
+/// the previous non-repeat command was `Run`.
+fn command_resolves_to_run(cmd: &Command, last_was_run: bool) -> bool {
+    matches!(cmd, Command::Run) || (matches!(cmd, Command::Repeat) && last_was_run)
 }
 
 fn main() {
@@ -76,7 +137,13 @@ fn main() {
         process::exit(1);
     });
 
-    let mut debugger = Debugger::load_with_host(assembler, DebuggerHost { stdio: StdHost });
+    let guest_input = load_guest_input(cli.stdin);
+
+    let host = DebuggerHost {
+        stdio: StdHost,
+        input: guest_input.clone(),
+    };
+    let mut debugger = Debugger::load_with_host(assembler, host);
     let fullname = cli.fullname || std::env::var_os("INSIDE_EMACS").is_some();
     debugger.set_fullname(fullname);
 
@@ -88,6 +155,8 @@ fn main() {
         eprintln!("mmixdb: failed to initialize line editor: {e}");
         process::exit(1);
     });
+
+    let mut last_was_run = false;
 
     loop {
         match rl.readline("(mmixdb) ") {
@@ -101,6 +170,14 @@ fn main() {
                         break;
                     }
                     Ok(cmd) => {
+                        if command_resolves_to_run(&cmd, last_was_run)
+                            && let Some(input) = &guest_input
+                        {
+                            input.borrow_mut().rewind();
+                        }
+                        if !matches!(cmd, Command::Repeat) {
+                            last_was_run = matches!(cmd, Command::Run);
+                        }
                         for out in debugger.execute(cmd) {
                             print_line(&out);
                         }
