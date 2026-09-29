@@ -1,4 +1,4 @@
-0.4.2 (unreleased)
+0.4.2 (2026-09-29)
 
 * `Fwrite`, `Fputs`, `Fputws` and `Fopen`'s name carry no per-call cap and move the whole request, as the reference does: a `size` past 1,048,576 bytes and a string past 1,048,576 bytes or 524,288 wydes write whole, `Fputs`/`Fputws` no longer report a `too long, truncating` diagnostic, and a name past 1,048,576 bytes reaches the filesystem, which rejects it. Output crosses `Host::write` in chunks of at most 1,048,576 bytes, so host memory does not grow with the request; a write error after earlier chunks landed still fails the call. Supersedes 0.4.0's "**Breaking: `Fwrite` moves at most 1,048,576 bytes a call.**" bullet and its "`Fputs` and `Fputws` cap each call at 1,048,576 bytes and 524,288 wydes" bullet
 * The assembler and the `.mmo` decoder are fuzzed in CI: `fuzz/` adds `cargo-fuzz` targets `assemble` and `mmo_decode`, run on pushes to `main` and `agent/**` and on pull requests to `main`
