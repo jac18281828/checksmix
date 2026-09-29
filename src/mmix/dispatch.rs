@@ -2,6 +2,7 @@
 //! family router, and `must_be_zero_violation`.
 
 use super::{MMix, SpecialReg};
+use crate::mmixal::Opcode;
 use tracing::{debug, instrument};
 
 mod control;
@@ -18,12 +19,11 @@ impl MMix {
     /// put.html, save.html, gitraptrip.html "UNSAVE"/"RESUME"). `None` for
     /// every legal encoding and every other opcode.
     fn must_be_zero_violation(
-        opcode: crate::mmixal::Opcode,
+        opcode: Opcode,
         x: u8,
         y: u8,
         z: u8,
     ) -> Option<(&'static str, char, u8)> {
-        use crate::mmixal::Opcode;
         match opcode {
             Opcode::GET if y != 0 => Some(("GET", 'Y', y)),
             Opcode::PUT if y != 0 => Some(("PUT", 'Y', y)),
@@ -50,7 +50,6 @@ impl MMix {
             x, y, z, "Executing instruction"
         );
 
-        use crate::mmixal::Opcode;
         let opcode = Opcode::try_from(op_byte).unwrap_or_else(|_| {
             panic!("Invalid opcode {:#04x} at PC {:#018x}", op_byte, self.pc);
         });
@@ -62,16 +61,7 @@ impl MMix {
     /// fields. Split out of [`MMix::execute_instruction`] so `RESUME` can run
     /// the instruction carried in `rX` (§1 rule 4) as if fetched at a chosen
     /// address, with no real memory read.
-    fn dispatch(
-        &mut self,
-        opcode: crate::mmixal::Opcode,
-        op_byte: u8,
-        x: u8,
-        y: u8,
-        z: u8,
-    ) -> bool {
-        use crate::mmixal::Opcode;
-
+    fn dispatch(&mut self, opcode: Opcode, op_byte: u8, x: u8, y: u8, z: u8) -> bool {
         // A nonzero must-be-zero field (get.html, put.html, save.html,
         // gitraptrip.html "UNSAVE"/"RESUME") is an illegal-instruction
         // interrupt, named in X, Y, Z order. This runs before every other

@@ -678,8 +678,8 @@ impl MMix {
             0 => value.round_ties_even(),
             1 => value.trunc(),
             2 => value.ceil(),
-            3 => value.floor(),
-            _ => unreachable!(),
+            // 3: `mode & 0x3` takes no other value.
+            _ => value.floor(),
         }
     }
 
