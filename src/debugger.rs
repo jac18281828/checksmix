@@ -732,8 +732,12 @@ impl Debugger {
             .ok()
     }
 
+    /// A `#`/`0x` hex constant: a non-empty run of hex digits, no sign.
     fn parse_hex_address(&self, arg: &str) -> Option<u64> {
         let digits = arg.strip_prefix("0x").or_else(|| arg.strip_prefix('#'))?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
         u64::from_str_radix(digits, 16).ok()
     }
 
@@ -1404,6 +1408,39 @@ Main\tdebug\t\"hi\"
             dbg.execute(Command::Breakpoints),
             vec!["No breakpoints set.".to_string()]
         );
+    }
+
+    /// A sign is an operator, not part of a hex constant: `#+104` sets no
+    /// breakpoint, and `#+10` is no value for `set`.
+    #[test]
+    fn a_signed_hex_address_is_malformed_everywhere() {
+        let mut dbg = Debugger::load(assemble(STACK_PROGRAM, "stack.mms"));
+        for arg in ["#+104", "0x+104"] {
+            assert_eq!(
+                dbg.execute(Command::Break(arg.to_string())),
+                vec![format!("No location found for '{arg}'; breakpoint not set")]
+            );
+        }
+        assert_eq!(
+            dbg.execute(Command::Breakpoints),
+            vec!["No breakpoints set.".to_string()]
+        );
+
+        let before = dbg.mmix.get_register(1);
+        let msg = dbg.do_set("$1".to_string(), "#+10".to_string());
+        assert_eq!(
+            msg,
+            "Invalid value '#+10'; expected decimal or 0x/#-prefixed hex"
+        );
+        assert_eq!(dbg.mmix.get_register(1), before);
+
+        let msg = dbg.do_set("#+2000".to_string(), "7".to_string());
+        assert_eq!(
+            msg,
+            "No settable target \"#+2000\" (register, special register, or hex memory address only)"
+        );
+        assert_eq!(dbg.mmix.read_octa(0x2000), 0);
+        assert_eq!(dbg.do_print("#+100"), no_symbol_in_context("#+100"));
     }
 
     #[test]
