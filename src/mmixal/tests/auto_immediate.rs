@@ -608,6 +608,28 @@ fn test_base_spelling_agrees_with_legacy_immediate_spelling() {
 }
 
 #[test]
+fn test_explicit_immediate_cache_spellings_take_a_pure_x() {
+    for base in ["PRELD", "PREGO", "PREST", "SYNCD", "SYNCID"] {
+        let expected = first_instruction(&format!("{base} 7,$2,5"));
+        assert_eq!(format!("{expected:?}"), format!("{base}I(7, 2, 5)"));
+        assert_eq!(first_instruction(&format!("{base}I 7,$2,5")), expected);
+        assert_eq!(first_instruction(&format!("{base}I $7,$2,5")), expected);
+        assert_eq!(
+            first_instruction(&format!("Named IS 7\n{base}I Named,$2,5")),
+            expected
+        );
+        assert!(
+            assemble_err(&format!("{base}I 300,$2,5")).contains("out of range 0..255"),
+            "{base}I must range-check a pure X"
+        );
+        assert!(
+            assemble_err(&format!("{base}I 7,3,5")).contains("register"),
+            "{base}I keeps Y a register"
+        );
+    }
+}
+
+#[test]
 fn test_no_previously_accepted_operand_form_narrowed() {
     // Every spelling these families accepted before their base
     // mnemonics auto-selected. Widening must displace none of them.

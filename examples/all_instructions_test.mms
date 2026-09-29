@@ -2240,6 +2240,7 @@ Test178 ADDUI   TestNum,TestNum,1
         GETA    $10,PreloadData
         SETI $11,0           % Count register
         PRELDI  $11,$10,16      % Preload data with immediate offset
+        PRELDI  7,$10,16        % Preload data, pure-byte X
         % This is a cache hint, verify no crash
         SETI Result,1
         SETI Expect,1
@@ -2269,6 +2270,7 @@ Test180 ADDUI   TestNum,TestNum,1
         GETA    $10,Test181
         SETI $11,0           % Count register
         PREGOI  $11,$10,0       % Preload for upcoming GO with immediate
+        PREGOI  7,$10,0         % Preload for upcoming GO, pure-byte X
         % This is a cache hint, verify no crash
         SETI Result,1
         SETI Expect,1
@@ -2298,6 +2300,7 @@ Test182 ADDUI   TestNum,TestNum,1
         GETA    $10,PreloadData
         SETI $11,0           % Count register
         PRESTI  $11,$10,0       % Preload for store with immediate
+        PRESTI  7,$10,0         % Preload for store, pure-byte X
         % This is a cache hint, verify no crash
         SETI Result,1
         SETI Expect,1
@@ -3624,7 +3627,9 @@ Test270 ADDUI   TestNum,TestNum,1
         SYNCD   $12,$10,$11     % base spelling, register Z
         SYNCID  $12,$10,$11     % base spelling, register Z
         SYNCDI  $12,$10,8       % explicit immediate spelling
+        SYNCDI  7,$10,8         % explicit immediate spelling, pure-byte X
         SYNCIDI $12,$10,8       % explicit immediate spelling
+        SYNCIDI 7,$10,8         % explicit immediate spelling, pure-byte X
         SET     Result,1
         SET     Expect,1
         CMP     Temp,Result,Expect

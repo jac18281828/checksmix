@@ -294,38 +294,58 @@ impl MMixAssembler {
         }
     }
 
+    /// The explicit-immediate spelling of the cache family: X is a pure byte
+    /// or a register, as in the base spelling, and Y is a register.
+    fn parse_cache_rri<F>(
+        &self,
+        pair: pest::iterators::Pair<Rule>,
+        mnem: &str,
+        f: F,
+    ) -> Result<MMixInstruction, String>
+    where
+        F: FnOnce(u8, u8, u8) -> MMixInstruction,
+    {
+        let mut parts = Children::of(pair);
+        let _mnem = parts.next();
+        let mut ops = Children::of(parts.required()?);
+        let x = self.parse_reg_or_byte(ops.required()?, mnem)?;
+        let y = self.parse_register(ops.required()?)?;
+        let z = self.imm_byte(ops.required()?, mnem)?;
+        Ok(f(x, y, z))
+    }
+
     pub(super) fn parse_inst_preld_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, "PRELDI", MMixInstruction::PRELDI)
+        self.parse_cache_rri(pair, "PRELDI", MMixInstruction::PRELDI)
     }
 
     pub(super) fn parse_inst_prego_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, "PREGOI", MMixInstruction::PREGOI)
+        self.parse_cache_rri(pair, "PREGOI", MMixInstruction::PREGOI)
     }
 
     pub(super) fn parse_inst_prest_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, "PRESTI", MMixInstruction::PRESTI)
+        self.parse_cache_rri(pair, "PRESTI", MMixInstruction::PRESTI)
     }
 
     pub(super) fn parse_inst_syncd_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, "SYNCDI", MMixInstruction::SYNCDI)
+        self.parse_cache_rri(pair, "SYNCDI", MMixInstruction::SYNCDI)
     }
 
     pub(super) fn parse_inst_syncid_rri(
         &self,
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<MMixInstruction, String> {
-        self.parse_rri(pair, "SYNCIDI", MMixInstruction::SYNCIDI)
+        self.parse_cache_rri(pair, "SYNCIDI", MMixInstruction::SYNCIDI)
     }
 }
