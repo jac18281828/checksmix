@@ -982,3 +982,71 @@ fn test_bare_empty_string_beside_an_operator_or_in_parens_is_an_error() {
         "<test>:1:7: an empty string is not a value inside an expression"
     );
 }
+
+// ---- Nesting depth -------------------------------------------------
+
+/// Levels of nesting the tests below assemble. The assembler sets no limit;
+/// this is the depth that fits every supported build and stack.
+const NESTING_LEVELS: usize = 256;
+
+/// The common main-thread stack; an unoptimized build on 2 MiB overflows near
+/// 96 levels.
+const NESTING_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Assemble `src` on a thread with `NESTING_STACK_BYTES` of stack and return
+/// its first instruction.
+fn first_instruction_on_large_stack(src: String) -> MMixInstruction {
+    std::thread::Builder::new()
+        .stack_size(NESTING_STACK_BYTES)
+        .spawn(move || {
+            let mut asm = MMixAssembler::new(&src, "<test>");
+            asm.parse()
+                .unwrap_or_else(|e| panic!("failed to parse: {e}"));
+            asm.instructions[0].1.clone()
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn test_nesting_of_256_parentheses_assembles() {
+    let src = format!(
+        "SET $1,{}1{}",
+        "(".repeat(NESTING_LEVELS),
+        ")".repeat(NESTING_LEVELS)
+    );
+    assert_eq!(
+        first_instruction_on_large_stack(src),
+        MMixInstruction::SETL(1, 1)
+    );
+}
+
+#[test]
+fn test_nesting_of_256_unary_minus_assembles() {
+    // An even count of negations leaves the operand.
+    let src = format!("SET $1,{}1", "-".repeat(NESTING_LEVELS));
+    assert_eq!(
+        first_instruction_on_large_stack(src),
+        MMixInstruction::SETL(1, 1)
+    );
+}
+
+#[test]
+fn test_nesting_of_256_unary_tilde_assembles() {
+    let src = format!("SET $1,{}1", "~".repeat(NESTING_LEVELS));
+    assert_eq!(
+        first_instruction_on_large_stack(src),
+        MMixInstruction::SETL(1, 1)
+    );
+}
+
+#[test]
+fn test_nesting_of_128_alternating_minus_and_parenthesis_pairs_assembles() {
+    let pairs = NESTING_LEVELS / 2;
+    let src = format!("SET $1,{}1{}", "-(".repeat(pairs), ")".repeat(pairs));
+    assert_eq!(
+        first_instruction_on_large_stack(src),
+        MMixInstruction::SETL(1, 1)
+    );
+}
