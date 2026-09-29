@@ -9,6 +9,18 @@ use super::instructions::MMixInstruction;
 use super::tree::Children;
 use tracing::{debug, instrument};
 
+/// Whether binding a statement's label first rejects a location counter
+/// past the end of the address space. `Skipped` has three reasons: an arm
+/// that has just aligned the counter was already rejected there, at its
+/// item's site; pass 1's `LOC` checks its local label inline, ahead of its
+/// operand; and `GREG`'s label and local label bind a register, not an
+/// address.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AddrCheck {
+    Required,
+    Skipped,
+}
+
 impl MMixAssembler {
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
@@ -269,16 +281,9 @@ impl MMixAssembler {
                     self.scan_uses_for_redefinition(&inner_pair);
                     let inst = self.peek_instruction_type(inner_pair)?;
                     let size = Self::instruction_size(&inst);
-                    if let Some((raw, line, col)) = pending_label.take() {
-                        self.define_label(&raw, self.current_addr, line, col)?;
-                    }
-                    if let Some((digit, _, _)) = pending_local.take() {
-                        self.record_local_label(
-                            digit,
-                            SymbolType::Constant(self.current_addr),
-                            true,
-                        );
-                    }
+                    let here = SymbolType::Constant(self.current_addr);
+                    self.bind_pending_label(&mut pending_label, here, AddrCheck::Skipped)?;
+                    self.bind_pending_local(&mut pending_local, here, AddrCheck::Skipped)?;
                     Self::require_addr(self.place_item(size), &self.current_filename, item)?;
                 }
                 Rule::directive => {
@@ -289,18 +294,17 @@ impl MMixAssembler {
                                 // Discarded: no bytes, no address movement,
                                 // but a label on the line still binds to
                                 // the (unmoved) current address.
-                                if let Some((raw, line, col)) = pending_label.take() {
-                                    self.require_valid((line, col))?;
-                                    self.define_label(&raw, self.current_addr, line, col)?;
-                                }
-                                if let Some((digit, line, col)) = pending_local.take() {
-                                    self.require_valid((line, col))?;
-                                    self.record_local_label(
-                                        digit,
-                                        SymbolType::Constant(self.current_addr),
-                                        true,
-                                    );
-                                }
+                                let here = SymbolType::Constant(self.current_addr);
+                                self.bind_pending_label(
+                                    &mut pending_label,
+                                    here,
+                                    AddrCheck::Required,
+                                )?;
+                                self.bind_pending_local(
+                                    &mut pending_local,
+                                    here,
+                                    AddrCheck::Required,
+                                )?;
                             } else {
                                 let item = directive_pair.line_col();
                                 self.scan_uses_for_redefinition(&directive_pair);
@@ -311,16 +315,17 @@ impl MMixAssembler {
                                     Self::leftmost_site(&pending_label, &pending_local, item),
                                 )?;
                                 let size = self.data_directive_size(directive_pair.clone())?;
-                                if let Some((raw, line, col)) = pending_label.take() {
-                                    self.define_label(&raw, self.current_addr, line, col)?;
-                                }
-                                if let Some((digit, _, _)) = pending_local.take() {
-                                    self.record_local_label(
-                                        digit,
-                                        SymbolType::Constant(self.current_addr),
-                                        true,
-                                    );
-                                }
+                                let here = SymbolType::Constant(self.current_addr);
+                                self.bind_pending_label(
+                                    &mut pending_label,
+                                    here,
+                                    AddrCheck::Skipped,
+                                )?;
+                                self.bind_pending_local(
+                                    &mut pending_local,
+                                    here,
+                                    AddrCheck::Skipped,
+                                )?;
                                 Self::require_addr(
                                     self.place_item(size),
                                     &self.current_filename,
@@ -347,22 +352,21 @@ impl MMixAssembler {
                             // operand, so a same-digit reference in it never
                             // resolves to itself.
                             let addr_before = self.current_addr;
-                            if let Some((raw, line, col)) = pending_label.take() {
-                                self.require_valid((line, col))?;
-                                self.define_label(&raw, addr_before, line, col)?;
-                            }
+                            self.bind_pending_label(
+                                &mut pending_label,
+                                SymbolType::Constant(addr_before),
+                                AddrCheck::Required,
+                            )?;
                             if let Some(&(_, line, col)) = pending_local.as_ref() {
                                 self.require_valid((line, col))?;
                             }
                             self.scan_uses_for_redefinition(&directive_pair);
                             self.parse_loc_directive(directive_pair)?;
-                            if let Some((digit, _, _)) = pending_local.take() {
-                                self.record_local_label(
-                                    digit,
-                                    SymbolType::Constant(addr_before),
-                                    true,
-                                );
-                            }
+                            self.bind_pending_local(
+                                &mut pending_local,
+                                SymbolType::Constant(addr_before),
+                                AddrCheck::Skipped,
+                            )?;
                         }
                         Rule::greg_directive => {
                             // GREG allocates a global register; an attached
@@ -399,21 +403,17 @@ impl MMixAssembler {
                             };
                             self.greg_inits.push((allocated_reg, value));
 
-                            if let Some((raw, line, col)) = pending_label.take() {
-                                self.define_symbol(
-                                    &raw,
-                                    SymbolType::Register(allocated_reg),
-                                    line,
-                                    col,
-                                )?;
-                            }
-                            if let Some((digit, _, _)) = pending_local.take() {
-                                self.record_local_label(
-                                    digit,
-                                    SymbolType::Register(allocated_reg),
-                                    true,
-                                );
-                            }
+                            let register = SymbolType::Register(allocated_reg);
+                            self.bind_pending_label(
+                                &mut pending_label,
+                                register,
+                                AddrCheck::Skipped,
+                            )?;
+                            self.bind_pending_local(
+                                &mut pending_local,
+                                register,
+                                AddrCheck::Skipped,
+                            )?;
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair, true)?;
@@ -454,16 +454,49 @@ impl MMixAssembler {
         }
 
         // Standalone labels (no instruction or directive on the line)
-        if let Some((raw, line, col)) = pending_label {
-            self.require_valid((line, col))?;
-            self.define_label(&raw, self.current_addr, line, col)?;
-        }
-        if let Some((digit, line, col)) = pending_local {
-            self.require_valid((line, col))?;
-            self.record_local_label(digit, SymbolType::Constant(self.current_addr), true);
-        }
+        let here = SymbolType::Constant(self.current_addr);
+        self.bind_pending_label(&mut pending_label, here, AddrCheck::Required)?;
+        self.bind_pending_local(&mut pending_local, here, AddrCheck::Required)?;
         self.local_pending_digit = None;
 
+        Ok(())
+    }
+
+    /// Binds the statement's label, if any, in pass 1: an address names a
+    /// label and a register names a symbol, the same value the statement's
+    /// local label takes.
+    fn bind_pending_label(
+        &mut self,
+        pending: &mut Option<(String, usize, usize)>,
+        value: SymbolType,
+        check: AddrCheck,
+    ) -> Result<(), String> {
+        let Some((raw, line, col)) = pending.take() else {
+            return Ok(());
+        };
+        if check == AddrCheck::Required {
+            self.require_valid((line, col))?;
+        }
+        match value {
+            SymbolType::Constant(addr) => self.define_label(&raw, addr, line, col),
+            SymbolType::Register(_) => self.define_symbol(&raw, value, line, col),
+        }
+    }
+
+    /// Records the statement's local label, if any, in pass 1.
+    fn bind_pending_local(
+        &mut self,
+        pending: &mut Option<(u8, usize, usize)>,
+        value: SymbolType,
+        check: AddrCheck,
+    ) -> Result<(), String> {
+        let Some((digit, line, col)) = pending.take() else {
+            return Ok(());
+        };
+        if check == AddrCheck::Required {
+            self.require_valid((line, col))?;
+        }
+        self.record_local_label(digit, value, true);
         Ok(())
     }
 
@@ -613,31 +646,20 @@ impl MMixAssembler {
                         &self.current_filename,
                         item,
                     )?;
-                    if let Some((raw, _, _)) = label_name.take() {
-                        let qualified = self.qualify_name(&raw);
-                        self.labels.insert(qualified, self.current_addr);
-                    }
+                    self.restore_pending_label(&mut label_name, AddrCheck::Skipped)?;
                     // Evaluated before this line's own local label (if any)
                     // is recorded, so a same-digit reference in an operand
                     // never resolves to itself.
                     inst = Some((self.parse_instruction(inner_pair)?, item));
-                    if let Some(digit) = pending_local.take() {
-                        self.record_local_label(digit, SymbolType::Constant(0), false);
-                    }
+                    self.restore_pending_local(&mut pending_local);
                 }
                 Rule::directive => {
                     let directive_pair = Children::of(inner_pair).required()?;
                     match directive_pair.as_rule() {
                         Rule::data_directive => {
                             if self.in_special_mode {
-                                if let Some((raw, line, col)) = label_name.take() {
-                                    self.require_valid((line, col))?;
-                                    let qualified = self.qualify_name(&raw);
-                                    self.labels.insert(qualified, self.current_addr);
-                                }
-                                if let Some(digit) = pending_local.take() {
-                                    self.record_local_label(digit, SymbolType::Constant(0), false);
-                                }
+                                self.restore_pending_label(&mut label_name, AddrCheck::Required)?;
+                                self.restore_pending_local(&mut pending_local);
                             } else {
                                 let item = directive_pair.line_col();
                                 let alignment = Self::data_directive_alignment(&directive_pair)?;
@@ -646,14 +668,9 @@ impl MMixAssembler {
                                     &self.current_filename,
                                     item,
                                 )?;
-                                if let Some((raw, _, _)) = label_name.take() {
-                                    let qualified = self.qualify_name(&raw);
-                                    self.labels.insert(qualified, self.current_addr);
-                                }
+                                self.restore_pending_label(&mut label_name, AddrCheck::Skipped)?;
                                 let instructions = self.parse_data_directive(directive_pair)?;
-                                if let Some(digit) = pending_local.take() {
-                                    self.record_local_label(digit, SymbolType::Constant(0), false);
-                                }
+                                self.restore_pending_local(&mut pending_local);
                                 for instruction in instructions {
                                     let size = Self::instruction_size(&instruction);
                                     self.record_debug_info(self.current_addr, line);
@@ -671,15 +688,9 @@ impl MMixAssembler {
                             // location before LOC moves the counter, and
                             // the operand is evaluated before this line's
                             // own local label is recorded.
-                            if let Some((raw, line, col)) = label_name.take() {
-                                self.require_valid((line, col))?;
-                                let qualified = self.qualify_name(&raw);
-                                self.labels.insert(qualified, self.current_addr);
-                            }
+                            self.restore_pending_label(&mut label_name, AddrCheck::Required)?;
                             self.parse_loc_directive(directive_pair)?;
-                            if let Some(digit) = pending_local.take() {
-                                self.record_local_label(digit, SymbolType::Constant(0), false);
-                            }
+                            self.restore_pending_local(&mut pending_local);
                         }
                         Rule::greg_directive => {
                             // GREG was already processed in first pass. The
@@ -696,9 +707,7 @@ impl MMixAssembler {
                                     ));
                                 }
                             }
-                            if let Some(digit) = pending_local.take() {
-                                self.record_local_label(digit, SymbolType::Constant(0), false);
-                            }
+                            self.restore_pending_local(&mut pending_local);
                         }
                         Rule::is_directive => {
                             self.parse_is_directive(directive_pair, false)?;
@@ -729,17 +738,37 @@ impl MMixAssembler {
         }
 
         // Standalone labels (no instruction or directive on the line)
-        if let Some((raw, line, col)) = label_name {
-            self.require_valid((line, col))?;
-            let qualified = self.qualify_name(&raw);
-            self.labels.insert(qualified, self.current_addr);
-        }
-        if let Some(digit) = pending_local {
-            self.record_local_label(digit, SymbolType::Constant(0), false);
-        }
+        self.restore_pending_label(&mut label_name, AddrCheck::Required)?;
+        self.restore_pending_local(&mut pending_local);
         self.local_pending_digit = None;
 
         Ok(())
+    }
+
+    /// Re-inserts the statement's label, if any, at the current address in
+    /// pass 2, without redefinition checking.
+    fn restore_pending_label(
+        &mut self,
+        pending: &mut Option<(String, usize, usize)>,
+        check: AddrCheck,
+    ) -> Result<(), String> {
+        let Some((raw, line, col)) = pending.take() else {
+            return Ok(());
+        };
+        if check == AddrCheck::Required {
+            self.require_valid((line, col))?;
+        }
+        let qualified = self.qualify_name(&raw);
+        self.labels.insert(qualified, self.current_addr);
+        Ok(())
+    }
+
+    /// Advances the digit's occurrence for the statement's local label, if
+    /// any; pass 1 already recorded its value.
+    fn restore_pending_local(&mut self, pending: &mut Option<u8>) {
+        if let Some(digit) = pending.take() {
+            self.record_local_label(digit, SymbolType::Constant(0), false);
+        }
     }
 
     /// Record `addr`'s source location in the active translation unit:
