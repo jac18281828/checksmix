@@ -401,8 +401,8 @@ fn fopen_of_a_non_utf8_name_leaves_a_previously_open_handle_closed() {
 #[test]
 fn fopen_of_a_name_longer_than_256_bytes_opens() {
     // A name well over 256 bytes total, spelled as three path components
-    // each under the filesystem's own per-component limit, so Fopen's own
-    // bound is the only one in play.
+    // each under the filesystem's own per-component limit, so only the
+    // whole name's length is over 256.
     let mut mmix = MMix::new();
     let base = unique_tmp_path("fopen_long_name_dir");
     let long_dir_name = "d".repeat(120);
@@ -422,17 +422,17 @@ fn fopen_of_a_name_longer_than_256_bytes_opens() {
 }
 
 #[test]
-fn fopen_of_a_name_with_no_zero_within_the_cap_leaves_a_previously_open_handle_closed() {
-    // A name with no zero within Fopen's 1,048,576-byte bound must fail
-    // -1 and, like every Fopen failure on a non-standard handle, leave it
-    // closed -- even one a previous call left open.
+fn fopen_of_an_overlong_name_leaves_a_previously_open_handle_closed() {
+    // A name far past any path limit fails -1 in the filesystem and, like
+    // every Fopen failure on a non-standard handle, leaves it closed --
+    // even one a previous call left open.
     let mut mmix = MMix::new();
     let path = unique_tmp_path("fopen_reopen_then_overlong.txt");
     let guard = TempFileGuard(path.clone());
 
     assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
 
-    let name = vec![b'a'; 1_048_577]; // one byte past the bound, no zero
+    let name = vec![b'a'; 2_097_152];
     assert_eq!(fopen_bytes(&mut mmix, 3, &name, BINARY_WRITE), -1);
 
     assert_eq!(fputs(&mut mmix, 3, b"still open?"), -1);
@@ -462,9 +462,9 @@ fn fwrite_and_fread_round_trip_exact_size() {
     assert!(!path.exists());
 }
 
-/// A read past `MAX_TRAP_BYTES` (1,048,576) spans two chunks: the bytes on
-/// both sides of the boundary land at their own address, contiguous with
-/// the first chunk's.
+/// A read past one chunk (1,048,576 bytes) spans two: the bytes on both
+/// sides of the boundary land at their own address, contiguous with the
+/// first chunk's.
 #[test]
 fn fread_across_multiple_chunks_reads_bytes_on_both_sides_of_the_boundary() {
     let mut mmix = MMix::new();
@@ -524,10 +524,9 @@ fn fread_with_max_size_reads_the_whole_short_file() {
     drop(guard);
 }
 
-/// `size` sits one chunk plus a remainder past `MAX_TRAP_BYTES`
-/// (1,048,576), and the file holds a further whole chunk beyond `size`:
-/// the final, partial chunk's own bound governs, not `MAX_TRAP_BYTES`
-/// itself.
+/// `size` is one chunk (1,048,576 bytes) plus a remainder, and the file holds
+/// a further whole chunk beyond `size`: the final, partial chunk stops at
+/// `size`, not at a whole chunk.
 #[test]
 fn fread_stops_exactly_at_size_when_the_file_holds_more() {
     let mut mmix = MMix::new();
@@ -557,19 +556,17 @@ fn fread_stops_exactly_at_size_when_the_file_holds_more() {
 }
 
 #[test]
-fn fwrite_larger_than_the_per_call_cap_writes_a_short_write() {
+fn fwrite_of_more_than_one_chunk_writes_every_byte() {
     let mut mmix = MMix::new();
-    let path = unique_tmp_path("fwrite_cap.txt");
+    let path = unique_tmp_path("fwrite_multi_chunk.bin");
     let guard = TempFileGuard(path.clone());
 
-    assert_eq!(fopen(&mut mmix, 3, &path, TEXT_WRITE), 0);
-    let data = vec![0xABu8; 0x100001]; // one byte past the 1 MiB cap
-    assert_eq!(fwrite(&mut mmix, 3, &data), -1); // 1_048_576 - 1_048_577
+    assert_eq!(fopen(&mut mmix, 3, &path, BINARY_WRITE), 0);
+    let data: Vec<u8> = (0..1_048_576 + 3).map(|i| (i % 251) as u8).collect();
+    assert_eq!(fwrite(&mut mmix, 3, &data), 0);
     assert_eq!(fclose(&mut mmix, 3), 0);
 
-    let written = fs::read(&path).unwrap();
-    assert_eq!(written.len(), 1_048_576);
-    assert!(written.iter().all(|&b| b == 0xAB));
+    assert_eq!(fs::read(&path).unwrap(), data);
 
     drop(guard);
 }

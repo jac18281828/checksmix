@@ -76,8 +76,10 @@ use std::time::SystemTime;
 pub trait Host: Any {
     /// Write raw bytes to file descriptor `fd` (only 1 or 2 reach the
     /// host — see the trait docs). Returns `Ok(())` on success, matching
-    /// `write_all` rather than reporting a partial-write count. On success
-    /// `Fputs` and `Fputws` store `bytes.len()` in `$255`; `Fputc` stores 0.
+    /// `write_all` rather than reporting a partial-write count. A long
+    /// `Fwrite`, `Fputs` or `Fputws` arrives as several calls in order,
+    /// each a chunk of the request; concatenated they are the request. An
+    /// empty request arrives as one call with an empty slice.
     fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()>;
 
     /// Read raw bytes from file descriptor `fd` (only 0 reaches the host —
@@ -104,8 +106,8 @@ pub trait Host: Any {
     fn now_micros(&mut self) -> u64;
 
     /// Report an operator-facing diagnostic message (an unsimulated
-    /// `TRAP`, a truncated string, a HALT/TRIP notice). `StdHost` sends
-    /// these to stderr via `eprintln!`.
+    /// `TRAP`, a HALT/TRIP notice, a `Debug` index past the table).
+    /// `StdHost` sends these to stderr via `eprintln!`.
     fn diagnostic(&mut self, msg: &str);
 
     /// Observe a trap after `handle_trap`'s dispatch has run, with `$255`

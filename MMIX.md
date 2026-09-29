@@ -501,12 +501,15 @@ the octa there and the second as the octa at `$255+8`. The result replaces
 | `Fseek` | 9 | `$255` = offset | 0, or −1 |
 | `Ftell` | 10 | — | position, or −1 |
 
-`size` is a full octabyte for both `Fread` and `Fwrite`. `Fwrite` moves at
-most 1,048,576 bytes a call; a `size` beyond that writes the first
-1,048,576 bytes and returns the short write's `n − size`, guarding one
-`TRAP` from streaming unbounded host memory. `Fread` takes no such cap — a
-regular file ends on its own, and capping would misreport a short read as
-end of file.
+`size` is a full octabyte for both `Fread` and `Fwrite`, taken literally: 0
+moves nothing, and 2^40 asks for 2^40 bytes. Neither call bounds a request;
+each moves it in chunks of at most 1,048,576 bytes, so host memory does not
+grow with `size`. `Fwrite` returns `n − size` only when a write stops short
+after `n` bytes. Memory and disk are the operator's: an `Fread` from a
+device that never ends, such as `/dev/zero`, reads until `size` bytes
+arrive, and an `Fwrite` of a huge `size` writes until it finishes or a
+write fails. `--max-steps` interrupts neither, since it counts
+instructions and the whole `TRAP` is one.
 
 `Fopen`'s mode is one of `TextRead` (0), `TextWrite` (1), `BinaryRead` (2),
 `BinaryWrite` (3), `BinaryReadWrite` (4). A handle carries four capability
@@ -520,9 +523,9 @@ program choose the handle; opening one already open closes it first, and a
 failed open leaves the handle closed.
 
 `Fopen`'s name is the bytes at its address up to the first zero byte,
-passed to the host unchanged, capped at the same per-call length as
-`Fputs` below. A name with no zero within the bound, or one that is not
-valid UTF-8, fails with −1 and touches no file.
+passed to the host unchanged and whole; the filesystem's own path limit
+rejects a long one. A name that is not valid UTF-8 fails with −1 and
+touches no file.
 
 `Fgets` reads until `size − 1` characters or a newline, then a zero byte,
 returning the count stored (a partial last line at end of file included), or
@@ -531,11 +534,10 @@ characters, two bytes each in memory order, raw to and from the file:
 `Fgetws` rounds its buffer address down to even and stops at the wyde
 `#000A`, `size − 1` wydes, or end of file; `Fputws` writes up to, not
 including, the first zero wyde. `Fputs` writes up to, not including, the
-first zero byte, with no byte value translated. `Fputs` and `Fputws` cap
-each call at 1,048,576 bytes and 524,288 wydes; a string of exactly the
-cap, followed by its zero, writes whole, and a longer one writes that
-many, reports a diagnostic, and returns the count actually written in
-`$255`. `Fseek`'s offset, `≥ 0`, positions that many bytes from the start;
+first zero byte, with no byte value translated. `Fputs` and `Fputws` write
+the whole string in chunks, however long, and return the bytes or wydes
+written, or −1 on a write error, even one after earlier chunks landed.
+`Fseek`'s offset, `≥ 0`, positions that many bytes from the start;
 `< 0` positions `−offset − 1` bytes before the end, so `−1` is the end
 itself.
 
@@ -549,10 +551,8 @@ through its own read, neither of which has a file underneath to rebind.
 FILE, replayed from the start on every run, and without `--stdin` a read
 fails; an embedder's own `Host` decides for itself, and fails by default.
 
-**Departure from the reference:** the reference places no length limit on
-`Fwrite`, `Fopen`'s name, `Fputs`, or `Fputws`, and accepts any size or
-name the host allows; checksmix caps all four calls as above and rejects
-an `Fopen` name that is not valid UTF-8.
+**Departure from the reference:** checksmix rejects an `Fopen` name that is
+not valid UTF-8; the reference accepts any name the host allows.
 
 ### Extensions
 

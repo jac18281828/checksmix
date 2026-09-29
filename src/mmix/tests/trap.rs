@@ -13,39 +13,82 @@ fn write_two_octa_params(mmix: &mut MMix, buffer_addr: u64, size: u64) {
     mmix.set_register(255, param_addr);
 }
 
-/// `Fwrite` moves at most 1,048,576 bytes a call, however large the
-/// guest's declared size — no allocation sized from the guest's count.
-#[test]
-fn test_trap_fwrite_stdout_caps_at_one_mebibyte() {
-    let (host, handle) = CaptureHost::new();
-    let mut mmix = MMix::with_host(host);
-    let buffer_addr = 10_000u64;
-    mmix.write_byte(buffer_addr, b'H');
-    mmix.write_byte(buffer_addr + 1, b'i');
-
-    write_two_octa_params(&mut mmix, buffer_addr, 0xFFFFFFFFFFFFFFFF);
-    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
-    assert!(mmix.execute_instruction());
-
-    let captured = handle.stdout();
-    assert_eq!(captured.len(), 1_048_576);
-    assert_eq!(&captured[..2], b"Hi");
-    assert_eq!(captured[2], 0);
-    assert_eq!(mmix.get_register(255), 0x100001);
+/// A `Host` whose first `write` succeeds and every later one fails, as a
+/// full pipe fails a long request partway.
+struct FailsAfterFirstWrite {
+    writes: usize,
 }
 
-/// A `size` just over the cap reports the short write as a negative
-/// result; a `size` exactly at the cap writes it all and reports 0.
+impl Host for FailsAfterFirstWrite {
+    fn write(&mut self, _fd: u8, _bytes: &[u8]) -> std::io::Result<()> {
+        self.writes += 1;
+        if self.writes == 1 {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("FailsAfterFirstWrite: later write"))
+        }
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        0
+    }
+
+    fn diagnostic(&mut self, _msg: &str) {}
+}
+
+/// A `Host` whose every `write` fails, recording the length of each request.
+struct FailsEveryWrite {
+    requests: std::rc::Rc<std::cell::RefCell<Vec<usize>>>,
+}
+
+impl Host for FailsEveryWrite {
+    fn write(&mut self, _fd: u8, bytes: &[u8]) -> std::io::Result<()> {
+        self.requests.borrow_mut().push(bytes.len());
+        Err(std::io::Error::other("FailsEveryWrite"))
+    }
+
+    fn now_micros(&mut self) -> u64 {
+        0
+    }
+
+    fn diagnostic(&mut self, _msg: &str) {}
+}
+
+/// `len` bytes of a pattern that repeats every 251, so a dropped, repeated
+/// or reordered chunk changes the stream.
+fn patterned(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+/// `Fwrite` moves a `size` past one chunk whole and in order, and reports 0.
 #[test]
-fn test_trap_fwrite_stdout_reports_short_write_past_the_cap() {
+fn test_trap_fwrite_stdout_moves_a_size_past_one_chunk_whole() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
+    let buffer_addr = 1_000_000u64;
+    let data = patterned(1_048_576 + 3);
+    for (i, &byte) in data.iter().enumerate() {
+        mmix.write_byte(buffer_addr + i as u64, byte);
+    }
 
-    write_two_octa_params(&mut mmix, 10_000, 0x100001);
+    write_two_octa_params(&mut mmix, buffer_addr, data.len() as u64);
     mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
     assert!(mmix.execute_instruction());
-    assert_eq!(handle.stdout().len(), 1_048_576);
-    assert_eq!(mmix.get_register(255), 0xFFFFFFFFFFFFFFFF);
+
+    assert_eq!(handle.stdout(), data);
+    assert_eq!(mmix.get_register(255), 0);
+}
+
+/// A later chunk that fails to write reports the short write as `n - size`;
+/// a `size` of exactly one chunk writes it all and reports 0.
+#[test]
+fn test_trap_fwrite_stdout_reports_short_write_when_a_later_chunk_fails() {
+    let mut mmix = MMix::with_host(FailsAfterFirstWrite { writes: 0 });
+
+    write_two_octa_params(&mut mmix, 10_000, 0x100003);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (-3i64) as u64);
 
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
@@ -70,19 +113,66 @@ fn test_trap_fwrite_stdin_rejects_and_does_not_negate_overflow() {
     assert_eq!(mmix.get_register(255), 0x8000000000000000);
 }
 
-/// `Fwrite` to a writable handle with the same `size`: pins the wrapping
-/// (not signed) subtraction that turns the bytes written and the guest's
-/// size into the result.
+/// `Fwrite` to a writable handle with a `size` above `i64::MAX`: pins the
+/// wrapping (not signed) subtraction that turns the bytes written and the
+/// guest's size into the result. The write fails after its first chunk, so
+/// `n` is one chunk.
 #[test]
 fn test_trap_fwrite_stdout_size_above_i64_max_wraps_correctly() {
-    let (host, handle) = CaptureHost::new();
-    let mut mmix = MMix::with_host(host);
+    let mut mmix = MMix::with_host(FailsAfterFirstWrite { writes: 0 });
 
     write_two_octa_params(&mut mmix, 10_000, 0x8000000000000000);
     mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
     assert!(mmix.execute_instruction());
-    assert_eq!(handle.stdout().len(), 1_048_576);
     assert_eq!(mmix.get_register(255), 0x8000000000100000);
+}
+
+/// `Fwrite` of a `size` no buffer could hold, against a host that fails
+/// after its first chunk: the result is the chunk's bytes minus `size`,
+/// mod 2^64.
+#[test]
+fn test_trap_fwrite_stdout_size_u64_max_reports_one_chunk_written() {
+    let mut mmix = MMix::with_host(FailsAfterFirstWrite { writes: 0 });
+
+    write_two_octa_params(&mut mmix, 10_000, u64::MAX);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 0x100001);
+}
+
+/// An empty `Fputs` or `Fputws` string, or an `Fwrite` `size` of 0, reaches `Host::write` as one
+/// call with an empty slice, and the host's failure of it is the result.
+#[test]
+fn test_trap_empty_request_makes_one_empty_host_write() {
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut mmix = MMix::with_host(FailsEveryWrite {
+        requests: requests.clone(),
+    });
+    mmix.set_register(255, 10_000); // no bytes stored: an empty string
+    mmix.write_tetra(0, 0x00000701); // TRAP 0, Fputs (7), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    assert_eq!(*requests.borrow(), vec![0]);
+
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut mmix = MMix::with_host(FailsEveryWrite {
+        requests: requests.clone(),
+    });
+    write_two_octa_params(&mut mmix, 10_000, 0);
+    mmix.write_tetra(0, 0x00000601); // TRAP 0, Fwrite (6), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), 0);
+    assert_eq!(*requests.borrow(), vec![0]);
+
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut mmix = MMix::with_host(FailsEveryWrite {
+        requests: requests.clone(),
+    });
+    mmix.set_register(255, 10_000);
+    mmix.write_tetra(0, 0x00000801); // TRAP 0, Fputws (8), 1 (stdout)
+    assert!(mmix.execute_instruction());
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
+    assert_eq!(*requests.borrow(), vec![0]);
 }
 
 /// A `Host` implementing every method but `read`, so the trait's own
@@ -414,10 +504,9 @@ fn test_trap_fputws() {
     assert_eq!(handle.stdout(), b"Hi");
 }
 
-/// A string of exactly `Fputs`'s 1 MiB cap, followed by its zero, is not
-/// too long: it writes whole, silently.
+/// A string of exactly one chunk, followed by its zero, writes whole.
 #[test]
-fn test_trap_fputs_writes_exactly_the_cap_with_no_diagnostic() {
+fn test_trap_fputs_of_exactly_one_chunk_writes_whole() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
     let str_addr = 10_000u64;
@@ -435,32 +524,48 @@ fn test_trap_fputs_writes_exactly_the_cap_with_no_diagnostic() {
     assert!(handle.diagnostics().is_empty());
 }
 
-/// A string one byte past `Fputs`'s cap writes the first 1 MiB, reports a
-/// diagnostic, and returns the count actually written.
+/// A string one byte past a chunk writes whole, in order, with the full
+/// count in `$255` and no diagnostic.
 #[test]
-fn test_trap_fputs_past_the_cap_truncates_with_a_diagnostic() {
+fn test_trap_fputs_past_one_chunk_writes_whole() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
-    let str_addr = 10_000u64;
-    for i in 0..1_048_577u64 {
-        mmix.write_byte(str_addr + i, b'A');
+    let str_addr = 1_000_000u64;
+    let string: Vec<u8> = patterned(1_048_577).into_iter().map(|b| b.max(1)).collect();
+    for (i, &byte) in string.iter().enumerate() {
+        mmix.write_byte(str_addr + i as u64, byte);
     }
-    mmix.write_byte(str_addr + 1_048_577, 0);
+    mmix.write_byte(str_addr + string.len() as u64, 0);
 
     mmix.set_register(255, str_addr);
     mmix.write_tetra(0, 0x00000701);
     assert!(mmix.execute_instruction());
 
-    assert_eq!(mmix.get_register(255), 1_048_576);
-    assert_eq!(handle.stdout().len(), 1_048_576);
-    assert_eq!(handle.diagnostics().len(), 1);
-    assert!(handle.diagnostics()[0].contains("Fputs"));
+    assert_eq!(mmix.get_register(255), 1_048_577);
+    assert_eq!(handle.stdout(), string);
+    assert!(handle.diagnostics().is_empty());
 }
 
-/// `Fputws`'s cap is `Fputs`'s budget in wydes: exactly that many, followed
-/// by the terminating zero wyde, writes whole and silently.
+/// A write error after an earlier chunk landed still returns -1.
 #[test]
-fn test_trap_fputws_writes_exactly_the_cap_with_no_diagnostic() {
+fn test_trap_fputs_returns_minus_one_when_a_later_chunk_fails() {
+    let mut mmix = MMix::with_host(FailsAfterFirstWrite { writes: 0 });
+    let str_addr = 1_000_000u64;
+    for i in 0..1_048_577u64 {
+        mmix.write_byte(str_addr + i, b'A');
+    }
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000701);
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
+}
+
+/// A string of exactly one chunk of wydes, followed by the terminating zero
+/// wyde, writes whole.
+#[test]
+fn test_trap_fputws_of_exactly_one_chunk_writes_whole() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
     let str_addr = 20_000u64;
@@ -480,28 +585,49 @@ fn test_trap_fputws_writes_exactly_the_cap_with_no_diagnostic() {
     assert!(handle.diagnostics().is_empty());
 }
 
-/// A string one wyde past `Fputws`'s cap writes the first 524,288 wydes,
-/// reports a diagnostic, and returns the count actually written.
+/// A string one wyde past a chunk writes whole, in order, with the full
+/// wyde count in `$255` and no diagnostic.
 #[test]
-fn test_trap_fputws_past_the_cap_truncates_with_a_diagnostic() {
+fn test_trap_fputws_past_one_chunk_writes_whole() {
     let (host, handle) = CaptureHost::new();
     let mut mmix = MMix::with_host(host);
-    let str_addr = 20_000u64;
-    for i in 0..524_289u64 {
-        mmix.write_byte(str_addr + i * 2, 0x00);
-        mmix.write_byte(str_addr + i * 2 + 1, 0x41);
+    let str_addr = 1_000_000u64;
+    let wydes = 524_289usize;
+    let mut string = Vec::with_capacity(wydes * 2);
+    for i in 0..wydes {
+        string.push((i % 251) as u8);
+        string.push(0x41);
     }
-    mmix.write_byte(str_addr + 524_289 * 2, 0);
-    mmix.write_byte(str_addr + 524_289 * 2 + 1, 0);
+    for (i, &byte) in string.iter().enumerate() {
+        mmix.write_byte(str_addr + i as u64, byte);
+    }
+    mmix.write_byte(str_addr + string.len() as u64, 0);
+    mmix.write_byte(str_addr + string.len() as u64 + 1, 0);
 
     mmix.set_register(255, str_addr);
     mmix.write_tetra(0, 0x00000801);
     assert!(mmix.execute_instruction());
 
-    assert_eq!(mmix.get_register(255), 524_288);
-    assert_eq!(handle.stdout().len(), 1_048_576);
-    assert_eq!(handle.diagnostics().len(), 1);
-    assert!(handle.diagnostics()[0].contains("Fputws"));
+    assert_eq!(mmix.get_register(255), wydes as u64);
+    assert_eq!(handle.stdout(), string);
+    assert!(handle.diagnostics().is_empty());
+}
+
+/// A write error after an earlier chunk landed still returns -1.
+#[test]
+fn test_trap_fputws_returns_minus_one_when_a_later_chunk_fails() {
+    let mut mmix = MMix::with_host(FailsAfterFirstWrite { writes: 0 });
+    let str_addr = 1_000_000u64;
+    for i in 0..524_289u64 {
+        mmix.write_byte(str_addr + i * 2, 0x00);
+        mmix.write_byte(str_addr + i * 2 + 1, 0x41);
+    }
+
+    mmix.set_register(255, str_addr);
+    mmix.write_tetra(0, 0x00000801);
+    assert!(mmix.execute_instruction());
+
+    assert_eq!(mmix.get_register(255), (-1i64) as u64);
 }
 
 #[test]

@@ -5,18 +5,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use tracing::debug;
 
-/// The per-call byte bound shared by `Fopen`'s name, `Fwrite`, `Fputs` and
-/// `Fputws` (`Fputws`'s own bound counted in wydes, `MAX_TRAP_WYDES`
-/// below). `Fread` has no bound of its own: it transfers in chunks of at
-/// most this size, stopping at `size` bytes, end of file or an error,
-/// whichever comes first. **Departure from the reference:** none of
-/// `Fopen`, `Fwrite`, `Fputs` or `Fputws` has one there. A fixed constant,
-/// read from no register.
-pub(super) const MAX_TRAP_BYTES: usize = 1_048_576;
-
-/// `Fputws`'s bound in wydes: the same byte budget as `MAX_TRAP_BYTES`,
-/// counted two bytes at a time.
-const MAX_TRAP_WYDES: usize = MAX_TRAP_BYTES / 2;
+/// The size of the host buffer `Fread`, `Fwrite`, `Fputs` and `Fputws` each
+/// reuse to move a request of any length, so host memory never scales with
+/// the guest's count. A request larger than this crosses in several chunks;
+/// nothing bounds the request itself. Even, because `write_string` fills a
+/// chunk one whole character at a time: an odd size would let a wyde chunk
+/// overshoot it by a byte.
+const TRANSFER_CHUNK: usize = 1_048_576;
 
 /// TRAP code identifiers for MMIX, numbered per the MMIXAL reference: every
 /// call is `TRAP 0,Code,Z`. `Z` means a different thing per code: ignored
@@ -237,15 +232,20 @@ impl MMix {
     }
 
     /// Reads `Fopen`'s name argument: the guest's bytes at `name_addr` up to
-    /// their terminating zero, passed through unchanged, capped at
-    /// `MAX_TRAP_BYTES`. Returns `None`, having already logged the reason
-    /// through `debug!`, when no zero falls within the bound or the bytes
-    /// are not valid UTF-8.
+    /// their terminating zero, passed through unchanged. Returns `None`,
+    /// having already logged the reason through `debug!`, when the bytes are
+    /// not valid UTF-8. Walks memory with wrapping arithmetic so `name_addr`
+    /// near `u64::MAX` cannot panic.
     fn read_fopen_name(&self, handle: u8, name_addr: u64) -> Option<String> {
-        let (name_bytes, truncated) = self.read_bounded_bytes(name_addr, MAX_TRAP_BYTES);
-        if truncated {
-            debug!(handle, "TRAP: Fopen name has no zero within the byte bound");
-            return None;
+        let mut name_bytes = Vec::new();
+        let mut cur = name_addr;
+        loop {
+            let byte = self.read_byte(cur);
+            if byte == 0 {
+                break;
+            }
+            name_bytes.push(byte);
+            cur = cur.wrapping_add(1);
         }
         match String::from_utf8(name_bytes) {
             Ok(filename) => Some(filename),
@@ -263,13 +263,12 @@ impl MMix {
     /// failure the handle is left closed.
     ///
     /// The name is the guest's bytes up to its terminating zero, passed to
-    /// the host unchanged, capped at `MAX_TRAP_BYTES`. A name with no zero
-    /// within the bound, or one that is not valid UTF-8, fails with -1 and
-    /// touches no file; every such failure logs through
-    /// `debug!` only, like any other `Fopen` failure. **Departure from the
-    /// reference:** a name that is valid bytes on the host's filesystem but
-    /// not UTF-8, such as a Latin-1 name on a Linux filesystem, cannot be
-    /// opened.
+    /// the filesystem unchanged and whole; the filesystem's own path limit
+    /// rejects a long one. A name that is not valid UTF-8 fails with -1 and
+    /// touches no file; every such failure logs through `debug!` only, like
+    /// any other `Fopen` failure. **Departure from the reference:** a name
+    /// that is valid bytes on the host's filesystem but not UTF-8, such as a
+    /// Latin-1 name on a Linux filesystem, cannot be opened.
     fn handle_fopen(&mut self, handle: u8) -> bool {
         if handle <= 2 {
             debug!(handle, "TRAP: Fopen rejects a standard handle");
@@ -367,7 +366,7 @@ impl MMix {
     /// TRAP 3: Fread. `Z` is the handle; `$255` addresses a two-octa block
     /// holding the buffer address and the byte count, read as a full
     /// octabyte so no target narrows it. Reads in chunks of at most
-    /// `MAX_TRAP_BYTES`, so no allocation scales with the guest's
+    /// `TRANSFER_CHUNK`, so no allocation scales with the guest's
     /// request; the loop ends at the guest's requested size, end of file,
     /// or an I/O error, whichever comes first, and reports a mid-read
     /// error the same as an early EOF — the short-read count, not the
@@ -392,10 +391,10 @@ impl MMix {
         }
         self.note_read(handle);
 
-        // Sized to what this call could possibly need: a size below the
-        // cap allocates and zeroes only that many bytes, so many small
+        // Sized to what this call could possibly need: a size below one
+        // chunk allocates and zeroes only that many bytes, so many small
         // reads don't each pay for a 1 MiB buffer they never fill.
-        let chunk_size = size.min(MAX_TRAP_BYTES as u64) as usize;
+        let chunk_size = size.min(TRANSFER_CHUNK as u64) as usize;
         let mut chunk = vec![0u8; chunk_size];
         let mut total: u64 = 0;
         let mut had_error = false;
@@ -534,14 +533,14 @@ impl MMix {
 
     /// TRAP 6: Fwrite. `Z` is the handle; `$255` addresses a two-octa block
     /// holding the buffer address and the byte count, read as a full
-    /// octabyte so no target narrows it. Moves at most `MAX_TRAP_BYTES`
-    /// bytes a call, a larger `size` written and reported as a short
-    /// write (departure from the reference, which streams the full
-    /// size). Writes in a loop, so a short underlying write is reflected
-    /// in the result rather than masked. Returns 0 if all `size` bytes
-    /// were written, else `n - size` mod 2^64 for the `n` bytes actually
-    /// written (`-size` mod 2^64 if the handle lacks write access, `n`
-    /// then being 0).
+    /// octabyte so no target narrows it. Writes all `size` bytes, in chunks
+    /// of at most `TRANSFER_CHUNK` so no allocation scales with the guest's
+    /// request, and stops at the first chunk that writes short, so a short
+    /// underlying write is reflected in the result rather than masked.
+    /// A `size` of 0 on handle 1 or 2 still makes one `Host::write` call,
+    /// with an empty slice. Returns 0 if all `size` bytes were written, else
+    /// `n - size` mod 2^64 for the `n` bytes actually written (`-size`
+    /// mod 2^64 if the handle lacks write access, `n` then being 0).
     fn handle_fwrite(&mut self, handle: u8) -> bool {
         let param_addr = self.get_register(255);
         let buffer_addr = self.read_octa(param_addr);
@@ -559,57 +558,47 @@ impl MMix {
         }
         self.note_write(handle);
 
-        let capped = size.min(MAX_TRAP_BYTES as u64) as usize;
-        let mut buffer = Vec::with_capacity(capped);
-        for i in 0..capped {
-            buffer.push(self.read_byte(buffer_addr.wrapping_add(i as u64)));
+        let chunk_size = size.min(TRANSFER_CHUNK as u64) as usize;
+        let mut chunk = vec![0u8; chunk_size];
+        let mut written: u64 = 0;
+        loop {
+            let want = (size - written).min(chunk_size as u64) as usize;
+            let chunk_addr = buffer_addr.wrapping_add(written);
+            for (i, slot) in chunk[..want].iter_mut().enumerate() {
+                *slot = self.read_byte(chunk_addr.wrapping_add(i as u64));
+            }
+            let landed = self.write_counted(handle, &chunk[..want]);
+            written += landed as u64;
+            if landed < want || written == size {
+                break;
+            }
         }
 
-        let written = match handle {
-            1 | 2 => match self.host.write(handle, &buffer) {
-                Ok(_) => buffer.len(),
+        self.set_register(255, written.wrapping_sub(size));
+        self.advance_pc();
+        true
+    }
+
+    /// Writes `bytes` to `handle` and returns how many landed. Handle 1 and
+    /// 2 cross `Host::write` whole or not at all; a file takes partial
+    /// writes until one writes nothing or fails.
+    fn write_counted(&mut self, handle: u8, bytes: &[u8]) -> usize {
+        match handle {
+            1 | 2 => match self.host.write(handle, bytes) {
+                Ok(()) => bytes.len(),
                 Err(_) => 0,
             },
             _ => {
                 let file = self.open_file(handle);
                 let mut total = 0usize;
-                while total < buffer.len() {
-                    match file.write(&buffer[total..]) {
-                        Ok(0) => break,
+                while total < bytes.len() {
+                    match file.write(&bytes[total..]) {
+                        Ok(0) | Err(_) => break,
                         Ok(n) => total += n,
-                        Err(_) => break,
                     }
                 }
                 total
             }
-        };
-
-        let result = (written as u64).wrapping_sub(size);
-        self.set_register(255, result);
-        self.advance_pc();
-        true
-    }
-
-    /// Read a NUL-terminated byte string from memory starting at `addr`.
-    /// Bytes are returned verbatim (no UTF-8 widening). The second element
-    /// is true when `max_len` bytes were read without finding a zero: a
-    /// string of exactly `max_len` bytes, followed by its zero, is not too
-    /// long, and the second element is false whenever the zero is found,
-    /// whatever the string's length. Walks memory using wrapping
-    /// arithmetic so `addr` near `u64::MAX` cannot panic.
-    fn read_bounded_bytes(&self, addr: u64, max_len: usize) -> (Vec<u8>, bool) {
-        let mut bytes = Vec::new();
-        let mut cur = addr;
-        loop {
-            let byte = self.read_byte(cur);
-            if byte == 0 {
-                return (bytes, false);
-            }
-            if bytes.len() == max_len {
-                return (bytes, true);
-            }
-            bytes.push(byte);
-            cur = cur.wrapping_add(1);
         }
     }
 
@@ -640,19 +629,47 @@ impl MMix {
         }
     }
 
+    /// Streams the zero-terminated string of `UNIT`-byte characters at `addr`
+    /// to `handle` in chunks of at most `TRANSFER_CHUNK` bytes, so host
+    /// memory never scales with the string's length. Returns the character
+    /// count written; a write error after earlier chunks landed is still an
+    /// error. An empty string still makes one write, with an empty slice.
+    /// Walks memory with wrapping arithmetic so `addr` near `u64::MAX`
+    /// cannot panic.
+    fn write_string<const UNIT: usize>(&mut self, handle: u8, addr: u64) -> std::io::Result<u64> {
+        let mut chunk = Vec::new();
+        let mut cur = addr;
+        let mut count = 0u64;
+        loop {
+            chunk.clear();
+            let mut ended = false;
+            while chunk.len() < TRANSFER_CHUNK {
+                let character: [u8; UNIT] =
+                    std::array::from_fn(|i| self.read_byte(cur.wrapping_add(i as u64)));
+                if character == [0; UNIT] {
+                    ended = true;
+                    break;
+                }
+                chunk.extend_from_slice(&character);
+                cur = cur.wrapping_add(UNIT as u64);
+            }
+            if !chunk.is_empty() || count == 0 {
+                self.write_bytes_to_fd(handle, &chunk)?;
+            }
+            count += (chunk.len() / UNIT) as u64;
+            if ended {
+                return Ok(count);
+            }
+        }
+    }
+
     /// TRAP 7: Fputs. `Z` is the handle; `$255` is the string address.
     /// Writes bytes up to, not including, the first zero byte, with no
-    /// byte value translated. **Departure from the reference:** capped at
-    /// `MAX_TRAP_BYTES` per call; a longer string writes that many bytes,
-    /// reports a diagnostic, and returns the count actually written.
-    /// Returns the byte count written, or -1.
+    /// byte value translated, in chunks so no allocation scales with the
+    /// string's length. Returns the byte count written, or -1 on a write
+    /// error, even one after earlier chunks landed.
     fn handle_fputs(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
-        let (bytes, truncated) = self.read_bounded_bytes(str_addr, MAX_TRAP_BYTES);
-        if truncated {
-            self.host
-                .diagnostic("Warning: Fputs string too long, truncating");
-        }
         debug!(
             handle,
             str_addr = format!("0x{:X}", str_addr),
@@ -664,8 +681,8 @@ impl MMix {
         }
         self.note_write(handle);
 
-        match self.write_bytes_to_fd(handle, &bytes) {
-            Ok(_) => self.set_register(255, bytes.len() as u64),
+        match self.write_string::<1>(handle, str_addr) {
+            Ok(count) => self.set_register(255, count),
             Err(_) => {
                 debug!(handle, "Fputs write failed");
                 self.set_register(255, (-1i64) as u64);
@@ -700,33 +717,11 @@ impl MMix {
 
     /// TRAP 8: Fputws. `Z` is the handle; `$255` is the string address.
     /// Wyde characters, two bytes each in memory order, written up to, not
-    /// including, the first zero wyde. **Departure from the reference:**
-    /// capped at `MAX_TRAP_WYDES` per call, `MAX_TRAP_BYTES`'s budget in
-    /// wydes; a longer string writes that many wydes, reports a diagnostic,
-    /// and returns the count actually written. A string of exactly
-    /// `MAX_TRAP_WYDES` wydes, followed by its zero wyde, is not too long.
-    /// Returns the wyde count written, or -1.
+    /// including, the first zero wyde, in chunks so no allocation scales
+    /// with the string's length. Returns the wyde count written, or -1 on a
+    /// write error, even one after earlier chunks landed.
     fn handle_fputws(&mut self, handle: u8) -> bool {
         let str_addr = self.get_register(255);
-        let mut bytes = Vec::new();
-        let mut addr = str_addr;
-        let mut wyde_count = 0usize;
-        loop {
-            let hi = self.read_byte(addr);
-            let lo = self.read_byte(addr.wrapping_add(1));
-            if hi == 0 && lo == 0 {
-                break;
-            }
-            if wyde_count == MAX_TRAP_WYDES {
-                self.host
-                    .diagnostic("Warning: Fputws string too long, truncating");
-                break;
-            }
-            bytes.push(hi);
-            bytes.push(lo);
-            wyde_count += 1;
-            addr = addr.wrapping_add(2);
-        }
         debug!(
             handle,
             str_addr = format!("0x{:X}", str_addr),
@@ -738,8 +733,8 @@ impl MMix {
         }
         self.note_write(handle);
 
-        match self.write_bytes_to_fd(handle, &bytes) {
-            Ok(_) => self.set_register(255, wyde_count as u64),
+        match self.write_string::<2>(handle, str_addr) {
+            Ok(count) => self.set_register(255, count),
             Err(_) => {
                 debug!(handle, "Fputws write failed");
                 self.set_register(255, (-1i64) as u64);
