@@ -44,7 +44,7 @@
 * Every error `MMixAssembler::parse` or `MMixAssembler::resolve_includes` returns now begins `file:line:col:`. `Expected expression, got: …`, `Expected a literal, got: …`, `symbol '…' redefined`, `predefined symbol '…' redefined after its value was used at …`, `` too many `debug` directives … ``, `BSPEC has no matching ESPEC before end of input`, `LOCAL ${reg} is not below the global threshold`, `{what} is not allowed inside BSPEC/ESPEC`, `{keyword} takes no label`, `BSPEC does not nest`, `BSPEC operand {v} does not fit in two bytes`, `ESPEC has no matching BSPEC`, `include cycle detected: …` and `cannot read included file '…': …` each gain a column, a file, or both
 * The published crate drops the repository's integration tests and its CI, editor, container and agent files (`tests/`, `.github/`, `.vscode/`, `.devcontainer/`, `Dockerfile`, `CLAUDE.md`, `AGENTS.md`, `commitlint.config.js`), and takes the README's description
 * `contrib/mmix-mode.el` requires `subr-x`. Since 0.3.8 it called `string-remove-suffix` and `string-remove-prefix` without requiring it, so fontifying any buffer failed with `void-function string-remove-suffix` in any Emacs session that had not already loaded `subr-x`
-* `checksmix` no longer depends on the `regex` crate
+* `checksmix` no longer depends on the `regex` or `lyn` crates
 * The man pages no longer state a version
 * Each release attaches one archive per platform holding the three binaries, their man pages, the README and the licence, where it attached a bare `checksmix` before
 * Every example under `examples/` halts with 0 unless its header says otherwise; `fibonacci.mms` and `time.mms` print their results instead of returning them as the exit code

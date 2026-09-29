@@ -32,7 +32,7 @@ impl MMixAssembler {
     }
 
     /// Calculate the actual size of a data directive: its unit width times
-    /// its unit count. A string contributes one unit per decoded byte;
+    /// its unit count. A string contributes one unit per character;
     /// every other primary contributes one, matching what pass 2's
     /// `eval_data_value_items` emits (`n₁ + … + n_k − k + 1` items for a
     /// value holding k strings, per `MMIX.md`).
