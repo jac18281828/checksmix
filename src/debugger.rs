@@ -439,9 +439,7 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&(self.mmix.get_pc() & !3))
-                || self.reached_new_line(&origin)
-            {
+            if self.at_breakpoint() || self.reached_new_line(&origin) {
                 break;
             }
         }
@@ -473,7 +471,7 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
+            if self.at_breakpoint() {
                 break;
             }
             if self.mmix.call_depth() <= depth && self.reached_new_line(&origin) {
@@ -524,7 +522,7 @@ impl Debugger {
                 break;
             }
             steps += 1;
-            if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
+            if self.at_breakpoint() {
                 break;
             }
         }
@@ -539,7 +537,7 @@ impl Debugger {
     /// has run yet, so the entry breakpoint has to be honored first.
     fn do_run(&mut self) -> Vec<String> {
         self.reset();
-        if self.breakpoints.contains(&(self.mmix.get_pc() & !3)) {
+        if self.at_breakpoint() {
             return self.report(false);
         }
         self.do_continue()
@@ -577,7 +575,18 @@ impl Debugger {
                 .copied()
                 .or_else(|| self.parse_hex_address(arg))
         };
-        addr.map(|addr| addr & !3)
+        addr.map(Self::tetra)
+    }
+
+    /// The tetra holding `addr`: MMIX executes instructions only at
+    /// multiples of 4, so every breakpoint is keyed on one.
+    fn tetra(addr: u64) -> u64 {
+        addr & !3
+    }
+
+    /// Whether the PC's tetra holds a breakpoint.
+    fn at_breakpoint(&self) -> bool {
+        self.breakpoints.contains(&Self::tetra(self.mmix.get_pc()))
     }
 
     fn do_delete(&mut self, arg: Option<String>) -> String {
