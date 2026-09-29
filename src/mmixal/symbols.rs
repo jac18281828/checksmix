@@ -56,7 +56,7 @@ impl MMixAssembler {
                 ))
             };
         }
-        if self.predefined_names.contains(name)
+        if self.predefined_symbols.contains_key(name)
             && let Some((used_file, used_line)) = self.predefined_used_at.get(name)
         {
             return Err(format!(
@@ -104,7 +104,7 @@ impl MMixAssembler {
     /// Record `name`'s first use site if it is still an unshadowed
     /// predefined symbol -- the site a later redefinition attempt cites.
     fn mark_predefined_use(&mut self, name: &str, line: usize) {
-        if self.predefined_names.contains(name)
+        if self.predefined_symbols.contains_key(name)
             && !self.label_origins.contains_key(name)
             && !self.symbol_origins.contains_key(name)
             && !self.predefined_used_at.contains_key(name)

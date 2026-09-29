@@ -1,6 +1,119 @@
-//! Tests for LOCAL declarations and BSPEC/ESPEC special mode.
+//! Tests for a repeated `parse`, LOCAL declarations and BSPEC/ESPEC special mode.
 
 use super::*;
+
+// ---- repeated parse ------------------------------------------------
+
+/// A forward reference, a named and a local-label `GREG`, a local label, a
+/// data directive that warns, a `debug` directive and a second unit.
+const STATEFUL_MAIN: &str = "\
+        LOC     #100
+Base    GREG    #2000
+Main    JMP     Fwd
+        BYTE    300,\"hi\"
+1H      OCTA    Data_Segment
+        GETA    $1,1B
+        debug   \"seen\"
+Fwd     SETL    $2,Limit
+Limit   IS      7
+        LDA     $3,Base,8
+";
+
+const STATEFUL_LIB: &str = "\
+2H      GREG    5
+Lib     SWYM
+        GETA    $4,2F
+2H      TETRA   Lib
+";
+
+fn stateful_assembler(main: &str) -> MMixAssembler {
+    let mut asm = MMixAssembler::new(main, "main.mms");
+    asm.add_source(STATEFUL_LIB, "lib.mms");
+    asm
+}
+
+/// Every observable of `asm`'s public surface, in a comparable form.
+fn surface(asm: &MMixAssembler) -> String {
+    let labels: BTreeMap<_, _> = asm.labels.iter().collect();
+    let symbols: BTreeMap<_, _> = asm.symbols.iter().collect();
+    let locs: Vec<_> = (0..0x400).map(|addr| asm.source_loc(addr)).collect();
+    let lines: Vec<_> = ["main.mms", "lib.mms"]
+        .iter()
+        .flat_map(|file| (1..=12).map(move |line| (file, line)))
+        .map(|(file, line)| (asm.addr_for_line(file, line), asm.source_text(file, line)))
+        .collect();
+    format!(
+        "{:?}\n{labels:?}\n{symbols:?}\n{:?}\n{:?}\n{:?}\n{locs:?}\n{lines:?}\n{:?}",
+        asm.instructions,
+        asm.greg_inits,
+        asm.warnings(),
+        asm.generate_object_code(),
+        asm.debug_strings(),
+    )
+}
+
+#[test]
+fn a_second_parse_matches_a_single_parse() {
+    let mut fresh = stateful_assembler(STATEFUL_MAIN);
+    fresh.parse().unwrap();
+    assert_eq!(fresh.greg_inits.len(), 2);
+    assert_eq!(fresh.warnings().len(), 1);
+
+    let mut repeated = stateful_assembler(STATEFUL_MAIN);
+    repeated.parse().unwrap();
+    repeated.parse().unwrap();
+    assert_eq!(surface(&repeated), surface(&fresh));
+
+    repeated.parse().unwrap();
+    assert_eq!(surface(&repeated), surface(&fresh));
+}
+
+#[test]
+fn a_second_parse_that_fails_in_pass_two_matches_a_single_failed_parse() {
+    let failing = STATEFUL_MAIN.replace("SETL    $2,Limit", "SETL    $2,Missing");
+    let mut fresh = stateful_assembler(&failing);
+    let fresh_err = fresh.parse().unwrap_err();
+    assert!(fresh_err.contains("Missing"), "err: {fresh_err}");
+    assert!(!fresh.instructions.is_empty());
+    assert!(!fresh.greg_inits.is_empty());
+
+    let mut repeated = stateful_assembler(&failing);
+    assert_eq!(repeated.parse().unwrap_err(), fresh_err);
+    assert_eq!(repeated.parse().unwrap_err(), fresh_err);
+    assert_eq!(surface(&repeated), surface(&fresh));
+}
+
+/// `source`'s single parse and its second parse must agree on the surface.
+fn assert_second_parse_matches_first(source: &str) {
+    let mut fresh = MMixAssembler::new(source, "main.mms");
+    let fresh_result = fresh.parse();
+
+    let mut repeated = MMixAssembler::new(source, "main.mms");
+    let _ = repeated.parse();
+    assert_eq!(repeated.parse(), fresh_result);
+    assert_eq!(surface(&repeated), surface(&fresh));
+}
+
+#[test]
+fn a_second_parse_of_a_source_without_loc_starts_at_zero() {
+    let source = "Main JMP Fwd\n SWYM\nFwd SWYM\n";
+    let mut repeated = MMixAssembler::new(source, "main.mms");
+    repeated.parse().unwrap();
+    repeated.parse().unwrap();
+
+    assert_eq!(repeated.instructions[0], (0, MMixInstruction::JMP(2)));
+    assert_second_parse_matches_first(source);
+}
+
+#[test]
+fn a_second_parse_of_a_source_ending_at_the_top_of_memory_succeeds() {
+    let source = " SWYM\n LOC #FFFFFFFFFFFFFFFC\n TETRA 0\n";
+    let mut repeated = MMixAssembler::new(source, "main.mms");
+    repeated.parse().unwrap();
+    repeated.parse().unwrap();
+
+    assert_second_parse_matches_first(source);
+}
 
 // ---- LOCAL ---------------------------------------------------------
 

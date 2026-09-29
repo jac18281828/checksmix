@@ -22,9 +22,41 @@ enum AddrCheck {
 }
 
 impl MMixAssembler {
+    /// Return every field a parse writes to the state `new` and `add_source`
+    /// built, so each `parse` starts from it. The sources, the `debug`
+    /// strings and the predefined names are inputs and stay.
+    fn reset_parse_state(&mut self) {
+        self.current_filename = self
+            .sources
+            .first()
+            .map(|unit| unit.filename.clone())
+            .unwrap_or_default();
+        self.current_prefix.clear();
+        self.labels.clear();
+        self.symbols = self.predefined_symbols.clone();
+        self.label_origins.clear();
+        self.symbol_origins.clear();
+        self.instructions.clear();
+        self.current_addr = 0;
+        self.past_end = false;
+        self.next_greg = Self::FIRST_GREG;
+        self.greg_inits.clear();
+        self.greg_inits_seen = 0;
+        self.current_unit_index = 0;
+        self.debug_info.clear();
+        self.local_labels = Default::default();
+        self.local_occurrence = [0; 10];
+        self.local_pending_digit = None;
+        self.local_declarations.clear();
+        self.in_special_mode = false;
+        self.bspec_open_site = None;
+        self.predefined_used_at.clear();
+        self.warnings.clear();
+    }
+
     #[instrument(skip(self))]
     pub fn parse(&mut self) -> Result<(), String> {
-        self.warnings.clear();
+        self.reset_parse_state();
         if let Some((file, line, col)) = &self.debug_directive_overflow {
             return Err(format!(
                 "{file}:{line}:{col}: error: too many `debug` directives in this \
@@ -54,17 +86,13 @@ impl MMixAssembler {
     /// Each pass walks every translation unit in command-line order, threading
     /// `current_addr`, `current_prefix`, and the symbol tables across files so
     /// the result matches assembling the concatenation of the inputs. The
-    /// PREFIX state is reset at the start of each pass.
+    /// PREFIX state starts clear in each pass.
     #[instrument(skip(self))]
     fn parse_two_pass(&mut self) -> Result<(), String> {
         use pest::Parser;
 
         let sources = self.sources.clone();
         debug!("Pass 1: Collecting labels and symbols");
-        self.current_prefix.clear();
-        self.local_occurrence = [0; 10];
-        self.in_special_mode = false;
-        self.bspec_open_site = None;
 
         for (index, unit) in sources.iter().enumerate() {
             self.current_filename = unit.filename.clone();

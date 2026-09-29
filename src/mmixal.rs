@@ -5,7 +5,7 @@
     clippy::unreachable
 )]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::mmix::{STACK_SEGMENT_START, TrapCode};
 use pest_derive::Parser;
@@ -616,6 +616,10 @@ pub struct MMixAssembler {
     current_prefix: String,
     pub labels: HashMap<String, u64>,
     pub symbols: HashMap<String, SymbolType>, // For IS directive - symbolic names with type
+    /// `symbols` as `new` seeded it, before any user statement ran. Every
+    /// key is a root-namespace name; a program's own definition of one is a
+    /// plain shadow.
+    predefined_symbols: HashMap<String, SymbolType>,
     /// First-definition site for user-defined labels: stored name -> (filename, line).
     /// Predefined symbols are not tracked here, so user code may shadow them.
     label_origins: HashMap<String, (String, usize)>,
@@ -680,9 +684,6 @@ pub struct MMixAssembler {
     /// Where the currently open `BSPEC` was written, for the
     /// unterminated-at-end-of-input diagnostic.
     bspec_open_site: Option<(String, usize, usize)>,
-    /// Every predefined symbol's root-namespace key, snapshotted right
-    /// after `new` seeds them, before any user statement runs.
-    predefined_names: HashSet<String>,
     /// First (file, line) a still-predefined name was named in an operand.
     /// A later label/IS/GREG redefining that name is an error exactly when
     /// this is populated: the reference already saw the predefined value.
@@ -703,6 +704,10 @@ pub struct SourceLoc {
 }
 
 impl MMixAssembler {
+    /// The first register `GREG` allocates; each later one takes the next
+    /// lower.
+    const FIRST_GREG: u8 = 254;
+
     /// Insert a predefined symbol at its root-namespace key. The root
     /// prefix is the empty string and a leading `:` on a reference is
     /// stripped before lookup (`qualify_name`), so `:name` reaches this
@@ -851,10 +856,6 @@ impl MMixAssembler {
             Self::seed_predefined(&mut symbols, handler_name, SymbolType::Constant(handler));
         }
 
-        // Every predefined name lives at the root namespace; a program's own
-        // definition of one of these is a plain shadow, tracked from here.
-        let predefined_names: HashSet<String> = symbols.keys().cloned().collect();
-
         // Blank whole-line comments, then expand debug directives.
         let blanked_source = Self::blank_whole_line_comments(source);
         let (preprocessed_source, debug_strings, overflow) =
@@ -869,13 +870,14 @@ impl MMixAssembler {
             current_filename: filename.to_string(),
             current_prefix: String::new(),
             labels: HashMap::new(),
+            predefined_symbols: symbols.clone(),
             symbols,
             label_origins: HashMap::new(),
             symbol_origins: HashMap::new(),
             instructions: Vec::new(),
             current_addr: 0,
             past_end: false,
-            next_greg: 254, // Start allocating from $254, count down
+            next_greg: Self::FIRST_GREG,
             greg_inits: Vec::new(),
             greg_inits_seen: 0,
             current_unit_index: 0,
@@ -888,7 +890,6 @@ impl MMixAssembler {
             local_declarations: Vec::new(),
             in_special_mode: false,
             bspec_open_site: None,
-            predefined_names,
             predefined_used_at: HashMap::new(),
             warnings: Vec::new(),
         }
