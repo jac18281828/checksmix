@@ -401,23 +401,74 @@ fn test_debug_strings_span_translation_units_in_program_order() {
     );
 }
 
+/// A diagnostic on a rewritten `debug` line points at the keyword, as it
+/// does when the line holds `SWYM` instead.
+#[test]
+fn test_debug_directive_diagnostic_column_is_the_keywords() {
+    let error_of = |line: &str| {
+        let source = format!("\tLOC\t#FFFFFFFFFFFFFFFC\n\tSWYM\n{line}\n");
+        assemble_err(&source)
+    };
+    for (indent, col) in [("        ", 9), ("\t\t", 3), ("\t", 2)] {
+        let expected = format!("<test>:3:{col}: address past");
+        let swym = error_of(&format!("{indent}SWYM"));
+        assert!(swym.starts_with(&expected), "SWYM baseline: {swym:?}");
+        let directive = error_of(&format!("{indent}debug \"z\""));
+        assert!(
+            directive.starts_with(&expected),
+            "{indent:?}: expected {expected}, got {directive:?}"
+        );
+    }
+    // A directive in column 1 needs a blank ahead of the TRAP.
+    let directive = error_of("debug \"z\"");
+    assert!(
+        directive.starts_with("<test>:3:2: address past"),
+        "{directive:?}"
+    );
+}
+
+/// The rewrite names the trap by its code, so `PREFIX` does not move it.
+#[test]
+fn test_debug_directive_assembles_after_prefix() {
+    let mut asm = MMixAssembler::new("\tPREFIX foo:\n\tdebug \"x\"\n", "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.instructions.len(), 1);
+    assert_eq!(
+        asm.encode_instruction_bytes(&asm.instructions[0].1),
+        [0x00, 0x00, 0x82, 0x00]
+    );
+    assert_eq!(asm.debug_strings(), &[b"x".to_vec()]);
+}
+
+/// The rewrite names the trap by its code, so a program's own `Debug`
+/// symbol does not redirect it.
+#[test]
+fn test_debug_directive_ignores_a_user_debug_symbol() {
+    let mut asm = MMixAssembler::new("Debug\tIS\t7\n\tdebug \"x\"\n\tdebug \"y\"\n", "<test>");
+    asm.parse().unwrap();
+    let bytes: Vec<Vec<u8>> = asm
+        .instructions
+        .iter()
+        .map(|(_, inst)| asm.encode_instruction_bytes(inst))
+        .collect();
+    assert_eq!(bytes, [[0x00, 0x00, 0x82, 0x00], [0x00, 0x00, 0x82, 0x01]]);
+}
+
 // ---- `debug` directive matcher: which lines it accepts, exactly --------
 
 #[test]
 fn test_debug_directive_lines_and_their_captures() {
     let cases = [
-        ("\tdebug \"hi\"\n", "\tTRAP\t0,Debug,0\n", "hi"),
-        ("debug debug \"hi\"\n", "debug\tTRAP\t0,Debug,0\n", "hi"),
-        ("debug \"hi\"  \n", "\tTRAP\t0,Debug,0\n", "hi"),
-        ("debug \"\"\n", "\tTRAP\t0,Debug,0\n", ""),
-        ("Main\u{a0}debug \"x\"\n", "Main\tTRAP\t0,Debug,0\n", "x"),
-        ("\u{a0}debug \"x\"\n", "\tTRAP\t0,Debug,0\n", "x"),
-        ("debug\u{a0}\"x\"\n", "\tTRAP\t0,Debug,0\n", "x"),
-        (
-            "Main debug  \t \"x y\"\t\n",
-            "Main\tTRAP\t0,Debug,0\n",
-            "x y",
-        ),
+        ("\tdebug \"hi\"\n", " TRAP\t0,#82,0\n", "hi"),
+        ("debug debug \"hi\"\n", "debug TRAP\t0,#82,0\n", "hi"),
+        ("debug \"hi\"  \n", " TRAP\t0,#82,0\n", "hi"),
+        ("debug \"\"\n", " TRAP\t0,#82,0\n", ""),
+        ("Main\u{a0}debug \"x\"\n", "Main TRAP\t0,#82,0\n", "x"),
+        ("\u{a0}debug \"x\"\n", " TRAP\t0,#82,0\n", "x"),
+        ("debug\u{a0}\"x\"\n", " TRAP\t0,#82,0\n", "x"),
+        ("Main debug  \t \"x y\"\t\n", "Main TRAP\t0,#82,0\n", "x y"),
+        ("        debug \"x\"\n", "        TRAP\t0,#82,0\n", "x"),
+        ("\t\tdebug \"x\"\n", "  TRAP\t0,#82,0\n", "x"),
     ];
     for (source, expected_result, expected_text) in cases {
         let (result, strings, overflow) = MMixAssembler::preprocess_debug(source, "t.mms", 0);

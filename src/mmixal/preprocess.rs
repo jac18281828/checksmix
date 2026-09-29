@@ -8,6 +8,7 @@
 
 use super::DebugDirectiveOverflow;
 use super::MMixAssembler;
+use crate::mmix::TrapCode;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -39,11 +40,16 @@ impl MMixAssembler {
     }
 
     /// Rewrite each `debug "text"` directive in `source` into
-    /// `TRAP 0,Debug,K` on the directive's own line and label, and collect
-    /// its decoded text. `start_index` is the `K` the first directive here
-    /// receives — the count of directives every earlier translation unit
-    /// contributed. Nothing is written to guest memory and no label is
-    /// generated, so `K` costs one byte and the directive costs one tetra.
+    /// `TRAP 0,#82,K` on the directive's own line and label, and collect
+    /// its decoded text. The `TRAP` starts at the directive's column (column
+    /// 2 for a directive in column 1, which needs a blank ahead of it), so a
+    /// diagnostic on the rewritten line points where the user wrote the
+    /// directive. The operand is the numeric trap code, so neither `PREFIX`
+    /// nor a program's own `Debug` symbol can change it. `start_index` is the
+    /// `K` the first directive here receives — the count of directives every
+    /// earlier translation unit contributed. Nothing is written to guest
+    /// memory and no label is generated, so `K` costs one byte and the
+    /// directive costs one tetra.
     ///
     /// Returns the preprocessed source, the strings this source's
     /// directives contributed (in `K` order), and the file/line/column of
@@ -69,8 +75,7 @@ impl MMixAssembler {
                             overflow = Some((filename.to_string(), index + 1, col));
                         }
                     } else {
-                        result.push_str(label.map(str::trim).unwrap_or(""));
-                        result.push_str(&format!("\tTRAP\t0,Debug,{k}\n"));
+                        result.push_str(&debug_trap_line(label.unwrap_or(""), k));
                     }
                     // debug text keeps the source's UTF-8 bytes: it lives
                     // outside guest memory, going straight to the host's
@@ -259,9 +264,24 @@ impl MMixAssembler {
     }
 }
 
+/// The `TRAP` line replacing a directive: `prefix` (the label and the blanks
+/// ahead of the keyword) with each blank written as a space, so the
+/// grammar's whitespace covers it and `TRAP` keeps the keyword's column.
+fn debug_trap_line(prefix: &str, k: usize) -> String {
+    let mut line: String = prefix
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    if line.is_empty() {
+        line.push(' ');
+    }
+    let code = TrapCode::Debug as u8;
+    format!("{line}TRAP\t0,#{code:02X},{k}\n")
+}
+
 /// Matches one line against a `debug "text"` directive: an optional
-/// label (blanks included, for the caller to trim and to count toward
-/// its overflow column) and the quoted text. A blank is any
+/// label (blanks included, which the caller keeps as spaces and counts
+/// toward its overflow column) and the quoted text. A blank is any
 /// `char::is_whitespace` character.
 fn match_debug_line(line: &str) -> Option<(Option<&str>, &str)> {
     if let Some((label_end, text)) = match_labeled_debug(line) {

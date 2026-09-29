@@ -5,6 +5,7 @@
 * The release workflow stops a tag whose commit is not on `main`, or whose `CHANGELOG.md` does not start with its dated heading, before publishing; builds nothing in the job holding the publish tokens; and publishes the crate before the GitHub Release
 * `Host` gains `read`, a `fd`/`buf` counterpart to `write`; a fd 0 (`StdIn`) `Fread`/`Fgets`/`Fgetws` now routes through it instead of always failing. The default returns `Unsupported`, keeping every existing embedder's results; `StdHost` reads the process's own stdin. `Fgets`/`Fgetws` store their zero terminator at end of file on handle 0 too, as they already do for a file, and an `Fread` of size 0 on handle 0 now returns 0, not −1, matching a file
 * `mmixdb --stdin FILE` feeds a guest's `StdIn` from `FILE`, read whole at startup and replayed from the start before every `run` (a blank line repeating one included); without the flag a guest `StdIn` read still fails, since `mmixdb`'s own stdin carries debugger commands and must never be handed to the guest
+* A `debug "text"` line's diagnostic points at the directive, not into its rewritten text, and `debug` now works after `PREFIX` and beside a program's own `Debug` symbol: the rewrite names trap `#82` by its code instead of the symbol `Debug`
 
 0.4.1 (2026-09-28)
 
