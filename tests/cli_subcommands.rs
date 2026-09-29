@@ -305,6 +305,31 @@ fn run_halt_trap_exits_with_its_own_255_value() {
     );
 }
 
+#[test]
+fn run_places_a_byte_order_mark_prefixed_source_at_its_loc() {
+    // `bom_loc.mms` opens with a UTF-8 byte order mark on its `LOC #124`
+    // line, and exits with the low byte of the address `Main` assembled to.
+    let status = checksmix()
+        .args(["run"])
+        .arg(fixture("bom_loc.mms"))
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(0x24), "Main must assemble at #124");
+}
+
+#[test]
+fn run_reads_a_second_byte_order_mark_as_text() {
+    // `bom_bom_loc.mms` opens with two byte order marks; the second is a
+    // stray character on line 1, which blanks the line as it does for
+    // `MMixAssembler::new`, so `Main` assembles at 0.
+    let status = checksmix()
+        .args(["run"])
+        .arg(fixture("bom_bom_loc.mms"))
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(0), "Main must assemble at 0");
+}
+
 // ── run all_instructions_test.mms: no leftover debug noise on stderr ─────────
 
 #[test]

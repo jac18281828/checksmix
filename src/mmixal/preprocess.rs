@@ -7,7 +7,27 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
 
+/// The U+FEFF a UTF-8 file may open with.
+const BYTE_ORDER_MARK: char = '\u{FEFF}';
+
 impl MMixAssembler {
+    /// `source` without one leading byte order mark. A U+FEFF anywhere else
+    /// is source text and stays.
+    pub(super) fn strip_byte_order_mark(source: &str) -> &str {
+        source.strip_prefix(BYTE_ORDER_MARK).unwrap_or(source)
+    }
+
+    /// Whether `segment`, which starts at `start_line`, holds only whitespace.
+    /// A byte order mark opening line 1 is not text.
+    fn is_blank_segment(segment: &str, start_line: usize) -> bool {
+        let text = if start_line == 1 {
+            Self::strip_byte_order_mark(segment)
+        } else {
+            segment
+        };
+        text.trim().is_empty()
+    }
+
     /// Blank out every line whose first character (column 1, before any
     /// leading blank) is not a letter, digit, `:` or `_` -- the MMIXAL
     /// reference's whole-line comment rule. Line-count-preserving, like
@@ -96,7 +116,9 @@ impl MMixAssembler {
     /// resolve relative to the including file's directory. `read` supplies
     /// file contents -- injected so this logic is testable without real
     /// filesystem access and reusable by any frontend. A cycle (re-entry on
-    /// the current include chain) or an unreadable file is an `Err`.
+    /// the current include chain) or an unreadable file is an `Err`. A leading
+    /// byte order mark does not hide an `INCLUDE` on a file's first line; the
+    /// mark stays in the unit's text for `new`/`add_source` to drop.
     pub fn resolve_includes<R>(
         root_source: &str,
         root_filename: &str,
@@ -132,12 +154,17 @@ impl MMixAssembler {
         for raw_line in root_source.split_inclusive('\n') {
             current_line += 1;
             let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+            let content = if current_line == 1 {
+                Self::strip_byte_order_mark(content)
+            } else {
+                content
+            };
             let Some(operand) = Self::parse_include_operand(content) else {
                 segment.push_str(raw_line);
                 continue;
             };
 
-            if !segment.trim().is_empty() {
+            if !Self::is_blank_segment(&segment, segment_start_line) {
                 units.push((
                     root_filename.to_string(),
                     Self::pad_source(&segment, segment_start_line),
@@ -184,7 +211,7 @@ impl MMixAssembler {
             segment_start_line = current_line + 1;
         }
 
-        if !segment.trim().is_empty() {
+        if !Self::is_blank_segment(&segment, segment_start_line) {
             units.push((
                 root_filename.to_string(),
                 Self::pad_source(&segment, segment_start_line),

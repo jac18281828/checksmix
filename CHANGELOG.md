@@ -1,3 +1,7 @@
+0.4.3 (unreleased)
+
+* A UTF-8 byte order mark at the start of a source file no longer drops line 1: `LOC #100` on a BOM-prefixed first line used to be read as a comment, so the program silently assembled at 0. `MMixAssembler::new` and `add_source` drop one leading U+FEFF from the text they receive, and `resolve_includes` finds an `INCLUDE` behind one on a file's first line; `source_text` returns the text without it, and a second U+FEFF, like one anywhere else, is left alone
+
 0.4.2 (2026-09-29)
 
 * `Fwrite`, `Fputs`, `Fputws` and `Fopen`'s name carry no per-call cap and move the whole request, as the reference does: a `size` past 1,048,576 bytes and a string past 1,048,576 bytes or 524,288 wydes write whole, `Fputs`/`Fputws` no longer report a `too long, truncating` diagnostic, and a name past 1,048,576 bytes reaches the filesystem, which rejects it. Output crosses `Host::write` in chunks of at most 1,048,576 bytes, so host memory does not grow with the request; a write error after earlier chunks landed still fails the call. Supersedes 0.4.0's "**Breaking: `Fwrite` moves at most 1,048,576 bytes a call.**" bullet and its "`Fputs` and `Fputws` cap each call at 1,048,576 bytes and 524,288 wydes" bullet

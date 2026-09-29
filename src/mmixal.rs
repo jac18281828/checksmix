@@ -714,6 +714,7 @@ impl MMixAssembler {
     }
 
     pub fn new(source: &str, filename: &str) -> Self {
+        let source = Self::strip_byte_order_mark(source);
         let mut symbols = HashMap::new();
 
         // Standard MMIXAL predefined symbols
@@ -897,6 +898,7 @@ impl MMixAssembler {
     /// are added; symbols, labels, GREG state, and `current_addr` carry over,
     /// so the result is identical to assembling the concatenation of inputs.
     pub fn add_source(&mut self, source: &str, filename: &str) {
+        let source = Self::strip_byte_order_mark(source);
         let start_index = self.debug_strings.len();
         let blanked_source = Self::blank_whole_line_comments(source);
         let (preprocessed, mut strings, overflow) =
