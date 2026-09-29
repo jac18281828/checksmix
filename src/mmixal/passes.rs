@@ -1,10 +1,4 @@
 //! The two-pass walk: `parse`, per-statement dispatch, and special-mode (`BSPEC`/`ESPEC`) handling.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::MMixAssembler;
 use super::MMixalParser;

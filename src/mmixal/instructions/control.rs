@@ -1,10 +1,4 @@
 //! The branch, jump, GETA/GETAB and PUSHJ/PUSHGO/POP/GO control-flow family.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;

@@ -1,10 +1,4 @@
 //! Data and pseudo directives: `BYTE`/`WYDE`/`TETRA`/`OCTA`, `LOC`, `IS`, and `PREFIX`.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::MMixAssembler;
 use super::Rule;

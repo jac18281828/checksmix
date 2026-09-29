@@ -1,10 +1,4 @@
 //! The arithmetic, negate, bitwise, bit-fiddling, shift, conditional-set and zero-or-set families.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;

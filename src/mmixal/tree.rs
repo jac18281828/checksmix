@@ -1,10 +1,4 @@
 //! A pest node's children, taken by position with an internal error in place of a panic.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::Rule;
 use pest::iterators::Pairs;

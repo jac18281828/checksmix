@@ -1,10 +1,4 @@
 //! The SET/SETI/SETL/SETH/SETMH/SETML/INC*/OR*/ANDN* wyde-immediate family.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;

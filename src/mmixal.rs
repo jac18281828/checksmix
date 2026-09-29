@@ -1,3 +1,10 @@
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::mmix::{STACK_SEGMENT_START, TrapCode};
@@ -995,4 +1002,10 @@ mod tree;
 pub use instructions::MMixInstruction;
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable
+)]
 mod tests;

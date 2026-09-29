@@ -1,10 +1,4 @@
 //! Expression evaluation: operator precedence, data-list folding, and literal decoding.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::MMixAssembler;
 use super::Rule;

@@ -307,12 +307,6 @@ pub enum MMixInstruction {
     HALT, // HALT - stop execution
 }
 
-#[deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 impl MMixAssembler {
     pub(super) fn parse_instruction(
         &mut self,

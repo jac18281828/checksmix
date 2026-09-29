@@ -1,10 +1,4 @@
 //! Source preprocessing: whole-line comment blanking, `debug` directive expansion, and `INCLUDE` resolution.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::DebugDirectiveOverflow;
 use super::MMixAssembler;

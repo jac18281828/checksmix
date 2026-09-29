@@ -1,10 +1,4 @@
 //! The TRAP/GET/PUT/SAVE/UNSAVE/RESUME/TRIP/SWYM/SYNC system family.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable
-)]
 
 use super::super::MMixAssembler;
 use super::super::Rule;
