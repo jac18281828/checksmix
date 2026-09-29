@@ -1,0 +1,34 @@
+[package]
+name = "checksmix-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace root: the root crate's `cargo test`/`clippy` never
+# walk into `fuzz/`, and `fuzz/`'s own nightly-only build never affects
+# the root crate's dependency resolution.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.checksmix]
+path = ".."
+default-features = false
+
+[[bin]]
+name = "assemble"
+path = "fuzz_targets/assemble.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mmo_decode"
+path = "fuzz_targets/mmo_decode.rs"
+test = false
+doc = false
+bench = false

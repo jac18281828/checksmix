@@ -45,6 +45,50 @@ external files or assets. Integration tests under `tests/` may read files.
 Every mnemonic the assembler accepts belongs in
 `examples/all_instructions_test.mms`, in both operand forms where both exist.
 
+## Fuzzing
+
+`fuzz/` holds two `cargo-fuzz` targets: `assemble` (the parser and code
+generator) and `mmo_decode` (the `.mmo` reader). One-time setup, if you don't
+already have them:
+
+```sh
+rustup toolchain install nightly
+cargo install cargo-fuzz
+```
+
+Then, from the repo root, seed each target's corpus from the repo's own
+example and soundness programs -- split into pieces of at most 4 KB, since a
+seed larger than `-max_len` is wasted -- and run it with the flags CI uses:
+value profiling, so a run rewards inputs whose comparisons come closer to
+flipping, and `assemble`'s dictionary of every mnemonic and directive plus
+each field boundary. CI also passes `-rss_limit_mb=2048`, `-timeout=10` and
+`-max_total_time=60`, which bound one run's memory, one input's time and the
+whole run. `mmo_decode`'s seeds are the same programs assembled to `.mmo`, so
+build `mmixasm` first. The corpora land in `fuzz/corpus/`, which
+`fuzz/.gitignore` covers:
+
+```sh
+cargo build --release --bin mmixasm
+./fuzz/seed_corpus.sh assemble fuzz/corpus/assemble
+./fuzz/seed_corpus.sh mmo_decode ./target/release/mmixasm fuzz/corpus/mmo_decode
+cargo +nightly fuzz run assemble -- -rss_limit_mb=2048 -timeout=10 \
+  -max_total_time=60 -use_value_profile=1 -max_len=4096 \
+  -dict=fuzz/mmixal.dict fuzz/corpus/assemble
+cargo +nightly fuzz run mmo_decode -- -rss_limit_mb=2048 -timeout=10 \
+  -max_total_time=60 -use_value_profile=1 -max_len=4096 \
+  fuzz/corpus/mmo_decode
+```
+
+`assemble` skips an input with a line of more than 256 `(` and prefix
+operator (`+ - ~ $ &`) characters. The assembler sets no nesting limit, so an
+input nested past what the machine's stack holds only probes that stack, and a
+crash there is no finding; 256 levels is the depth checksmix tests in every
+environment it supports.
+
+`.github/workflows/fuzz.yml` runs both targets, with the same flags, for a
+minute on every push to `main` or an `agent/**` branch, and on every pull
+request to `main`.
+
 ## Instruction semantics
 
 The [Instruction Reference](https://mmix.cs.hm.edu/doc/instructions/) is the

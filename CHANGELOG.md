@@ -1,5 +1,6 @@
 0.4.2 (unreleased)
 
+* The assembler and the `.mmo` decoder are fuzzed in CI: `fuzz/` adds `cargo-fuzz` targets `assemble` and `mmo_decode`, run on pushes to `main` and `agent/**` and on pull requests to `main`
 * `Host` gains `read`, a `fd`/`buf` counterpart to `write`; a fd 0 (`StdIn`) `Fread`/`Fgets`/`Fgetws` now routes through it instead of always failing. The default returns `Unsupported`, keeping every existing embedder's results; `StdHost` reads the process's own stdin. `Fgets`/`Fgetws` store their zero terminator at end of file on handle 0 too, as they already do for a file, and an `Fread` of size 0 on handle 0 now returns 0, not −1, matching a file
 * `mmixdb --stdin FILE` feeds a guest's `StdIn` from `FILE`, read whole at startup and replayed from the start before every `run` (a blank line repeating one included); without the flag a guest `StdIn` read still fails, since `mmixdb`'s own stdin carries debugger commands and must never be handed to the guest
 

@@ -1,0 +1,57 @@
+name: Fuzz
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  fuzz:
+    name: Fuzz Targets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-fuzz-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-v2-
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Build mmixasm
+        run: cargo build --release --bin mmixasm
+      - name: Seed corpora
+        run: |
+          ./fuzz/seed_corpus.sh assemble corpus/assemble
+          ./fuzz/seed_corpus.sh mmo_decode ./target/release/mmixasm corpus/mmo_decode
+      - name: Fuzz assemble
+        run: |
+          cargo +nightly fuzz run assemble -- \
+            -rss_limit_mb=2048 -timeout=10 -max_total_time=60 \
+            -use_value_profile=1 -max_len=4096 -dict=fuzz/mmixal.dict \
+            corpus/assemble
+      - name: Fuzz mmo_decode
+        run: |
+          cargo +nightly fuzz run mmo_decode -- \
+            -rss_limit_mb=2048 -timeout=10 -max_total_time=60 \
+            -use_value_profile=1 -max_len=4096 \
+            corpus/mmo_decode
+      - name: Upload crashing artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
