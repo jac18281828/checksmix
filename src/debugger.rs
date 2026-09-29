@@ -2341,6 +2341,22 @@ Main\tTRAP\t0,Halt,0
         assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 255);
     }
 
+    /// `set rG` below rL is rejected and rG unchanged, though the value is
+    /// in 32-255: the register file cannot hold a local above the global
+    /// threshold.
+    #[test]
+    fn set_rg_below_rl_is_rejected() {
+        let mut dbg = Debugger::load(assemble(SAVE_PROGRAM, "save.mms"));
+
+        let msg = dbg.do_set(SpecialReg::RL.name().to_string(), "40".to_string());
+        assert_eq!(msg, "rL = 40");
+
+        let msg = dbg.do_set(SpecialReg::RG.name().to_string(), "35".to_string());
+        assert_eq!(msg, "Invalid rG 35: must be 32-255 and at least rL=40");
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RG), 255);
+        assert_eq!(dbg.mmix.get_special(SpecialReg::RL), 40);
+    }
+
     /// `set rG` and `set rL` accept a value that keeps rL <= rG, and the
     /// rL rejection above `rG`'s new value names that value.
     #[test]

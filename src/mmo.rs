@@ -503,6 +503,17 @@ impl MmoDecoder {
         Ok((addr, 12))
     }
 
+    /// The tetra-padded length of a `lop_spec` payload declaring `byte_len`
+    /// bytes, or `None` when the `bytes_left` in the file cannot hold it.
+    /// Compared before any arithmetic on `byte_len` itself: on wasm32
+    /// (32-bit usize) a declared length near u32::MAX overflows the padding
+    /// multiply, and one past isize::MAX overflows Vec's own capacity limit.
+    /// A file too short for the declared length is truncated regardless, so
+    /// the caller bails out with that diagnosis, reserving nothing.
+    fn lop_spec_padded_len(byte_len: usize, bytes_left: usize) -> Option<usize> {
+        (byte_len <= bytes_left).then(|| byte_len.div_ceil(4) * 4)
+    }
+
     /// `lop_spec`: the `debug` string table's own record type, length
     /// prefixed and zero-padded to a tetra boundary. Appends the decoded
     /// string and returns the bytes consumed from `record_offset`.
@@ -527,16 +538,10 @@ impl MmoDecoder {
         };
         i += consumed;
         let byte_len = u32::from_be_bytes(len_tetra) as usize;
-        // Checked against the bytes left before any arithmetic on byte_len
-        // itself: on wasm32 (32-bit usize) a declared length near u32::MAX
-        // overflows the padding multiply below, and one past isize::MAX
-        // overflows Vec's own capacity limit. A file too short for the
-        // declared length is truncated regardless, so this bails out with
-        // that same diagnosis, reserving nothing.
-        if byte_len > data.len().saturating_sub(i) {
+        let Some(padded_len) = Self::lop_spec_padded_len(byte_len, data.len().saturating_sub(i))
+        else {
             return Err(Self::truncated(record_offset));
-        }
-        let padded_len = byte_len.div_ceil(4) * 4;
+        };
 
         let mut payload = Vec::with_capacity(padded_len);
         let mut remaining = padded_len;
@@ -1588,6 +1593,26 @@ Main\tTRAP\t0,Halt,0
         let mut mmix = MMix::new();
         assert_eq!(decoder.load(&mut mmix).unwrap_err(), expected);
         assert_machine_untouched(&mmix);
+    }
+
+    /// The declared length is compared with the bytes left before it is
+    /// padded, so a length no file could hold reserves nothing on any
+    /// target.
+    #[test]
+    fn lop_spec_padded_len_is_none_when_the_file_cannot_hold_the_payload() {
+        assert_eq!(MmoDecoder::lop_spec_padded_len(1000, 20), None);
+        assert_eq!(MmoDecoder::lop_spec_padded_len(21, 20), None);
+        assert_eq!(MmoDecoder::lop_spec_padded_len(usize::MAX, 20), None);
+        assert_eq!(MmoDecoder::lop_spec_padded_len(usize::MAX, 0), None);
+    }
+
+    #[test]
+    fn lop_spec_padded_len_rounds_a_fitting_payload_up_to_a_tetra() {
+        assert_eq!(MmoDecoder::lop_spec_padded_len(0, 0), Some(0));
+        assert_eq!(MmoDecoder::lop_spec_padded_len(1, 4), Some(4));
+        assert_eq!(MmoDecoder::lop_spec_padded_len(4, 4), Some(4));
+        assert_eq!(MmoDecoder::lop_spec_padded_len(5, 8), Some(8));
+        assert_eq!(MmoDecoder::lop_spec_padded_len(20, 20), Some(20));
     }
 
     /// A `lop_pre` whose Z field (tetra count) isn't 1 is a shape the
