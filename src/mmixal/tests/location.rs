@@ -65,6 +65,33 @@ fn test_alignment_past_the_end_is_an_error() {
 }
 
 #[test]
+fn test_octa_alignment_from_within_the_last_octa_assembles_at_its_start() {
+    let source = " LOC #FFFFFFFFFFFFFFF1\n OCTA 0\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    asm.parse().unwrap();
+    assert_eq!(
+        asm.instructions,
+        vec![(0xFFFFFFFFFFFFFFF8, MMixInstruction::OCTA(0))]
+    );
+}
+
+#[test]
+fn test_octa_alignment_past_the_last_octa_is_an_error() {
+    let source = " LOC #FFFFFFFFFFFFFFF9\n OCTA 0\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    let err = asm.parse().unwrap_err();
+    assert_eq!(err, "<test>:2:2: address past #FFFFFFFFFFFFFFFF");
+}
+
+#[test]
+fn test_location_expression_at_the_last_address_wraps_to_zero() {
+    let source = " LOC #FFFFFFFFFFFFFFFF\n LOC @+1\n BYTE 1\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.instructions, vec![(0, MMixInstruction::BYTE(1))]);
+}
+
+#[test]
 fn test_at_symbol_past_the_end_is_an_error() {
     let source = " LOC #FFFFFFFFFFFFFFFC\n SWYM\nEnd IS @\n";
     let mut asm = MMixAssembler::new(source, "<test>");
