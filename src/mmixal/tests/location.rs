@@ -187,6 +187,43 @@ fn test_a_label_and_its_data_item_past_the_end_reports_the_labels_column() {
     assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
 }
 
+// A redefinition in pass 1 ends the run before pass 2 can report the
+// past-end label, so each program below shows which label check pass 1
+// itself makes: the past-end site, not the later redefinition.
+
+#[test]
+fn test_pass_1_rejects_a_past_the_end_standalone_label_before_a_later_redefinition() {
+    let source = "\tLOC #FFFFFFFFFFFFFFFC\n\tTETRA 0\nA\nB IS 1\nB IS 2\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    let err = asm.parse().unwrap_err();
+    assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+}
+
+#[test]
+fn test_pass_1_rejects_a_past_the_end_loc_label_before_a_later_redefinition() {
+    let source = "\tLOC #FFFFFFFFFFFFFFFC\n\tTETRA 0\nA LOC #100\nB IS 1\nB IS 2\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    let err = asm.parse().unwrap_err();
+    assert_eq!(err, "<test>:3:1: address past #FFFFFFFFFFFFFFFF");
+}
+
+#[test]
+fn test_pass_1_rejects_a_past_the_end_bspec_label_before_a_later_redefinition() {
+    let source =
+        "\tLOC #FFFFFFFFFFFFFFFC\n\tTETRA 0\n\tBSPEC 0\nA BYTE 1\n\tESPEC\nB IS 1\nB IS 2\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    let err = asm.parse().unwrap_err();
+    assert_eq!(err, "<test>:4:1: address past #FFFFFFFFFFFFFFFF");
+}
+
+#[test]
+fn test_a_greg_label_past_the_end_names_a_register_not_an_address() {
+    let source = "\tLOC #FFFFFFFFFFFFFFFC\n\tTETRA 0\nA GREG 5\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.symbols.get("A"), Some(&SymbolType::Register(254)));
+}
+
 /// Parses one bare statement for a direct `second_pass_statement` call,
 /// bypassing `parse_two_pass`'s two-pass walk entirely.
 fn lone_statement(source: &'static str) -> pest::iterators::Pair<'static, Rule> {

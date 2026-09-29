@@ -115,6 +115,37 @@ fn test_local_label_on_a_greg_line_keeps_both_passes_in_step() {
     assert_eq!(local, named);
 }
 
+/// A line's own `2H` records after its operand, so a same-digit `2B` there
+/// reads the previous `2H`. On a `LOC` line the operand moves the counter
+/// in both passes: pass 1 fixes `Done`'s value for the `JMP` (offset 9, not
+/// 10) and pass 2 places the `TRAP` at `#124`, not `#128`.
+#[test]
+fn test_loc_line_records_its_local_label_after_its_operand() {
+    let source = "\tLOC\t#100\nMain\tJMP\tDone\n2H\tSWYM\n2H\tLOC\t2B+#20\nDone\tTRAP\t0,Halt,0\n";
+    let mut asm = MMixAssembler::new(source, "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.instructions[0], (0x100, MMixInstruction::JMP(9)));
+    assert_eq!(asm.instructions[2].0, 0x124);
+    assert_eq!(asm.labels["Done"], 0x124);
+}
+
+/// Pass 1 evaluates a `GREG` operand before recording the line's `2H`, as a
+/// pure value: `2B` is the earlier `2H`'s address, not this line's register.
+#[test]
+fn test_greg_line_records_its_local_label_after_its_operand() {
+    let mut asm = MMixAssembler::new("\tLOC\t#100\n2H\tSWYM\n2H\tGREG\t2B\n", "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.greg_inits, [(254, 0x100)]);
+}
+
+/// Pass 2 evaluates a data operand before advancing the line's own `2H`.
+#[test]
+fn test_data_line_records_its_local_label_after_its_operand() {
+    let mut asm = MMixAssembler::new("2H\tOCTA\t0\n2H\tOCTA\t2B\n", "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.instructions[1], (0x8, MMixInstruction::OCTA(0)));
+}
+
 #[test]
 fn test_local_back_reference_before_any_definition_is_zero() {
     // `2B` ahead of any `2H` is `0`, never an error.
@@ -455,6 +486,32 @@ fn test_use_then_redefine_via_label_is_an_error() {
         "err: {err}"
     );
     assert!(err.contains("its value was used at"), "err: {err}");
+}
+
+/// A `LOC` line binds its label before scanning its operand for uses of a
+/// predefined name, so the label's own use of that name is no redefinition
+/// after use; every other statement scans first.
+#[test]
+fn test_loc_label_binds_ahead_of_its_operand_scan() {
+    let mut asm = MMixAssembler::new("Fputs\tLOC\tFputs+#100\n\tTRAP\t0,Halt,0\n", "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.labels["Fputs"], 0);
+    assert_eq!(asm.instructions[0].0, 0x100);
+}
+
+#[test]
+fn test_label_on_a_statement_that_uses_the_predefined_name_is_an_error() {
+    for source in [
+        "Fputs\tJMP\tFputs\n",
+        "Fputs\tOCTA\tFputs\n",
+        "Fputs\tGREG\tFputs\n",
+    ] {
+        let err = assemble_err(source);
+        assert!(
+            err.contains("predefined symbol 'Fputs' redefined after its value was used"),
+            "{source:?}: {err}"
+        );
+    }
 }
 
 #[test]
