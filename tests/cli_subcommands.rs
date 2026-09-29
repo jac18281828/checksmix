@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,23 @@ fn hermetic_output(cmd: &mut Command) -> Output {
 /// hanging the test binary.
 const STDIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Polls `child` to exit. Kills it and fails the test if it outlives
+/// `limit`, rather than hanging the test binary on it.
+fn wait_within(child: &mut Child, limit: Duration) -> ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child exceeded {limit:?} wall clock");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Spawns `cmd` with `RUST_LOG` unset, feeding `stdin_input` if given and
 /// closing the handle afterward (or leaving stdin closed, for a child that
 /// reads none), then drains stdout/stderr on their own threads so a full
@@ -74,18 +91,7 @@ fn spawn_and_wait_within(cmd: &mut Command, limit: Duration, stdin_input: Option
     }
     let stdout_reader = drain(child.stdout.take().unwrap());
     let stderr_reader = drain(child.stderr.take().unwrap());
-    let deadline = Instant::now() + limit;
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("child exceeded {limit:?} wall clock");
-        }
-        thread::sleep(Duration::from_millis(20));
-    };
+    let status = wait_within(&mut child, limit);
     Output {
         status,
         stdout: stdout_reader.join().unwrap(),
@@ -994,5 +1000,105 @@ fn mmixdb_stdin_option_missing_file_exits_one() {
     assert!(
         stderr.contains(&expected),
         "stderr should name the missing file; stderr: {stderr}"
+    );
+}
+
+// ── a closed stdout: exit 141 with no panic ──────────────────────────────────
+
+#[cfg(unix)]
+mod broken_pipe {
+    use super::*;
+    use std::io;
+
+    const BROKEN_PIPE_STATUS: i32 = 141;
+
+    fn assert_quiet_broken_pipe_exit(status: ExitStatus, stderr: &[u8]) {
+        let stderr = String::from_utf8_lossy(stderr);
+        assert_eq!(
+            status.code(),
+            Some(BROKEN_PIPE_STATUS),
+            "expected exit 141 with no signal death; stderr: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"), "stderr: {stderr}");
+        assert!(!stderr.contains("failed printing"), "stderr: {stderr}");
+    }
+
+    #[test]
+    fn run_exits_141_when_the_reader_leaves_mid_output() {
+        let mut child = checksmix()
+            .args(["run"])
+            .arg(fixture("flood_stdout.mms"))
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr_reader = drain(child.stderr.take().unwrap());
+
+        // Read up to the guest's own first line, then leave. The 2 MiB
+        // `Fwrite` behind it cannot fit the pipe, so it is still writing
+        // when the read end closes, and the next write the binary makes
+        // itself is `finish_run`'s.
+        let mut stdout = child.stdout.take().unwrap();
+        let mut seen = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !seen.windows(6).any(|w| w == b"first\n") {
+            let n = stdout.read(&mut chunk).unwrap();
+            assert_ne!(n, 0, "stdout ended before the guest's first line");
+            seen.extend_from_slice(&chunk[..n]);
+        }
+        drop(stdout);
+
+        let status = wait_within(&mut child, STDIN_TIMEOUT);
+        assert_quiet_broken_pipe_exit(status, &stderr_reader.join().unwrap());
+    }
+
+    #[test]
+    fn run_exits_141_when_the_reader_is_gone_before_the_banner() {
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        let mut child = checksmix()
+            .args(["run"])
+            .arg(fixture("hello.mms"))
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr_reader = drain(child.stderr.take().unwrap());
+
+        let status = wait_within(&mut child, STDIN_TIMEOUT);
+        assert_quiet_broken_pipe_exit(status, &stderr_reader.join().unwrap());
+    }
+}
+
+// ── a failing stdout other than a closed pipe: the error, exit 1 ─────────────
+
+#[cfg(target_os = "linux")]
+#[test]
+fn run_exits_1_with_the_error_when_stdout_is_full() {
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = checksmix()
+        .args(["run"])
+        .arg(fixture("hello.mms"))
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .stdout(full)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr_reader = drain(child.stderr.take().unwrap());
+
+    let status = wait_within(&mut child, STDIN_TIMEOUT);
+    let stderr = String::from_utf8_lossy(&stderr_reader.join().unwrap()).into_owned();
+    assert_eq!(status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("error writing to stdout"),
+        "stderr: {stderr}"
     );
 }

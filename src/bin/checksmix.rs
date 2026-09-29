@@ -3,10 +3,34 @@ use checksmix::{
 };
 use clap::{Parser, Subcommand};
 use std::fs;
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
+
+/// The status of a process whose stdout reader has gone: 128 plus SIGPIPE,
+/// what a shell reports for a C tool that SIGPIPE killed.
+const BROKEN_PIPE_STATUS: i32 = 141;
+
+/// Ends the process after a failed write to stdout: quietly with
+/// `BROKEN_PIPE_STATUS` once the reader has gone, else with the error on
+/// stderr and status 1.
+fn stdout_failed(err: &io::Error) -> ! {
+    if err.kind() == io::ErrorKind::BrokenPipe {
+        process::exit(BROKEN_PIPE_STATUS);
+    }
+    eprintln!("error writing to stdout: {err}");
+    process::exit(1);
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        if let Err(err) = writeln!(io::stdout(), $($arg)*) {
+            stdout_failed(&err);
+        }
+    };
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -195,7 +219,7 @@ fn cmd_build(files: &[PathBuf], output: Option<&Path>) {
         eprintln!("error writing '{}': {}", out_path.display(), err);
         process::exit(1);
     });
-    println!("{}", out_path.display());
+    outln!("{}", out_path.display());
 }
 
 /// Run to completion, or to an instruction budget, and exit. A halted
@@ -208,17 +232,17 @@ fn finish_run(mmix: &mut MMix, value_format: ValueFormat, max_steps: Option<NonZ
         // its own tracing span distinct from a budgeted run's.
         None => (mmix.run(), Stop::Halted),
     };
-    println!();
-    println!("Executed {} instructions", count);
-    println!();
+    outln!();
+    outln!("Executed {} instructions", count);
+    outln!();
 
-    println!("=== Final Machine State ===");
-    println!("{}", mmix.display_with(value_format));
-    println!();
+    outln!("=== Final Machine State ===");
+    outln!("{}", mmix.display_with(value_format));
+    outln!();
 
     match stop {
         Stop::Halted => {
-            println!("Execution completed.");
+            outln!("Execution completed.");
             process::exit(mmix.get_exit_code() as i32);
         }
         Stop::BudgetExhausted => {
@@ -240,16 +264,16 @@ fn finish_run(mmix: &mut MMix, value_format: ValueFormat, max_steps: Option<NonZ
 }
 
 fn run_mms(filenames: &[String], value_format: ValueFormat, max_steps: Option<NonZeroUsize>) {
-    println!("=== MMIX Assembler ===");
+    outln!("=== MMIX Assembler ===");
     if filenames.len() == 1 {
-        println!("=== Parsing assembly from: {} ===", filenames[0]);
+        outln!("=== Parsing assembly from: {} ===", filenames[0]);
     } else {
-        println!("=== Parsing {} assembly inputs ===", filenames.len());
+        outln!("=== Parsing {} assembly inputs ===", filenames.len());
         for f in filenames {
-            println!("  {}", f);
+            outln!("  {}", f);
         }
     }
-    println!();
+    outln!();
 
     let paths: Vec<PathBuf> = filenames.iter().map(PathBuf::from).collect();
     let assembler = assemble_sources(&paths).unwrap_or_else(|e| {
@@ -257,19 +281,19 @@ fn run_mms(filenames: &[String], value_format: ValueFormat, max_steps: Option<No
         process::exit(1);
     });
 
-    println!("Assembly parsed successfully");
-    println!();
+    outln!("Assembly parsed successfully");
+    outln!();
 
     let mut mmix = MMix::new();
 
     write_image(&mut mmix, &assembler);
     start_program(&mut mmix, entry_point(&assembler));
 
-    println!("=== Initial Machine State ===");
-    println!("{}", mmix.display_with(value_format));
-    println!();
+    outln!("=== Initial Machine State ===");
+    outln!("{}", mmix.display_with(value_format));
+    outln!();
 
-    println!("=== Executing Program ===");
+    outln!("=== Executing Program ===");
     finish_run(&mut mmix, value_format, max_steps);
 }
 
@@ -279,9 +303,9 @@ fn run_mmo(filename: &str, value_format: ValueFormat, max_steps: Option<NonZeroU
         process::exit(1);
     });
 
-    println!("=== MMIX Computer ===");
-    println!("=== Loading program from: {} ===", filename);
-    println!();
+    outln!("=== MMIX Computer ===");
+    outln!("=== Loading program from: {} ===", filename);
+    outln!();
 
     let mut mmix = MMix::new();
 
@@ -293,14 +317,14 @@ fn run_mmo(filename: &str, value_format: ValueFormat, max_steps: Option<NonZeroU
 
     start_program(&mut mmix, entry);
 
-    println!("Loaded object file (entry point: 0x{:X})", entry);
-    println!();
+    outln!("Loaded object file (entry point: 0x{:X})", entry);
+    outln!();
 
-    println!("=== Initial Machine State ===");
-    println!("{}", mmix.display_with(value_format));
-    println!();
+    outln!("=== Initial Machine State ===");
+    outln!("{}", mmix.display_with(value_format));
+    outln!();
 
-    println!("=== Executing Program ===");
+    outln!("=== Executing Program ===");
     finish_run(&mut mmix, value_format, max_steps);
 }
 

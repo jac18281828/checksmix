@@ -1,4 +1,4 @@
-.TH CHECKSMIX 1 "2026-09-25" "checksmix"
+.TH CHECKSMIX 1 "2026-09-29" "checksmix"
 .SH NAME
 checksmix \- run MMIX assembly or object files
 .SH SYNOPSIS
@@ -97,6 +97,12 @@ way. With
 exits 124 when the budget runs out; since a program halting with
 .B $255
 mod 256 = 124 exits 124 too, the stderr line tells the two apart.
+.PP
+When the reader of standard output has gone, as in
+.BR "checksmix run prog.mms | head" ,
+the command exits 141, silently and in place of its usual status, as
+soon as one of its own writes to standard output fails; 141 is what a
+shell reports for a process that SIGPIPE killed.
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG

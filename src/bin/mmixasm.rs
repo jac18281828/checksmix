@@ -2,9 +2,33 @@
 use checksmix::MMixAssembler;
 use clap::Parser;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use tracing_subscriber::{EnvFilter, fmt};
+
+/// The status of a process whose stdout reader has gone: 128 plus SIGPIPE,
+/// what a shell reports for a C tool that SIGPIPE killed.
+const BROKEN_PIPE_STATUS: i32 = 141;
+
+/// Ends the process after a failed write to stdout: quietly with
+/// `BROKEN_PIPE_STATUS` once the reader has gone, else with the error on
+/// stderr and status 1.
+fn stdout_failed(err: &io::Error) -> ! {
+    if err.kind() == io::ErrorKind::BrokenPipe {
+        process::exit(BROKEN_PIPE_STATUS);
+    }
+    eprintln!("error writing to stdout: {err}");
+    process::exit(1);
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        if let Err(err) = writeln!(io::stdout(), $($arg)*) {
+            stdout_failed(&err);
+        }
+    };
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -64,11 +88,11 @@ fn main() {
     }
 
     if sources.len() == 1 {
-        println!("Assembling: {}", sources[0].0);
+        outln!("Assembling: {}", sources[0].0);
     } else {
-        println!("Assembling {} inputs:", sources.len());
+        outln!("Assembling {} inputs:", sources.len());
         for (n, _) in &sources {
-            println!("  {}", n);
+            outln!("  {}", n);
         }
     }
 
@@ -95,7 +119,7 @@ fn main() {
     // Generate object code
     let object_code = assembler.generate_object_code();
 
-    println!("Generated {} bytes of object code", object_code.len());
+    outln!("Generated {} bytes of object code", object_code.len());
 
     // Write the output file
     fs::write(&output_file, &object_code).unwrap_or_else(|err| {
@@ -103,5 +127,5 @@ fn main() {
         process::exit(1);
     });
 
-    println!("Output written to: {}", output_file.display());
+    outln!("Output written to: {}", output_file.display());
 }

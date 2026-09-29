@@ -4,10 +4,41 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::cell::RefCell;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
+
+/// The status of a process whose stdout reader has gone: 128 plus SIGPIPE,
+/// what a shell reports for a C tool that SIGPIPE killed.
+const BROKEN_PIPE_STATUS: i32 = 141;
+
+/// Ends the process after a failed write to stdout: quietly with
+/// `BROKEN_PIPE_STATUS` once the reader has gone, else with the error on
+/// stderr and status 1.
+fn stdout_failed(err: &io::Error) -> ! {
+    if err.kind() == io::ErrorKind::BrokenPipe {
+        process::exit(BROKEN_PIPE_STATUS);
+    }
+    eprintln!("error writing to stdout: {err}");
+    process::exit(1);
+}
+
+macro_rules! out {
+    ($($arg:tt)*) => {
+        if let Err(err) = write!(io::stdout(), $($arg)*) {
+            stdout_failed(&err);
+        }
+    };
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        if let Err(err) = writeln!(io::stdout(), $($arg)*) {
+            stdout_failed(&err);
+        }
+    };
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -166,7 +197,7 @@ fn main() {
                 }
                 match parse_command(&line) {
                     Ok(Command::Quit) => {
-                        println!("Quit");
+                        outln!("Quit");
                         break;
                     }
                     Ok(cmd) => {
@@ -182,11 +213,12 @@ fn main() {
                             print_line(&out);
                         }
                     }
-                    Err(e) => println!("{e}"),
+                    Err(e) => outln!("{e}"),
                 }
             }
             Err(ReadlineError::Interrupted) => continue,
             Err(ReadlineError::Eof) => break,
+            Err(e) if prompt_reader_gone(&e) => process::exit(BROKEN_PIPE_STATUS),
             Err(e) => {
                 eprintln!("mmixdb: {e}");
                 break;
@@ -195,11 +227,25 @@ fn main() {
     }
 }
 
+/// Whether `err` is rustyline's prompt write finding stdout's reader gone.
+/// Both spellings are matched: `Io`, from an unsupported terminal's write
+/// through `io::stdout()` and from platforms without `Errno`, and on Unix
+/// `Errno`, from a supported terminal's raw write.
+fn prompt_reader_gone(err: &ReadlineError) -> bool {
+    let kind = match err {
+        ReadlineError::Io(e) => e.kind(),
+        #[cfg(unix)]
+        ReadlineError::Errno(e) => io::Error::from(*e).kind(),
+        _ => return false,
+    };
+    kind == io::ErrorKind::BrokenPipe
+}
+
 fn print_line(line: &str) {
     if line.ends_with('\n') {
-        print!("{line}");
+        out!("{line}");
     } else {
-        println!("{line}");
+        outln!("{line}");
     }
 }
 
