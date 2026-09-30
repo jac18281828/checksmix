@@ -1,4 +1,4 @@
-0.4.3 (unreleased)
+0.4.3 (2026-09-29)
 
 * A UTF-8 byte order mark at the start of a source file no longer drops line 1: `LOC #100` on a BOM-prefixed first line used to be read as a comment, so the program silently assembled at 0. `MMixAssembler::new` and `add_source` drop one leading U+FEFF from the text they receive, and `resolve_includes` finds an `INCLUDE` behind one on a file's first line; `source_text` returns the text without it, and a second U+FEFF, like one anywhere else, is left alone
 * A second call to `MMixAssembler::parse` gives the result of the first: it used to start pass 1 where the last parse ended and keep its `instructions`, `greg_inits`, labels and local labels, so it doubled the code, added a `GREG` entry and changed the object bytes, or failed with `symbol redefined` for a named `GREG`. Each `parse` now starts from the state `new` and `add_source` built, and a failing one reports the same error every time
