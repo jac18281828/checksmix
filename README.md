@@ -56,7 +56,7 @@ Set `RUST_LOG=checksmix=debug` to trace instruction decoding and TRAP handling.
 - [`subroutine.mms`](examples/subroutine.mms): call a subroutine and return its result.
 - [`fibonacci.mms`](examples/fibonacci.mms): compute fib(20) in a loop and print the result.
 - [`big_fib.mms`](examples/big_fib.mms): compute fib(100) in multi-precision arithmetic.
-- [`prime.mms`](examples/prime.mms): test a number for primality and print the verdict.
+- [`prime.mms`](examples/prime.mms): test a number for primality, print the verdict and exit 0 if prime, 1 if not.
 - [`linked_list.mms`](examples/linked_list.mms): walk a linked list and sum its nodes.
 - [`time.mms`](examples/time.mms): read the host clock and print the Unix time.
 - [`all_instructions_test.mms`](examples/all_instructions_test.mms): run every mnemonic as a regression suite.

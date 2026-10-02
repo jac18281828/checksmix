@@ -1,6 +1,6 @@
 % prime.mms -- test a number for primality and print the verdict.
 %
-% Halts with 1 if N is composite. Divide by odd numbers up to sqrt(N).
+% Halts with 0 if N is prime, 1 if not. Divide by odd numbers up to sqrt(N).
 
 N       IS      97
 
@@ -9,7 +9,7 @@ N       IS      97
 Digits  BYTE    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 End     BYTE    0
 Yes     BYTE    " is prime",#a,0
-No      BYTE    " is composite",#a,0
+No      BYTE    " is not prime",#a,0
 
         LOC     #100
 
@@ -18,26 +18,26 @@ Main    SET     $1,N
         SET     $2,N
         SET     $3,$0
         PUSHJ   $1,Print
-        XOR     $255,$0,1        % exit 0 if prime, 1 if composite
+        XOR     $255,$0,1        % exit 0 if prime, 1 if not
         TRAP    0,Halt,0
 
 % IsPrime: n in $0.  Returns 1 if n is prime, else 0.
 IsPrime CMPU    $1,$0,2
-        BN      $1,Composite     % 0 and 1 are not prime
+        BN      $1,NotPrime      % 0 and 1 are not prime
         BZ      $1,Prime         % 2 is
         AND     $1,$0,1
-        BZ      $1,Composite     % no other even number is
+        BZ      $1,NotPrime      % no other even number is
         SET     $1,3             % d
 Loop    DIVU    $2,$0,$1         % n / d
         GET     $3,rR            % n mod d
         CMPU    $4,$1,$2
         BP      $4,Prime         % d > n/d, so d*d > n
-        BZ      $3,Composite
+        BZ      $3,NotPrime
         ADDU    $1,$1,2
         JMP     Loop
 Prime   SET     $0,1
         POP     1,0
-Composite SET   $0,0
+NotPrime SET    $0,0
         POP     1,0
 
 % Print: n in $0, verdict in $1.  Digits are written right to left.
