@@ -128,7 +128,7 @@ impl TryFrom<u8> for MmoRecordType {
 }
 
 /// MMO file generator
-pub struct MmoGenerator {
+pub(crate) struct MmoGenerator {
     /// Instructions to encode, sorted by address
     instructions: Vec<(u64, MMixInstruction)>,
     /// Symbol table (labels)
@@ -146,7 +146,10 @@ pub struct MmoGenerator {
 
 impl MmoGenerator {
     /// Create a new MMO generator
-    pub fn new(instructions: Vec<(u64, MMixInstruction)>, labels: HashMap<String, u64>) -> Self {
+    pub(crate) fn new(
+        instructions: Vec<(u64, MMixInstruction)>,
+        labels: HashMap<String, u64>,
+    ) -> Self {
         Self {
             instructions,
             labels,
@@ -157,7 +160,7 @@ impl MmoGenerator {
 
     /// Attach the `debug` directive string table this object file's
     /// `lop_spec` records should carry, in `K` order.
-    pub fn with_debug_strings(mut self, strings: Vec<Vec<u8>>) -> Self {
+    pub(crate) fn with_debug_strings(mut self, strings: Vec<Vec<u8>>) -> Self {
         self.debug_strings = strings;
         self
     }
@@ -167,7 +170,7 @@ impl MmoGenerator {
     /// [`crate::write_image`] would derive from the same pairs; `$G..$254`
     /// carry their values and `$255` the entry point. With none supplied,
     /// *G* stays 255 and the postamble carries only the entry.
-    pub fn with_greg_inits(mut self, inits: Vec<(u8, u64)>) -> Self {
+    pub(crate) fn with_greg_inits(mut self, inits: Vec<(u8, u64)>) -> Self {
         self.greg_inits = inits;
         self
     }
@@ -179,7 +182,7 @@ impl MmoGenerator {
     /// byte's address rounded down to a multiple of 4, the reference's own
     /// rule; the bytes between that address and the run's real start are
     /// zero, so the run's own data still lands where it was assembled.
-    pub fn generate(&self) -> Vec<u8> {
+    pub(crate) fn generate(&self) -> Vec<u8> {
         debug!("Generating MMIX object code (.mmo format)");
         let mut mmo = Vec::new();
 
@@ -682,8 +685,8 @@ impl MmoDecoder {
     /// callback also receives the zero bytes that pad a run to it, at
     /// addresses another run may already hold: it must XOR every byte into
     /// memory, as [`MmoDecoder::load`] does, never store it. `Err` on any
-    /// shape [`MmoGenerator::generate`] would not emit; see the module docs
-    /// for every rejected shape.
+    /// shape [`crate::MMixAssembler::generate_object_code`] would not emit; see
+    /// the module docs for every rejected shape.
     pub fn decode<F>(&self, mut write_byte: F) -> Result<u64, String>
     where
         F: FnMut(u64, u8),

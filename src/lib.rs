@@ -11,7 +11,7 @@ pub use debugger::{
 };
 pub use mmix::{Host, MMix, SpecialReg, StdHost, Stop, TrapCode, ValueFormat};
 pub use mmixal::{MMixAssembler, SourceLoc};
-pub use mmo::{MmoDecoder, MmoGenerator};
+pub use mmo::MmoDecoder;
 
 #[cfg(doctest)]
 mod closed_leaks {
@@ -63,4 +63,14 @@ mod closed_leaks {
     /// let _ = checksmix::MMixAssembler::encode_instruction_bytes;
     /// ```
     pub struct AssemblerEncoder;
+
+    /// ```compile_fail
+    /// use checksmix::MmoGenerator;
+    /// ```
+    ///
+    /// ```
+    /// let asm = checksmix::MMixAssembler::new("", "a.mms");
+    /// let _ = checksmix::MmoDecoder::new(asm.generate_object_code());
+    /// ```
+    pub struct ObjectFileGenerator;
 }
