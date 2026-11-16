@@ -698,6 +698,7 @@ pub struct MMixAssembler {
 /// the file as given on the command line, and the 1-based line in that
 /// file's ORIGINAL (un-preprocessed) text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourceLoc {
     pub file: String,
     pub line: usize,

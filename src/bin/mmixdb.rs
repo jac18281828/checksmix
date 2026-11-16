@@ -171,7 +171,7 @@ fn main() {
     let guest_input = load_guest_input(cli.stdin);
 
     let host = DebuggerHost {
-        stdio: StdHost,
+        stdio: StdHost::new(),
         input: guest_input.clone(),
     };
     let mut debugger = Debugger::load_with_host(assembler, host);

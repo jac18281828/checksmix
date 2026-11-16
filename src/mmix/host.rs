@@ -178,7 +178,16 @@ impl<H: Host + ?Sized> Host for Box<H> {
 /// `file_handles` directly), but `StdHost` is a general `Host`
 /// implementation, so it treats any other fd as an error rather than
 /// assuming those invariants.
+#[derive(Default)]
+#[non_exhaustive]
 pub struct StdHost;
+
+impl StdHost {
+    /// A host wired to the process's own standard streams.
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl Host for StdHost {
     fn write(&mut self, fd: u8, bytes: &[u8]) -> std::io::Result<()> {

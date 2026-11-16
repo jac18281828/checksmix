@@ -73,4 +73,29 @@ mod closed_leaks {
     /// let _ = checksmix::MmoDecoder::new(asm.generate_object_code());
     /// ```
     pub struct ObjectFileGenerator;
+
+    /// ```compile_fail
+    /// let file = String::from("a.mms");
+    /// let line = 1;
+    /// let _ = checksmix::SourceLoc { file, line };
+    /// ```
+    ///
+    /// ```
+    /// let mut asm = checksmix::MMixAssembler::new("LOC #100\nHALT\n", "a.mms");
+    /// asm.parse().unwrap();
+    /// let loc = asm.source_loc(0x100).unwrap();
+    /// assert_eq!((loc.file.as_str(), loc.line), ("a.mms", 2));
+    /// assert_eq!(loc, loc);
+    /// ```
+    pub struct SourceLocLiteral;
+
+    /// ```compile_fail
+    /// let _ = checksmix::StdHost;
+    /// ```
+    ///
+    /// ```
+    /// let _ = checksmix::StdHost::new();
+    /// let _ = checksmix::StdHost::default();
+    /// ```
+    pub struct StdHostUnitName;
 }
