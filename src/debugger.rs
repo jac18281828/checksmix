@@ -7,6 +7,7 @@
 //! that reads lines (via `rustyline`), calls `parse_command` and
 //! `Debugger::execute`, and prints the result.
 
+use crate::encode::encode_instruction_bytes;
 use crate::mmix::{Host, MMix, SpecialReg, ValueFormat};
 use crate::mmixal::{MMixAssembler, SymbolType};
 use crate::mmo::derive_rg;
@@ -238,7 +239,7 @@ fn format_nan(bits: u64) -> String {
 /// to mark where the global register range actually starts.
 pub fn write_image(mmix: &mut MMix, assembler: &MMixAssembler) {
     for (addr, inst) in &assembler.instructions {
-        let bytes = assembler.encode_instruction_bytes(inst);
+        let bytes = encode_instruction_bytes(inst);
         for (offset, &byte) in bytes.iter().enumerate() {
             mmix.write_loaded_byte(addr + offset as u64, byte);
         }
@@ -560,7 +561,7 @@ impl Debugger {
     /// tetra (`addr & !3`), since MMIX executes instructions only at
     /// multiples of 4: a line, a label and a hex address naming one tetra
     /// key the same breakpoint. A leading ':' (the root-namespace spelling)
-    /// is stripped before the label lookup, since `MMixAssembler::labels`
+    /// is stripped before the label lookup, since [`MMixAssembler::labels`]
     /// keys a root name without it.
     fn resolve_break_location(&self, arg: &str) -> Option<u64> {
         let arg = arg.trim();
@@ -616,7 +617,7 @@ impl Debugger {
     /// (general register), a special-register name, a label, an IS/GREG
     /// symbol, a hex address (the memory octa at its aligned 8-byte base),
     /// else unresolved. A leading ':' is stripped before the label/symbol
-    /// lookups, since `MMixAssembler::labels`/`symbols` key a root name
+    /// lookups, since the assembler's label and symbol tables key a root name
     /// without it. Shared by `do_print` and `do_print_as`, so plain and
     /// formatted printing can never disagree about what an argument names.
     fn resolve_print_argument(&self, arg: &str) -> Option<u64> {

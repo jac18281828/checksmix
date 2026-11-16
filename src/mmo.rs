@@ -1074,7 +1074,7 @@ Main\tTRAP\t0,Halt,0
 
         let mut mms_mmix = MMix::new();
         for (addr, inst) in &asm.instructions {
-            let bytes = asm.encode_instruction_bytes(inst);
+            let bytes = encode_instruction_bytes(inst);
             for (offset, &byte) in bytes.iter().enumerate() {
                 mms_mmix.write_loaded_byte(addr + offset as u64, byte);
             }

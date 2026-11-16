@@ -286,8 +286,8 @@ Two known limitations:
 ### Global symbols and PREFIX
 
 The active prefix starts at `:`, the root namespace; `PREFIX :` returns to
-it. `x` and `:x` name the same symbol there, and `MMixAssembler::labels`/
-`symbols` key a root name without its colon. A label or operand that begins
+it. `x` and `:x` name the same symbol there, and `MMixAssembler::labels()`
+keys a root name without its colon. A label or operand that begins
 with `:` opts out of the active `PREFIX`; unqualified names are prefixed by
 the active `PREFIX` string instead.
 

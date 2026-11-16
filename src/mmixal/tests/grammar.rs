@@ -1,6 +1,7 @@
 //! Grammar-level tests: mnemonic word-boundary guards and whitespace adjacency.
 
 use super::*;
+use crate::encode::encode_instruction_bytes;
 
 // ---- Mnemonic word-boundary guard (adversarial) ------------------
 // Every `mnemonic_*` and `directive_*` rule closes with the shared
@@ -434,7 +435,7 @@ fn test_debug_directive_assembles_after_prefix() {
     asm.parse().unwrap();
     assert_eq!(asm.instructions.len(), 1);
     assert_eq!(
-        asm.encode_instruction_bytes(&asm.instructions[0].1),
+        encode_instruction_bytes(&asm.instructions[0].1),
         [0x00, 0x00, 0x82, 0x00]
     );
     assert_eq!(asm.debug_strings(), &[b"x".to_vec()]);
@@ -449,7 +450,7 @@ fn test_debug_directive_ignores_a_user_debug_symbol() {
     let bytes: Vec<Vec<u8>> = asm
         .instructions
         .iter()
-        .map(|(_, inst)| asm.encode_instruction_bytes(inst))
+        .map(|(_, inst)| encode_instruction_bytes(inst))
         .collect();
     assert_eq!(bytes, [[0x00, 0x00, 0x82, 0x00], [0x00, 0x00, 0x82, 0x01]]);
 }

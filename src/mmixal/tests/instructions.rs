@@ -1,6 +1,7 @@
 //! Tests for instruction dispatch: operand counts, arity, and every field edge.
 
 use super::*;
+use crate::encode::encode_instruction_bytes;
 
 // ---- Operand counts and kinds ----------------------------------------
 
@@ -633,13 +634,12 @@ fn test_instruction_field_edges_by_range_table() {
 
 #[test]
 fn test_resume_and_sync_encode_all_of_xyz() {
-    let asm = MMixAssembler::new("", "<test>");
     assert_eq!(
-        asm.encode_instruction_bytes(&MMixInstruction::SYNC(300)),
+        encode_instruction_bytes(&MMixInstruction::SYNC(300)),
         vec![0xFC, 0x00, 0x01, 0x2C]
     );
     assert_eq!(
-        asm.encode_instruction_bytes(&MMixInstruction::RESUME(0x10203)),
+        encode_instruction_bytes(&MMixInstruction::RESUME(0x10203)),
         vec![0xF9, 0x01, 0x02, 0x03]
     );
 }

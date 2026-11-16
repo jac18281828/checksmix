@@ -639,6 +639,30 @@ fn build_defs_only_file_fails_on_instruction_count_not_the_source_guard() {
     );
 }
 
+#[test]
+fn mmixasm_defs_only_file_fails_on_instruction_count_not_the_source_guard() {
+    let tmp_mmo = std::env::temp_dir().join("checksmix_test_defs_only_mmixasm.mmo");
+    let out = mmixasm()
+        .arg("-o")
+        .arg(&tmp_mmo)
+        .arg(fixture("defs_only.mms"))
+        .output()
+        .unwrap();
+    let written = tmp_mmo.exists();
+    let _ = std::fs::remove_file(&tmp_mmo);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("No instructions to assemble"),
+        "mmixasm's zero-instruction guard must still fire; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("contributed no source"),
+        "defs_only.mms resolves to a unit; the source guard must not fire; stderr: {stderr}"
+    );
+    assert!(!written, "no object file is written for an empty program");
+}
+
 // ── run --max-steps: stop a program that has not halted ─────────────────────
 
 #[test]

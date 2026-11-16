@@ -1,6 +1,7 @@
 //! The auto-immediate routing pin: base mnemonics selecting their register or immediate form, across every family it touches.
 
 use super::*;
+use crate::encode::encode_instruction_bytes;
 
 // -----------------------------------------------------------------
 // Auto-immediate selection for base mnemonics (ADD, AND, SR, ...).
@@ -95,14 +96,8 @@ fn test_set_is_one_tetra_and_seti_is_four() {
     let mut seti = MMixAssembler::new("SETI $1,5", "<test>");
     seti.parse().unwrap();
 
-    assert_eq!(
-        set.encode_instruction_bytes(&set.instructions[0].1).len(),
-        4
-    );
-    assert_eq!(
-        seti.encode_instruction_bytes(&seti.instructions[0].1).len(),
-        16
-    );
+    assert_eq!(encode_instruction_bytes(&set.instructions[0].1).len(), 4);
+    assert_eq!(encode_instruction_bytes(&seti.instructions[0].1).len(), 16);
 }
 
 #[test]
@@ -270,8 +265,8 @@ ZSEVI $7,$8,128
         .zip(explicit_asm.instructions.iter())
         .enumerate()
     {
-        let auto_bytes = auto_asm.encode_instruction_bytes(&auto.1);
-        let explicit_bytes = explicit_asm.encode_instruction_bytes(&explicit.1);
+        let auto_bytes = encode_instruction_bytes(&auto.1);
+        let explicit_bytes = encode_instruction_bytes(&explicit.1);
         assert_eq!(
             auto_bytes, explicit_bytes,
             "instruction {i}: auto form {:?} encoded to {:?}, explicit form {:?} encoded to {:?}",
@@ -778,14 +773,13 @@ fn test_lda_selects_addus_two_opcodes() {
 fn test_lda_emits_the_same_bytes_as_addu() {
     // LDA carries no opcode of its own: it is ADDU under another name,
     // in both the register and the immediate operand form.
-    let asm = MMixAssembler::new("", "<test>");
     for (lda, addu) in [
         ("LDA $1,$2,$3", "ADDU $1,$2,$3"),
         ("LDA $1,$2,3", "ADDU $1,$2,3"),
     ] {
         assert_eq!(
-            asm.encode_instruction_bytes(&first_instruction(lda)),
-            asm.encode_instruction_bytes(&first_instruction(addu)),
+            encode_instruction_bytes(&first_instruction(lda)),
+            encode_instruction_bytes(&first_instruction(addu)),
             "{lda:?} must emit the same bytes as {addu:?}"
         );
     }
@@ -1497,8 +1491,8 @@ fn test_byte_identical_regression_all_families() {
         explicit_asm
             .parse()
             .unwrap_or_else(|e| panic!("explicit src {explicit_src:?} failed: {e}"));
-        let auto_bytes = auto_asm.encode_instruction_bytes(&auto_asm.instructions[0].1);
-        let explicit_bytes = explicit_asm.encode_instruction_bytes(&explicit_asm.instructions[0].1);
+        let auto_bytes = encode_instruction_bytes(&auto_asm.instructions[0].1);
+        let explicit_bytes = encode_instruction_bytes(&explicit_asm.instructions[0].1);
         assert_eq!(
             auto_bytes, explicit_bytes,
             "byte mismatch: auto {auto_src:?} -> {:?} {:?} vs explicit {explicit_src:?} -> {:?} {:?}",

@@ -553,3 +553,49 @@ fn test_equal_redefinition_is_then_label_different_value_is_an_error() {
 fn test_equal_redefinition_register_vs_pure_value_is_an_error() {
     assert!(assemble_err("x IS $1\nx IS 1\nMain HALT\n").contains("symbol 'x' redefined"));
 }
+
+#[test]
+fn test_labels_accessor_holds_each_label_at_its_address_without_the_root_colon() {
+    let src = "\
+            LOC #100\n\
+            Main SET $1,1\n\
+            :Exit HALT\n";
+    let mut asm = MMixAssembler::new(src, "<test>");
+    asm.parse().unwrap();
+    let labels = asm.labels();
+    assert_eq!(labels.get("Main").copied(), Some(0x100));
+    assert_eq!(labels.get("Exit").copied(), Some(0x104));
+    assert!(!labels.contains_key(":Exit"));
+}
+
+#[test]
+fn test_greg_inits_accessor_holds_registers_and_values_in_allocation_order() {
+    let src = "\
+            First GREG #1000\n\
+            Second GREG #2000\n\
+            Main HALT\n";
+    let mut asm = MMixAssembler::new(src, "<test>");
+    asm.parse().unwrap();
+    assert_eq!(asm.greg_inits(), &[(254, 0x1000), (253, 0x2000)]);
+}
+
+#[test]
+fn test_is_empty_is_true_for_comments_and_a_label_only() {
+    let mut asm = MMixAssembler::new("% nothing here\nStart\n", "<test>");
+    asm.parse().unwrap();
+    assert!(asm.is_empty());
+}
+
+#[test]
+fn test_is_empty_is_false_for_one_data_item() {
+    let mut asm = MMixAssembler::new("LOC #100\nBYTE 1\n", "<test>");
+    asm.parse().unwrap();
+    assert!(!asm.is_empty());
+}
+
+#[test]
+fn test_is_empty_is_false_for_one_instruction() {
+    let mut asm = MMixAssembler::new("LOC #100\nHALT\n", "<test>");
+    asm.parse().unwrap();
+    assert!(!asm.is_empty());
+}

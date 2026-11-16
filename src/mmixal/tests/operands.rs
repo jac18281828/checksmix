@@ -1,6 +1,7 @@
 //! Tests for the two-operand memory form base-address search.
 
 use super::*;
+use crate::encode::encode_instruction_bytes;
 
 // ---- The two-operand memory form (base-address search) -------------
 
@@ -166,10 +167,7 @@ fn test_lda_pure_value_never_encodes_addu_register_form() {
     let mut asm = MMixAssembler::new("B GREG 1\nLDA $1,5", "<test>");
     asm.parse().unwrap();
     assert_eq!(asm.instructions[0].1, MMixInstruction::LDAI(1, 254, 4));
-    assert_eq!(
-        asm.encode_instruction_bytes(&asm.instructions[0].1)[0],
-        0x23
-    );
+    assert_eq!(encode_instruction_bytes(&asm.instructions[0].1)[0], 0x23);
 }
 
 /// Assemble `src` and return its LDA/LDO/etc. instruction: the last

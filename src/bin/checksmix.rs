@@ -207,7 +207,7 @@ fn cmd_build(files: &[PathBuf], output: Option<&Path>) {
         eprintln!("{}", e);
         process::exit(1);
     });
-    if asm.instructions.is_empty() {
+    if asm.is_empty() {
         eprintln!("error: no instructions to assemble");
         process::exit(1);
     }

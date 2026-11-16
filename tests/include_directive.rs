@@ -1,4 +1,5 @@
-use checksmix::MMixAssembler;
+use checksmix::{MMixAssembler, MmoDecoder};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,14 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
+}
+
+fn assembled_bytes(asm: &MMixAssembler) -> BTreeMap<u64, u8> {
+    let mut memory = BTreeMap::new();
+    MmoDecoder::new(asm.generate_object_code())
+        .decode(|addr, byte| *memory.entry(addr).or_insert(0) ^= byte)
+        .expect("object code decodes");
+    memory
 }
 
 fn real_reader(p: &Path) -> std::io::Result<String> {
@@ -60,16 +69,22 @@ fn include_directive_resolves_label_from_included_file() {
     // `:LibHalt` names the same root symbol as `LibHalt`, keyed without
     // the colon.
     assert_eq!(
-        asm.labels.get("LibHalt").copied(),
+        asm.labels().get("LibHalt").copied(),
         Some(0x100),
         "LibHalt, defined in the included file, should resolve at LOC #100"
     );
-    let (addr, _) = asm
-        .instructions
-        .iter()
-        .find(|(_, inst)| format!("{:?}", inst).contains("PUSHJ"))
-        .expect("PUSHJ instruction present");
-    assert_eq!(*addr, 0x104, "Main's PUSHJ follows LibHalt's TRAP");
+    let memory = assembled_bytes(&asm);
+    let tetra_at = |addr: u64| -> [u8; 4] {
+        std::array::from_fn(|i| memory.get(&(addr + i as u64)).copied().unwrap_or(0))
+    };
+    let pushj = tetra_at(0x104);
+    assert_eq!(pushj[0], 0xF3, "Main's PUSHJ follows LibHalt's TRAP");
+    let backward_tetras = 0x10000 - u64::from(u16::from_be_bytes([pushj[2], pushj[3]]));
+    assert_eq!(
+        0x104 - backward_tetras * 4,
+        0x100,
+        "Main's PUSHJ targets LibHalt"
+    );
 }
 
 /// Per-file diagnostics: a parse error inside an INCLUDE-d file reports

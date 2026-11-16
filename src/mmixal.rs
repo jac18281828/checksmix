@@ -614,8 +614,8 @@ pub struct MMixAssembler {
     /// Active PREFIX value applied to unqualified identifiers.
     /// Names starting with ':' bypass the prefix.
     current_prefix: String,
-    pub labels: HashMap<String, u64>,
-    pub symbols: HashMap<String, SymbolType>, // For IS directive - symbolic names with type
+    pub(crate) labels: HashMap<String, u64>,
+    pub(crate) symbols: HashMap<String, SymbolType>, // For IS directive - symbolic names with type
     /// `symbols` as `new` seeded it, before any user statement ran. Every
     /// key is a root-namespace name; a program's own definition of one is a
     /// plain shadow.
@@ -625,7 +625,7 @@ pub struct MMixAssembler {
     label_origins: HashMap<String, (String, usize)>,
     /// First-definition site for user-defined IS/GREG symbols.
     symbol_origins: HashMap<String, (String, usize)>,
-    pub instructions: Vec<(u64, MMixInstruction)>,
+    pub(crate) instructions: Vec<(u64, MMixInstruction)>,
     current_addr: u64,
     /// Whether the location counter has passed `#FFFFFFFFFFFFFFFF`: the
     /// last item assembled reached the end of the address space, so
@@ -635,7 +635,7 @@ pub struct MMixAssembler {
     /// Reset alongside `current_addr` between the two passes.
     past_end: bool,
     next_greg: u8, // Next global register to allocate (starts at 254, counts down)
-    pub greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
+    pub(crate) greg_inits: Vec<(u8, u64)>, // Global register initialization values: (register, value)
     /// How many of `greg_inits`' entries pass 2 has walked past so far --
     /// the two-operand memory form's base-address search bounds itself to
     /// `greg_inits[..greg_inits_seen]`, the `GREG`s the reference would have
@@ -928,9 +928,23 @@ impl MMixAssembler {
         &self.warnings
     }
 
-    /// Encode a single instruction into bytes using the shared encode module
-    pub fn encode_instruction_bytes(&self, instruction: &MMixInstruction) -> Vec<u8> {
-        crate::encode::encode_instruction_bytes(instruction)
+    /// The label table: every label the last `parse()` bound, at its
+    /// address. A root name is keyed without its colon, so `:Main` and
+    /// `Main` are both `"Main"`.
+    pub fn labels(&self) -> &HashMap<String, u64> {
+        &self.labels
+    }
+
+    /// The `GREG` register and value pairs the last `parse()` allocated, in
+    /// allocation order.
+    pub fn greg_inits(&self) -> &[(u8, u64)] {
+        &self.greg_inits
+    }
+
+    /// Whether the last `parse()` emitted neither an instruction nor a data
+    /// item.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
     }
 
     /// The `.mmo` this program assembles to: every binary that writes an

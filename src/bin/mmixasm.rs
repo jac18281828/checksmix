@@ -110,8 +110,7 @@ fn main() {
         eprintln!("{}", warning);
     }
 
-    // Check if there are any instructions to assemble
-    if assembler.instructions.is_empty() {
+    if assembler.is_empty() {
         eprintln!("Error: No instructions to assemble");
         process::exit(1);
     }
