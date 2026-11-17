@@ -1,4 +1,4 @@
-0.5.0 (unreleased)
+0.5.0 (2026-11-16)
 
 * **Breaking: `MMixAssembler`'s `instructions`, `symbols`, `labels` and `greg_inits` fields are private, and `MMixAssembler::encode_instruction_bytes` is gone.** `asm.labels` is now `asm.labels()`, a map that keys a root name without its colon; `asm.greg_inits` is now `asm.greg_inits()`, the `GREG` register and value pairs in allocation order; `asm.instructions.is_empty()` is now `asm.is_empty()`. `instructions` and `symbols` have no replacement, and an object file comes from `generate_object_code`
 * **Breaking: `MmoGenerator` is no longer exported.** Its constructor took an instruction type the crate never exported; write an object file with `MMixAssembler::generate_object_code` and read it back with `MmoDecoder`
