@@ -64,8 +64,13 @@ impl MMix {
             let src = (x as usize) + 1 + (i as usize);
             self.general_regs[i as usize] = self.general_regs[src];
         }
-        for i in (new_rl as usize)..(rg as usize) {
-            self.general_regs[i] = 0;
+        for reg in self
+            .general_regs
+            .iter_mut()
+            .take(rg as usize)
+            .skip(new_rl as usize)
+        {
+            *reg = 0;
         }
 
         let new_ro = ro.wrapping_add((x as u64 + 1).wrapping_mul(8));
@@ -133,8 +138,8 @@ impl MMix {
 
         // Every register from the new rL through rG-1 is marginal — clear
         // the whole local range before restoring or writing anything back.
-        for i in 0..(rg as usize) {
-            self.general_regs[i] = 0;
+        for reg in self.general_regs.iter_mut().take(rg as usize) {
+            *reg = 0;
         }
 
         // Restore caller's $0..$(x-1) from memory, skipping any index at or
